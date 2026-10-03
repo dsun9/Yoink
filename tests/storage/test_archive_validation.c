@@ -1,4 +1,5 @@
 #include "helpers.h"
+#include "pointy/scene.h"
 static const char *empty;
 static void test_archive_validation(void) {
     char future[1024];
@@ -41,6 +42,7 @@ static void test_manifest_rejections(void);
 static void test_restricted_collection_sibling(void);
 static void test_declared_limits(void);
 static void test_archive_trailer_agreement(void);
+static void test_named_instance_is_not_collection_face(void);
 int main(void) {
     begin_test();
     PPBlob fixture = read_bytes(PP_PROJECT_FIXTURES "/empty-v1.json");
@@ -50,6 +52,7 @@ int main(void) {
     test_restricted_collection_sibling();
     test_declared_limits();
     test_archive_trailer_agreement();
+    test_named_instance_is_not_collection_face();
     pp_blob_destroy(&fixture);
     end_test();
     puts("archive rejection cases passed");
@@ -351,4 +354,65 @@ static void test_archive_trailer_agreement(void) {
     pp_assets_destroy(assets);
     free(extended);
     pp_blob_destroy(&bytes);
+}
+
+static void test_named_instance_is_not_collection_face(void) {
+    PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyVariable.ttf");
+    PPFontInfo info;
+    CHECK(pp_font_inspect((PPBytes){font.data, font.size}, 65536, &info, &error));
+    CHECK(info.face_count == 1 && info.embeddable);
+    PPAssets *assets = NULL;
+    PPProject *active = NULL, *candidate = NULL;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_project_create(assets, &active, &error));
+    PPItem item = {0};
+    item.kind = PP_ITEM_TEXT;
+    item.text = "A";
+    item.opacity = 1;
+    item.text_style.font_size_dip = 32;
+    item.text_style.color[3] = 255;
+    item.text_style.requested_family = "Pointy Fixture";
+    CHECK(pp_asset_import(assets, (PPBytes){font.data, font.size}, PP_ASSET_FONT,
+                          &item.text_style.primary_asset, &error));
+    uint64_t id;
+    CHECK(pp_project_add_item(active, PP_ANCHOR_TOP_LEFT, &item, &id, &error));
+    char original[MAX_PATH];
+    snprintf(original, sizeof(original), "%s/valid.pointy", directory);
+    CHECK(pp_project_save(active, original, &error));
+    uint8_t before[32], after[32];
+    digest_file(original, before);
+    PPScene *scene = NULL;
+    uint64_t instance;
+    CHECK(pp_scene_create(&scene, &error));
+    CHECK(
+        pp_scene_spawn(scene, active, PP_ANCHOR_TOP_LEFT, (PPVec2){30, 40}, 0, &instance, &error));
+    PPItemSnapshot *snapshot = pp_scene_get(scene, instance)->snapshot;
+    uint64_t revision = pp_project_revision(active);
+    size_t retained = pp_assets_raster_bytes(assets);
+    PPAssetId resource;
+    char *json = resource_manifest((PPBytes){font.data, font.size}, "font", true, 65536, &resource);
+    char hash[65], name[75];
+    hex_id(resource, hash);
+    snprintf(name, sizeof(name), "resources/%s", hash);
+    write_zip(json, name, (PPBytes){font.data, font.size}, false);
+    free(json);
+    CHECK(!pp_project_load(package, assets, &candidate, &error));
+    CHECK(!candidate);
+    CHECK(error.code == PP_ERROR_FORMAT);
+    CHECK(pp_project_revision(active) == revision &&
+          pp_project_item(active, id)->text_style.primary_face == 0);
+    CHECK(pp_assets_raster_bytes(assets) == retained);
+    CHECK(pp_scene_count(scene) == 1 && pp_scene_get(scene, instance)->snapshot == snapshot);
+    CHECK(pp_scene_get(scene, instance)->pose.center.x == 30 &&
+          pp_scene_get(scene, instance)->pose.center.y == 40);
+    digest_file(original, after);
+    CHECK(!memcmp(before, after, 32));
+    CHECK(pp_project_load(original, assets, &candidate, &error));
+    CHECK(pp_project_item(candidate, id)->text_style.primary_face == 0);
+    pp_project_destroy(candidate);
+    pp_scene_destroy(scene);
+    pp_project_destroy(active);
+    pp_assets_destroy(assets);
+    pp_blob_destroy(&font);
+    CHECK(pp_platform_remove_file(original, &error));
 }

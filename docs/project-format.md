@@ -63,7 +63,7 @@ Each text item contains exactly:
 }
 ```
 
-`primary` and `fallback` are either null or font-resource/collection-face pairs. The selected face is a nonnegative integer. Color channels are bytes. Text has one canonical font size; images have one canonical longest-side size. There are no competing size fields. Rotation, opacity, and size retain the validated project's values.
+`primary` and `fallback` are either null or font-resource/collection-face pairs. The selected face is a nonnegative integer smaller than the actual collection face count. FreeType's encoded named-instance selectors are not collection indices and are rejected. Color channels are bytes. Text has one canonical font size; images have one canonical longest-side size. There are no competing size fields. Rotation, opacity, and size retain the validated project's values.
 
 ## Fonts and portability
 

@@ -51,6 +51,12 @@ static bool portable_font(PPAssets *assets, PPAssetId id, int face, PPError *err
         pp_asset_release(asset);
         return pp_store_error(error, PP_ERROR_FORMAT, "Missing font or invalid collection face");
     }
+    /* FreeType also accepts named-instance selectors encoded in the high bits.
+     * The package schema permits only actual collection face indices. */
+    if (face < 0 || (size_t)face >= info.face_count) {
+        pp_asset_release(asset);
+        return pp_store_error(error, PP_ERROR_FORMAT, "Font face is outside the collection range");
+    }
     /* Every face travels in the complete collection. A permitted selected face
      * cannot authorize embedding a restricted sibling. Bound inspection work
      * as well as bytes for adversarial collections with repeated face offsets. */

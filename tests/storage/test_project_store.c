@@ -195,11 +195,13 @@ static void test_portable_round_trip(void) {
 }
 static void test_missing_aptos_default_and_unresolved_text(void);
 static void test_candidate_pressure_and_notice_isolation(void);
+static void test_named_instance_save_preserves_original(void);
 int main(void) {
     begin_test();
     test_portable_round_trip();
     test_missing_aptos_default_and_unresolved_text();
     test_candidate_pressure_and_notice_isolation();
+    test_named_instance_save_preserves_original();
     end_test();
     puts("portable round trip and atomic failures passed");
     return 0;
@@ -302,6 +304,57 @@ static void test_candidate_pressure_and_notice_isolation(void) {
     CHECK(pp_assets_raster_bytes(assets) == base);
     pp_scene_destroy(scene);
     pp_project_destroy(active);
+    CHECK(!pp_assets_external_raster_bytes(assets));
+    pp_assets_destroy(assets);
+}
+
+static void test_named_instance_save_preserves_original(void) {
+    PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyVariable.ttf");
+    PPFontInfo info;
+    CHECK(pp_font_inspect((PPBytes){font.data, font.size}, 65536, &info, &error));
+    CHECK(info.face_count == 1 && info.embeddable);
+    PPAssets *assets = NULL;
+    PPProject *project = NULL;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_project_create(assets, &project, &error));
+    PPItem item = {0};
+    item.kind = PP_ITEM_TEXT;
+    item.text = "A";
+    item.opacity = 1;
+    item.text_style.requested_family = "Pointy Fixture";
+    item.text_style.font_size_dip = 32;
+    item.text_style.color[3] = 255;
+    CHECK(pp_asset_import(assets, (PPBytes){font.data, font.size}, PP_ASSET_FONT,
+                          &item.text_style.primary_asset, &error));
+    pp_blob_destroy(&font);
+    uint64_t id;
+    CHECK(pp_project_add_item(project, PP_ANCHOR_TOP_LEFT, &item, &id, &error));
+    CHECK(pp_project_save(project, package, &error));
+    uint8_t hash[32];
+    digest_file(package, hash);
+    PPScene *scene = NULL;
+    uint64_t instance;
+    CHECK(pp_scene_create(&scene, &error));
+    CHECK(
+        pp_scene_spawn(scene, project, PP_ANCHOR_TOP_LEFT, (PPVec2){50, 60}, 0, &instance, &error));
+    PPItemSnapshot *snapshot = pp_scene_get(scene, instance)->snapshot;
+    item.text_style.primary_face = 65536;
+    /* The model and SDL_ttf can render this genuine named instance. The storage
+       schema allows collection indices only, so portability must reject it. */
+    CHECK(pp_project_edit_item(project, id, &item, &error));
+    uint64_t revision = pp_project_revision(project);
+    size_t retained = pp_assets_raster_bytes(assets);
+    CHECK(!pp_project_save(project, package, &error));
+    CHECK(error.code == PP_ERROR_FORMAT);
+    assert_reopens(hash);
+    CHECK(pp_project_revision(project) == revision &&
+          pp_project_item(project, id)->text_style.primary_face == 65536);
+    CHECK(pp_assets_raster_bytes(assets) == retained);
+    CHECK(pp_scene_count(scene) == 1 && pp_scene_get(scene, instance)->snapshot == snapshot);
+    CHECK(pp_scene_get(scene, instance)->pose.center.x == 50 &&
+          pp_scene_get(scene, instance)->pose.center.y == 60);
+    pp_scene_destroy(scene);
+    pp_project_destroy(project);
     CHECK(!pp_assets_external_raster_bytes(assets));
     pp_assets_destroy(assets);
 }

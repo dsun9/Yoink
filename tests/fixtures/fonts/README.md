@@ -15,3 +15,11 @@ to the production restriction policy; no commercial font is modified.
 original negative-bearing j and a raised acute mark. Its destination-size
 native coverage provides deterministic overhang/accent clipping regressions
 at small sizes without depending on an installed commercial typeface.
+
+`PointyVariable.ttf` uses the same owned `Pointy Fixture` outlines and family
+name as `PointyFixture.ttf`, with one weight axis and a named Bold instance at
+weight 700. Its `gvar` table changes A's right-side points. It has one collection
+face, but FreeType can successfully open encoded face value 65536 to select
+named instance 1. Storage must reject that value as an out-of-range collection
+index. `generate_variable.py` reproduces it using fontTools 4.66.1 without
+rewriting the other fixtures. Copyright and OFL 1.1 terms are unchanged.
