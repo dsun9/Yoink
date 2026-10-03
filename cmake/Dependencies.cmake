@@ -1,0 +1,13 @@
+include(FetchContent)
+set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+set(SDL_STATIC ON CACHE BOOL "" FORCE)
+set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+set(SDL_TESTS OFF CACHE BOOL "" FORCE)
+set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
+foreach(subsystem AUDIO CAMERA GPU RENDER JOYSTICK HAPTIC SENSOR)
+  set(SDL_${subsystem} OFF CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(SDL
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
+  GIT_TAG 829a65d769d935c4852f8159e964312c0957260a)
+FetchContent_MakeAvailable(SDL)

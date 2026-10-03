@@ -1,0 +1,19 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {"major": 3, "minor": 24, "patch": 0},
+  "configurePresets": [
+    {"name":"windows-dev","generator":"Visual Studio 17 2022","architecture":"x64","binaryDir":"${sourceDir}/build/windows-dev"},
+    {"name":"windows-release","inherits":"windows-dev","binaryDir":"${sourceDir}/build/windows-release"},
+    {"name":"macos-dev","generator":"Ninja","binaryDir":"${sourceDir}/build/macos-dev","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug"}}
+  ],
+  "buildPresets": [
+    {"name":"windows-dev","configurePreset":"windows-dev","configuration":"Debug"},
+    {"name":"windows-release","configurePreset":"windows-release","configuration":"Release"},
+    {"name":"macos-dev","configurePreset":"macos-dev"}
+  ],
+  "testPresets": [
+    {"name":"windows-dev","configurePreset":"windows-dev","configuration":"Debug"},
+    {"name":"windows-release","configurePreset":"windows-release","configuration":"Release"},
+    {"name":"macos-dev","configurePreset":"macos-dev"}
+  ]
+}
