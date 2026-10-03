@@ -1,7 +1,9 @@
 #include "pointy/text.h"
 #include "pointy/platform.h"
-#include "fonts_internal.h"
+#include "../../src/media/fonts_internal.h"
 #include <SDL3/SDL.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,93 @@ static PPBlob read_font(const char *path) {
 }
 static size_t visible(const PPFrame *f) {
     size_t n=0; for(size_t i=0;i<(size_t)f->width*f->height;i++) n+=f->content_alpha[i]>0; return n;
+}
+static uint64_t coverage_sum(const PPFrame *frame) {
+    uint64_t sum = 0;
+    for (size_t i = 0; i < (size_t)frame->width * frame->height; i++)
+        sum += frame->content_alpha[i];
+    return sum;
+}
+
+static void test_whitespace_validation(void) {
+    PPAssets *assets = NULL;
+    PPTextStyle style = {0};
+    PPBlob primary = read_font(PP_FONT_FIXTURES "/PointyFixture.ttf");
+    PPBlob fallback = read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_asset_import(assets, (PPBytes){primary.data,primary.size}, PP_ASSET_FONT, &style.primary_asset, &error));
+    CHECK(pp_asset_import(assets, (PPBytes){fallback.data,fallback.size}, PP_ASSET_FONT, &style.fallback_asset, &error));
+    pp_blob_destroy(&primary);
+    pp_blob_destroy(&fallback);
+    style.font_size_dip = 96;
+    style.color[3] = 255;
+    const char *whitespace[] = {"\xc2\x85", "\xe2\x80\xa8", "\xe2\x80\xa9", "\v", "\f",
+        " \t\r\n\v\f\xc2\x85\xc2\xa0\xe1\x9a\x80\xe2\x80\x80\xe2\x80\x8a\xe2\x80\xa8\xe2\x80\xa9\xe2\x80\xaf\xe2\x81\x9f\xe3\x80\x80"};
+    for (size_t i = 0; i < sizeof(whitespace)/sizeof(whitespace[0]); i++) {
+        PPFrame frame = {0};
+        PPTextDiagnostics diagnostics;
+        bool rendered = pp_text_render(assets, whitespace[i], &style, 1, &frame, &diagnostics, &error);
+        printf("whitespace case %zu: rendered=%d visible=%zu\n", i, rendered, visible(&frame));
+        CHECK(!rendered && error.code == PP_ERROR_ARGUMENT);
+        CHECK(!frame.pixels && !frame.content_alpha && diagnostics.missing_glyphs == 0);
+    }
+    PPFrame invisible = {0};
+    PPTextDiagnostics diagnostics;
+    style.color[3] = 0;
+    CHECK(!pp_text_render(assets, "A", &style, 1, &invisible, &diagnostics, &error));
+    CHECK(error.code == PP_ERROR_ARGUMENT && !invisible.pixels && !invisible.content_alpha);
+    pp_assets_destroy(assets);
+}
+
+static void test_destination_glyph_coverage(void) {
+    PPAssets *assets = NULL;
+    PPBlob bytes = read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPBlob fallback = read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    PPTextStyle style = {0};
+    style.color[3] = 255;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_asset_import(assets, (PPBytes){bytes.data,bytes.size}, PP_ASSET_FONT, &style.primary_asset, &error));
+    CHECK(pp_asset_import(assets, (PPBytes){fallback.data,fallback.size}, PP_ASSET_FONT, &style.fallback_asset, &error));
+    pp_blob_destroy(&fallback);
+    FT_Library library;
+    FT_Face face;
+    CHECK(!FT_Init_FreeType(&library));
+    CHECK(!FT_New_Memory_Face(library, bytes.data, (FT_Long)bytes.size, 0, &face));
+    const char *texts[] = {"j", "A\xcc\x81"};
+    bool lost_coverage = false;
+    for (int kind = 0; kind < 2; kind++) {
+        for (int size = 8; size <= 30; size++) {
+            style.font_size_dip = size;
+            CHECK(!FT_Set_Char_Size(face, 0, size * 64, 72, 72));
+            uint64_t native_sum = 0;
+            const FT_ULong codes[] = {kind ? 'A' : 'j', 0x301};
+            for (int glyph = 0; glyph < (kind ? 2 : 1); glyph++) {
+                CHECK(!FT_Load_Char(face, codes[glyph], FT_LOAD_RENDER));
+                FT_Bitmap *bitmap = &face->glyph->bitmap;
+                CHECK(bitmap->pixel_mode == FT_PIXEL_MODE_GRAY);
+                for (unsigned y = 0; y < bitmap->rows; y++)
+                    for (unsigned x = 0; x < bitmap->width; x++)
+                        native_sum += bitmap->buffer[y * bitmap->pitch + x];
+            }
+            PPFrame frame = {0};
+            PPTextDiagnostics diagnostics;
+            CHECK(pp_text_render(assets, texts[kind], &style, 1, &frame, &diagnostics, &error));
+            CHECK(!diagnostics.missing_glyphs);
+            uint64_t retained = coverage_sum(&frame);
+            if (retained != native_sum) {
+                printf("native coverage %s size=%d: expected=%llu retained=%llu\n", texts[kind], size,
+                    (unsigned long long)native_sum, (unsigned long long)retained);
+                lost_coverage = true;
+            }
+            pp_frame_destroy(&frame);
+        }
+    }
+    CHECK(!lost_coverage);
+    puts("destination coverage: 46/46 native glyph alpha sums retained");
+    FT_Done_Face(face);
+    FT_Done_FreeType(library);
+    pp_assets_destroy(assets);
+    pp_blob_destroy(&bytes);
 }
 static void embedding(void) {
     const uint16_t flags[]={0,8,2,4,0x108,0x208,6};
@@ -121,4 +210,19 @@ static void test_text_fallback_and_embedding(void) {
     CHECK(visible(&frame)>0); /* Owned text frame outlives all borrowed font data. */
     pp_frame_destroy(&frame);
 }
-int main(void) { embedding(); test_text_fallback_and_embedding(); puts("text: fallback, color, clusters, embedding, collection, bounds PASS"); return 0; }
+int main(int argc, char **argv) {
+    if (argc == 2 && !strcmp(argv[1], "whitespace")) {
+        test_whitespace_validation();
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "bounds")) {
+        test_destination_glyph_coverage();
+        return 0;
+    }
+    embedding();
+    test_text_fallback_and_embedding();
+    test_whitespace_validation();
+    test_destination_glyph_coverage();
+    puts("text: fallback, color, clusters, embedding, collection, bounds PASS");
+    return 0;
+}

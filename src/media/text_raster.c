@@ -58,7 +58,7 @@ static bool draw_outline(PPFrame *out, FT_GlyphSlot slot, int x, int y,
     return true;
 }
 
-static bool draw_bitmap(PPFrame *out, const TTF_CopyOperation *op, double scale,
+static bool draw_bitmap(PPFrame *out, const TTF_CopyOperation *op, double scale, int origin_x, int origin_y,
         const uint8_t color[4], PPError *error) {
     TTF_ImageType type;
     SDL_Surface *surface = TTF_GetGlyphImageForIndex(op->glyph_font, op->glyph_index, &type);
@@ -127,10 +127,39 @@ static bool draw_bitmap(PPFrame *out, const TTF_CopyOperation *op, double scale,
             }
             if (type == TTF_IMAGE_ALPHA)
                 for (int c = 0; c < 3; c++) rgba[c] = (uint8_t)((color[c] * rgba[3] + 127) / 255);
-            over(out, x, y, rgba);
+            over(out, x + origin_x, y + origin_y, rgba);
         }
     }
     pp_frame_destroy(&glyph);
+    return true;
+}
+
+static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double scale,
+        int *x, int *y, PPError *error) {
+    if (FT_Load_Glyph(font->base, op->glyph_index, FT_LOAD_DEFAULT) ||
+        FT_Load_Glyph(font->native, op->glyph_index, FT_LOAD_DEFAULT | FT_LOAD_COLOR))
+        return pp_media_error(error, PP_ERROR_FORMAT, "Could not load shaped outline glyph");
+    /* Recover the shaped baseline from old bearing and crop, then apply
+     * actual destination-size bearings. No outline raster is enlarged. */
+    double baseline_x = op->dst.x - op->src.x - left_bearing(font->base->glyph);
+    double baseline_y = op->dst.y - op->src.y + top_bearing(font->base->glyph);
+    if (font->native->glyph->format != FT_GLYPH_FORMAT_BITMAP &&
+        FT_Render_Glyph(font->native->glyph, FT_RENDER_MODE_NORMAL))
+        return pp_media_error(error, PP_ERROR_RENDER, "Could not rasterize outline glyph");
+    double native_x = round(baseline_x * scale) + font->native->glyph->bitmap_left;
+    double native_y = round(baseline_y * scale) - font->native->glyph->bitmap_top;
+    /* Layout includes (0,0); origins beyond these limits cannot fit a valid
+     * union. Check before converting floating positions to integer pixels. */
+    if (!isfinite(native_x) || !isfinite(native_y) ||
+        fabs(native_x) > PP_MEDIA_MAX_DIMENSION || fabs(native_y) > PP_MEDIA_MAX_DIMENSION)
+        return pp_media_error(error, PP_ERROR_RESOURCE_LIMIT, "Destination glyph origin exceeds raster limits");
+    *x = (int)native_x;
+    *y = (int)native_y;
+    FT_Bitmap *bitmap = &font->native->glyph->bitmap;
+    if (bitmap->width && bitmap->rows) {
+        size_t bytes;
+        if (!pp_media_size((int)bitmap->width, (int)bitmap->rows, 1, &bytes, error)) return false;
+    }
     return true;
 }
 
@@ -160,8 +189,36 @@ bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],
             goto done;
         }
     }
-    out->width = (int)width;
-    out->height = (int)height;
+    /* Native hinting can extend beyond scaled shaping bounds. Preflight the
+     * actual destination glyph boxes before allocating, then translate every
+     * draw operation by the same origin. Keep layout padding/newline bounds. */
+    int left = 0, top = 0, right = (int)width, bottom = (int)height;
+    for (int i = 0; i < text->internal->num_ops; i++) {
+        const TTF_DrawOperation *op = &text->internal->ops[i];
+        if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
+        RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
+        int x, y, glyph_right, glyph_bottom;
+        if (font->native) {
+            if (!native_glyph(font, &op->copy, scale, &x, &y, error)) goto done;
+            FT_Bitmap *bitmap = &font->native->glyph->bitmap;
+            if (!bitmap->width || !bitmap->rows) continue;
+            glyph_right = x + (int)bitmap->width;
+            glyph_bottom = y + (int)bitmap->rows;
+        } else {
+            x = (int)floor(op->copy.dst.x * scale);
+            y = (int)floor(op->copy.dst.y * scale);
+            glyph_right = (int)ceil((op->copy.dst.x + op->copy.dst.w) * scale);
+            glyph_bottom = (int)ceil((op->copy.dst.y + op->copy.dst.h) * scale);
+        }
+        left = SDL_min(left, x);
+        top = SDL_min(top, y);
+        right = SDL_max(right, glyph_right);
+        bottom = SDL_max(bottom, glyph_bottom);
+    }
+    if (!pp_media_size(right - left, bottom - top, 1, &bytes, error)) goto done;
+    int origin_x = -left, origin_y = -top;
+    out->width = right - left;
+    out->height = bottom - top;
     out->stride = (size_t)out->width * 4;
     size_t pixels = (size_t)out->width * out->height;
     out->pixels = calloc(pixels, 4);
@@ -175,25 +232,12 @@ bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
         RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
         if (!font->native) {
-            if (!draw_bitmap(out, &op->copy, scale, color, error)) goto done;
+            if (!draw_bitmap(out, &op->copy, scale, origin_x, origin_y, color, error)) goto done;
             continue;
         }
-        if (FT_Load_Glyph(font->base, op->copy.glyph_index, FT_LOAD_DEFAULT) ||
-            FT_Load_Glyph(font->native, op->copy.glyph_index, FT_LOAD_DEFAULT | FT_LOAD_COLOR)) {
-            pp_media_error(error, PP_ERROR_FORMAT, "Could not load shaped outline glyph");
-            goto done;
-        }
-        /* Recover the shaped baseline from old bearing and crop, then apply
-         * actual destination-size bearings. No outline raster is enlarged. */
-        double baseline_x = op->copy.dst.x - op->copy.src.x - left_bearing(font->base->glyph);
-        double baseline_y = op->copy.dst.y - op->copy.src.y + top_bearing(font->base->glyph);
-        if (font->native->glyph->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(font->native->glyph, FT_RENDER_MODE_NORMAL)) {
-            pp_media_error(error, PP_ERROR_RENDER, "Could not rasterize outline glyph");
-            goto done;
-        }
-        int x = (int)lround(baseline_x * scale) + font->native->glyph->bitmap_left;
-        int y = (int)lround(baseline_y * scale) - font->native->glyph->bitmap_top;
-        if (!draw_outline(out, font->native->glyph, x, y, color, error)) goto done;
+        int x, y;
+        if (!native_glyph(font, &op->copy, scale, &x, &y, error)) goto done;
+        if (!draw_outline(out, font->native->glyph, x + origin_x, y + origin_y, color, error)) goto done;
     }
     ok = true;
 done:

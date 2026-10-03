@@ -31,6 +31,8 @@ bool pp_font_inspect(PPBytes font, int face_index, PPFontInfo *out, PPError *err
  * Fallback runs count contiguous drawn runs from the actual shaping operations;
  * missing_glyphs counts drawn glyph-index-zero operations. Empty/invisible text
  * fails validation. Logical raster bounds are width/scale and height/scale.
+ * Bounds include native glyph overhangs; all glyphs share an origin translation
+ * when destination coverage extends left/above the measured layout.
  * Retained CPU bytes are stride*height + width*height (RGBA + content_alpha).
  * Per-frame limits apply; caller budgets retained text + presentation rasters
  * together with asset caches. This owned frame is outside the asset cache. */

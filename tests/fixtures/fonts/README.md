@@ -10,3 +10,8 @@ with fontTools 4.66.1. The collection contains Regular at face 0 and Wide at
 face 1, with distinct family names and glyph widths to test face selection.
 Metadata-reader restriction tests pass synthetic OS/2 fsType values directly
 to the production restriction policy; no commercial font is modified.
+
+`PointyOverhang.ttf` is generated from the same original outlines with an
+original negative-bearing j and a raised acute mark. Its destination-size
+native coverage provides deterministic overhang/accent clipping regressions
+at small sizes without depending on an installed commercial typeface.

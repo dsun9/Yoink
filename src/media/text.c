@@ -97,6 +97,22 @@ static bool valid_utf8(const char *text) {
     return true;
 }
 
+static bool has_non_whitespace(const char *text) {
+    /* Unicode White_Space: U+0009..000D, U+0020, U+0085, U+00A0,
+     * U+1680, U+2000..200A, U+2028..2029, U+202F, U+205F, U+3000.
+     * UTF-8 is validated before this policy is evaluated. */
+    while (*text) {
+        Uint32 code = SDL_StepUTF8(&text, NULL);
+        bool whitespace = (code >= 0x9 && code <= 0xd) || code == 0x20 ||
+            code == 0x85 || code == 0xa0 || code == 0x1680 ||
+            (code >= 0x2000 && code <= 0x200a) ||
+            (code >= 0x2028 && code <= 0x2029) ||
+            code == 0x202f || code == 0x205f || code == 0x3000;
+        if (!whitespace) return true;
+    }
+    return false;
+}
+
 bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
         double scale, PPFrame *out, PPTextDiagnostics *diagnostics, PPError *error) {
     PPTextDiagnostics local = {0};
@@ -105,7 +121,7 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
     if (!assets || !utf8 || !style || !out || out->pixels || out->content_alpha ||
         !isfinite(scale) || scale <= 0 || !isfinite(style->font_size_dip) || style->font_size_dip <= 0)
         return pp_media_error(error, PP_ERROR_ARGUMENT, "Invalid text style, scale, or owned frame output");
-    if (!*utf8 || !valid_utf8(utf8))
+    if (!*utf8 || !valid_utf8(utf8) || !has_non_whitespace(utf8))
         return pp_media_error(error, PP_ERROR_ARGUMENT, "Text must contain valid UTF-8 and a visible grab target");
     if (strlen(utf8) > INT_MAX)
         return pp_media_error(error, PP_ERROR_RESOURCE_LIMIT, "Text exceeds the shaper length limit");
