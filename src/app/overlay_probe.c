@@ -1,10 +1,12 @@
 #include "pointy/platform.h"
+#include "anchors.h"
 #include <SDL3/SDL.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 int pp_overlay_probe(const char *mode, unsigned duration_ms) {
+    if(!strcmp(mode,"anchors")) return pp_anchors_probe(duration_ms);
     bool changing = !strcmp(mode,"changing-alpha");
     if (!changing && strcmp(mode,"ring")) { fprintf(stderr,"Unknown probe mode: %s\n",mode); return 2; }
     PPRenderer *renderer = NULL; PPSurface *surface = NULL; PPError error = {0};

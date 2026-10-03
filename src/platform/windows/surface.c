@@ -90,3 +90,8 @@ void pp_surface_destroy(PPSurface *surface) {
     if (surface->dc) DeleteDC(surface->dc);
     free(surface);
 }
+void pp_surface_hide(PPSurface *surface) {
+    if(!surface) return;
+    pp_windows_input_cancel(surface);
+    if(surface->window) ShowWindow(surface->window,SW_HIDE);
+}

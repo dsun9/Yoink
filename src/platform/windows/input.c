@@ -83,6 +83,7 @@ bool pp_windows_input_owned(PPSurface *surface) {return owner==surface || accept
 PPSurface *pp_windows_input_owner(void) {return owner?owner:accepted_press;}
 void pp_windows_input_check(void) {
     if(owner && (!owner->window || !IsWindowVisible(owner->window))) pp_windows_input_cancel(owner);
+    if(accepted_press && (!accepted_press->window || !IsWindowVisible(accepted_press->window))) pp_windows_input_cancel(accepted_press);
 }
 bool pp_platform_capture(PPSurface *surface,PPError *error) {
     if(!surface || !surface->window || !hook || !capture_eligible || accepted_press!=surface) {

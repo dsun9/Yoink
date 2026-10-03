@@ -1,6 +1,7 @@
 #ifndef POINTY_PLATFORM_H
 #define POINTY_PLATFORM_H
 #include "pointy/render.h"
+#include "pointy/display.h"
 typedef struct PPSurface PPSurface;
 typedef enum PPPlatformEventKind {
     PP_EVENT_POINTER_MOVE, PP_EVENT_BUTTON_DOWN, PP_EVENT_BUTTON_UP,
@@ -24,6 +25,11 @@ bool pp_surface_create(PPSurface **out, PPError *error);
 bool pp_surface_present(PPSurface *surface, const PPFrame *frame,
     PPRect desktop_bounds, PPError *error);
 void pp_surface_destroy(PPSurface *surface);
+/* Hiding cancels an accepted pending press as well as active capture. */
+void pp_surface_hide(PPSurface *surface);
+bool pp_platform_displays(PPDisplay **out, size_t *count, PPError *error);
+void pp_displays_free(PPDisplay *items);
+bool pp_platform_pointer(PPVec2 *out);
 void pp_surface_set_instance_id(PPSurface *surface, uint64_t instance_id);
 /* Application-owned background drag tracking. Only an accepted left press can
  * acquire it. A press already released during native pumping cannot acquire
