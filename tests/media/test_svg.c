@@ -57,9 +57,24 @@ static void test_svg_paint_value_grammar(void) {
     for(int i=0;i<64;i++) if(f->content_alpha[i]) { CHECK(f->pixels[i*4]>0 && f->pixels[i*4+1]==0 && f->pixels[i*4+2]==0); red=true; }
     CHECK(red); pp_asset_release(a); pp_assets_destroy(assets);
 }
+static void test_svg_numeric_paint_grammar(void) {
+    PPAssets *assets; PPError e={0}; CHECK(pp_assets_create(&assets,&e));
+    expect_rejected(assets,"<svg width='4' height='4'><g opacity='0.'><rect width='4' height='4'/></g></svg>");
+    const char *bad[]={"fill-opacity='0.'","stroke-opacity='0.'","stop-opacity='0.'","stroke-width='0.'","stroke-dashoffset='-0.'","stroke-dasharray='1 0.'","stroke-miterlimit='4.'","fill-opacity='1.e-1'","fill-opacity='1e+'","fill-opacity='0.1234567890123456789012345678901234567890123456789'","fill-opacity='0e100'","fill-opacity='1000000000000000000000000000000000000000e-39'"};
+    for(size_t i=0;i<sizeof(bad)/sizeof(bad[0]);i++) { char s[512]; snprintf(s,sizeof(s),"<svg width='4' height='4'><rect width='4' height='4' %s/></svg>",bad[i]); expect_rejected(assets,s); }
+    const char *numbers[]={".5","+0.5","5e-1","5E-1","50%","+5.0e1%"};
+    for(size_t i=0;i<sizeof(numbers)/sizeof(numbers[0]);i++) {
+        char s[512]; snprintf(s,sizeof(s),"<svg width='4' height='4'><rect width='4' height='4' fill='red' fill-opacity='%s' stroke-width='1.0px' stroke-dashoffset='-1.0e-1px'/></svg>",numbers[i]);
+        PPAssetId id; const PPFrame *f; double next; CHECK(import(assets,s,&id,&e)); PPAsset *a=pp_asset_retain(assets,id); CHECK(pp_asset_frame(a,0,0,0,&f,&next,&e)); CHECK(f->content_alpha[5]>=127 && f->content_alpha[5]<=128 && f->pixels[20]==f->content_alpha[5]); pp_asset_release(a);
+    }
+    PPAssetId id; const PPFrame *f; double next;
+    CHECK(import(assets,"<svg width='4' height='4'><g opacity='0.0'><rect width='4' height='4'/></g></svg>",&id,&e));
+    PPAsset *a=pp_asset_retain(assets,id); CHECK(pp_asset_frame(a,0,0,0,&f,&next,&e)); CHECK(f->content_alpha[5]==0); pp_asset_release(a); pp_assets_destroy(assets);
+}
 int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"--opacity")) test_svg_opacity_semantics();
     else if(argc==2 && !strcmp(argv[1],"--paint")) test_svg_paint_value_grammar();
-    else { test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); }
+    else if(argc==2 && !strcmp(argv[1],"--numeric")) test_svg_numeric_paint_grammar();
+    else { test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
     puts("PASS SVG: supported rendering and paint grammar; unsupported opacity compositing and paint values rejected."); return 0;
 }

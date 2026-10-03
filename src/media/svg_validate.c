@@ -42,26 +42,54 @@ static bool color_value(Value value) {
     plutovg_color_t color;
     return value.length && plutovg_color_parse(&color,value.data,(int)value.length)==(int)value.length;
 }
-/* Restrict numbers to the decimal grammar used by the pinned SVG parser;
- * strtod alone would also accept hex numbers and nonfinite spellings. */
+/* Numeric accumulation adapted from PlutoSVG parse_float(), revision
+ * fd8a080b3d0bccc41f1ae708d3785e7f08398a58, source/plutosvg.c.
+ * Float intermediates are intentional: accepting a finite strtod result could
+ * accept syntax/value pairs that the renderer rejects after float overflow.
+ *
+ * Copyright (c) 2020-2026 Samuel Ugochukwu <sammycageagle@gmail.com>
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 static bool decimal(Value value,double *number,size_t *consumed) {
-    size_t p=0,digits=0;if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) p++;
-    while(p<value.length && isdigit((unsigned char)value.data[p])) { p++;digits++; }
-    if(p<value.length && value.data[p]=='.') { p++;while(p<value.length && isdigit((unsigned char)value.data[p])) { p++;digits++; } }
-    if(!digits) return false;
-    if(p<value.length && (value.data[p]=='e' || value.data[p]=='E')) {
-        p++;if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) p++;
-        size_t start=p;while(p<value.length && isdigit((unsigned char)value.data[p])) p++;if(start==p) return false;
+    size_t p=0,digits=0;float integer=0,fraction=0,exponent=0;int sign=1,exponent_sign=1;
+    if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) { if(value.data[p]=='-') sign=-1;p++; }
+    while(p<value.length && isdigit((unsigned char)value.data[p])) { integer=10.f*integer+(value.data[p]-'0');p++;digits++; }
+    if(p<value.length && value.data[p]=='.') {
+        p++;size_t start=p;float divisor=1;
+        while(p<value.length && isdigit((unsigned char)value.data[p])) { fraction=10.f*fraction+(value.data[p]-'0');divisor*=10.f;p++;digits++; }
+        if(start==p) return false;
+        fraction/=divisor;
     }
-    char *end;*number=strtod(value.data,&end);
-    if(end!=value.data+p || !isfinite(*number) || fabs(*number)>FLT_MAX) return false;
-    *consumed=p;return true;
+    if(!digits) return false;
+    if(p+1<value.length && (value.data[p]=='e' || value.data[p]=='E') && value.data[p+1]!='x' && value.data[p+1]!='m') {
+        p++;if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) { if(value.data[p]=='-') exponent_sign=-1;p++; }
+        size_t start=p;while(p<value.length && isdigit((unsigned char)value.data[p])) { exponent=10.f*exponent+(value.data[p]-'0');p++; }if(start==p) return false;
+    }
+    float result=sign*(integer+fraction);
+    if(exponent) result*=powf(10.f,exponent_sign*exponent);
+    if(!isfinite(result) || result < -FLT_MAX || result > FLT_MAX) return false;
+    *number=result;*consumed=p;return true;
 }
 static bool opacity_value(Value value,double *opacity) {
     size_t p;if(!decimal(value,opacity,&p)) return false;
-    if(p<value.length && value.data[p]=='%') { *opacity/=100;p++; }
+    float result=(float)*opacity;
+    if(p<value.length && value.data[p]=='%') { result/=100.f;p++; }
     if(p!=value.length) return false;
-    *opacity=fmax(0,fmin(1,*opacity));return true;
+    *opacity=fmaxf(0,fminf(1,result));return true;
 }
 static bool length_value(Value value,bool negative,size_t *consumed) {
     double number;size_t p;if(!decimal(value,&number,&p) || (!negative && number<0)) return false;
