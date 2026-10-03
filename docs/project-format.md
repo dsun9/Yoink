@@ -4,7 +4,7 @@ A `.pointy` file is a self-contained ZIP package. It stores the shared eight lis
 
 ## Container
 
-The only entry names are `manifest.json` and `resources/<sha256>`, where `<sha256>` is the lowercase 64-character SHA-256 digest of the complete uncompressed source bytes. Repeated resources have one entry, even when every list uses them. No resource is extracted to a filesystem path.
+The only entry names are `manifest.json`, `assets/<sha256>` for PNG/GIF/SVG sources, and `fonts/<sha256>` for complete font sources. `<sha256>` is the lowercase 64-character SHA-256 digest of the complete uncompressed source bytes. Repeated resources have one entry, even when every list uses them. The resource kind determines its namespace; an image under `fonts/`, a font under `assets/`, or the obsolete `resources/` namespace is rejected. No resource is extracted to a filesystem path.
 
 The reader accepts stored and deflated entries in single-disk, non-ZIP64 containers. It rejects duplicate names, unsupported/encrypted entries, directory and symlink entries, unsafe/noncanonical names, overlapping local data, mismatched local names, bad CRCs, missing/orphan resources, and digest mismatches. Local and central directory bounds are validated before miniz extraction.
 
@@ -30,6 +30,14 @@ The root contains exactly `schema`, `settings`, `resources`, and `lists`. `schem
 `settings` contains the four canonical values: `activation_dip`, `rotation_step_deg`, `resize_factor`, and `easing_seconds`. Their defaults are 16, 10, 1.1, and 0.12. Existing project-model ranges apply.
 
 `resources` is an array of objects with `sha256`, `kind` (`png`, `gif`, `svg`, or `font`), and `notice` (UTF-8 attribution/license text, possibly empty). The SHA-256 identifies bytes, and is independent of the notice. Notices belong to each project: two projects may use the same immutable source bytes with different notices.
+
+Font resource objects also require a `faces` array. Its length is exactly the actual font collection face count, and each ordered record describes the face at that array index. Image resource objects cannot contain `faces`. A face record contains exactly these actual-byte-derived fields:
+
+```json
+{"embedding":"installable","no_subsetting":false,"bitmap_only":false}
+```
+
+`embedding` records `installable`, `editable`, `preview_only`, or `restricted`; the two flags are booleans. Save derives every record from font inspection. Load re-inspects every face and requires all three values and the array length to match, while independently rejecting disallowed embedding permissions. Metadata cannot authorize restricted font bytes. Before allocating each font's metadata array, save charges 128 bytes per face against an aggregate 2 MiB construction budget, limiting the total to 16,384 face records across resources. This conservative bound prevents resource-count times face-count expansion before the final serialized manifest-size check. The per-font 4096-face limit also applies.
 
 `lists` has exactly eight entries, in this order: top left, top center, top right, center left, center right, bottom left, bottom center, bottom right. Each has an `enabled` boolean, a `default` item ID, and an ordered `items` array. An empty list has default zero. A nonempty list's default must identify one of its items. All item IDs are unique nonzero unsigned 64-bit integers and survive loading. JSON consumers must preserve integer precision.
 

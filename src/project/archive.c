@@ -17,10 +17,15 @@ static size_t zip_read(void *opaque, mz_uint64 offset, void *data, size_t size) 
 static bool valid_name(const char *name, size_t size) {
     if (size == 13 && !memcmp(name, "manifest.json", 13))
         return true;
-    if (size != 74 || memcmp(name, "resources/", 10))
+    size_t prefix;
+    if (size == 71 && !memcmp(name, "assets/", 7))
+        prefix = 7;
+    else if (size == 70 && !memcmp(name, "fonts/", 6))
+        prefix = 6;
+    else
         return false;
     PPAssetId id;
-    return pp_store_id(name + 10, &id);
+    return pp_store_id(name + prefix, &id);
 }
 
 /* Walk the central directory before miniz allocates its directory tables. ZIP64
@@ -69,7 +74,7 @@ bool pp_archive_open(FILE *file, mz_zip_archive *zip, PPError *error) {
         if (!read_at(file, end - 20, signature, sizeof(signature)) || u32(signature) == 0x07064b50)
             goto invalid;
     }
-    char (*names)[75] = calloc(count, sizeof(*names));
+    char (*names)[PP_STORE_RESOURCE_NAME] = calloc(count, sizeof(*names));
     uint64_t *starts = calloc(count, sizeof(*starts)), *ends = calloc(count, sizeof(*ends));
     if (!names || !starts || !ends) {
         free(names);
@@ -91,7 +96,7 @@ bool pp_archive_open(FILE *file, mz_zip_archive *zip, PPError *error) {
             failure_code = PP_ERROR_RESOURCE_LIMIT;
             goto bad_directory;
         }
-        if (!n || n > 74 || record > end - pos || u16(h + 34))
+        if (!n || n >= PP_STORE_RESOURCE_NAME || record > end - pos || u16(h + 34))
             goto bad_directory;
         if (!read_at(file, pos + 46, names[i], n) || !valid_name(names[i], n))
             goto bad_directory;
@@ -121,7 +126,7 @@ bool pp_archive_open(FILE *file, mz_zip_archive *zip, PPError *error) {
         if (u16(local + 26) != n || u16(local + 6) != u16(h + 8) || u16(local + 8) != u16(h + 10) ||
             header > cd - starts[i] || packed > cd - starts[i] - header)
             goto bad_directory;
-        char local_name[75] = {0};
+        char local_name[PP_STORE_RESOURCE_NAME] = {0};
         if (!read_at(file, starts[i] + 30, local_name, n) || memcmp(local_name, names[i], n))
             goto bad_directory;
         ends[i] = starts[i] + header + packed;
@@ -220,8 +225,8 @@ bool pp_archive_write(FILE *file, const char *json, size_t size, const PPManifes
         return pp_store_error(error, PP_ERROR_MEMORY, "Cannot initialize ZIP writer");
     bool ok = mz_zip_writer_add_mem(&zip, "manifest.json", json, size, MZ_BEST_SPEED) != 0;
     for (size_t i = 0; ok && i < manifest->count; i++) {
-        char name[75] = "resources/";
-        pp_store_hex(manifest->resources[i].id, name + 10);
+        char name[PP_STORE_RESOURCE_NAME];
+        pp_store_resource_name(manifest->resources[i].id, manifest->resources[i].kind, name);
         PPBytes bytes = pp_asset_source(manifest->resources[i].asset);
         ok = mz_zip_writer_add_mem(&zip, name, bytes.data, bytes.size, MZ_BEST_SPEED) != 0;
     }

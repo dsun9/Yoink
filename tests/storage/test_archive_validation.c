@@ -9,8 +9,8 @@ static void test_archive_validation(void) {
     reject_load();
     write_zip(empty, NULL, (PPBytes){0}, true);
     reject_load();
-    const char *paths[] = {"../escape", "/absolute", "C:/absolute", "resources/../escape",
-                           "resources\\escape"};
+    const char *paths[] = {"../escape", "/absolute", "C:/absolute", "assets/../escape",
+                           "fonts\\escape"};
     for (size_t i = 0; i < sizeof(paths) / sizeof(*paths); i++) {
         write_zip(empty, paths[i], (PPBytes){(const uint8_t *)"x", 1}, false);
         reject_load();
@@ -43,6 +43,7 @@ static void test_restricted_collection_sibling(void);
 static void test_declared_limits(void);
 static void test_archive_trailer_agreement(void);
 static void test_named_instance_is_not_collection_face(void);
+static void test_wrong_resource_namespace(void);
 int main(void) {
     begin_test();
     PPBlob fixture = read_bytes(PP_PROJECT_FIXTURES "/empty-v1.json");
@@ -53,6 +54,7 @@ int main(void) {
     test_declared_limits();
     test_archive_trailer_agreement();
     test_named_instance_is_not_collection_face();
+    test_wrong_resource_namespace();
     pp_blob_destroy(&fixture);
     end_test();
     puts("archive rejection cases passed");
@@ -76,6 +78,22 @@ static char *resource_manifest(PPBytes bytes, const char *kind, bool text, int f
     CHECK(yyjson_mut_obj_add_strcpy(mut, resource, "sha256", hash));
     CHECK(yyjson_mut_obj_add_str(mut, resource, "kind", kind));
     CHECK(yyjson_mut_obj_add_str(mut, resource, "notice", "fixture license"));
+    if (!strcmp(kind, "font")) {
+        PPFontInfo info;
+        CHECK(pp_font_inspect(bytes, 0, &info, &error));
+        size_t count = info.face_count;
+        yyjson_mut_val *faces = yyjson_mut_arr(mut);
+        CHECK(faces && yyjson_mut_obj_add_val(mut, resource, "faces", faces));
+        const char *embedding[] = {"installable", "editable", "preview_only", "restricted"};
+        for (size_t index = 0; index < count; index++) {
+            CHECK(pp_font_inspect(bytes, (int)index, &info, &error));
+            yyjson_mut_val *face = yyjson_mut_obj(mut);
+            CHECK(face && yyjson_mut_arr_append(faces, face));
+            CHECK(yyjson_mut_obj_add_str(mut, face, "embedding", embedding[info.embedding]));
+            CHECK(yyjson_mut_obj_add_bool(mut, face, "no_subsetting", info.no_subsetting));
+            CHECK(yyjson_mut_obj_add_bool(mut, face, "bitmap_only", info.bitmap_only));
+        }
+    }
     char item[1024];
     if (text)
         snprintf(item, sizeof(item),
@@ -102,6 +120,48 @@ static char *resource_manifest(PPBytes bytes, const char *kind, bool text, int f
     yyjson_mut_doc_free(mut);
     return result;
 }
+static char *changed_metadata(const void *bytes, size_t size, int variant, size_t *out_size) {
+    yyjson_doc *source = yyjson_read(bytes, size, 0);
+    CHECK(source);
+    yyjson_mut_doc *doc = yyjson_doc_mut_copy(source, NULL);
+    yyjson_doc_free(source);
+    CHECK(doc);
+    yyjson_mut_val *resources = yyjson_mut_obj_get(yyjson_mut_doc_get_root(doc), "resources");
+    bool changed = false;
+    for (size_t i = 0; i < yyjson_mut_arr_size(resources); i++) {
+        yyjson_mut_val *resource = yyjson_mut_arr_get(resources, i);
+        const char *kind = yyjson_mut_get_str(yyjson_mut_obj_get(resource, "kind"));
+        if (strcmp(kind, variant == 7 ? "svg" : "font"))
+            continue;
+        if (variant == 7)
+            CHECK(yyjson_mut_obj_add_val(doc, resource, "faces", yyjson_mut_arr(doc)));
+        else {
+            yyjson_mut_val *faces = yyjson_mut_obj_get(resource, "faces"),
+                           *face = yyjson_mut_arr_get(faces, 0);
+            CHECK(face);
+            if (variant == 6)
+                CHECK(yyjson_mut_arr_append(faces, yyjson_mut_val_mut_copy(doc, face)));
+            else {
+                const char *key = variant == 3   ? "embedding"
+                                  : variant == 4 ? "no_subsetting"
+                                                 : "bitmap_only";
+                bool old_flag = yyjson_mut_get_bool(yyjson_mut_obj_get(face, key));
+                CHECK(yyjson_mut_obj_remove_key(face, key));
+                if (variant == 3)
+                    CHECK(yyjson_mut_obj_add_str(doc, face, key, "installable"));
+                else
+                    CHECK(yyjson_mut_obj_add_bool(doc, face, key, !old_flag));
+            }
+        }
+        changed = true;
+        break;
+    }
+    CHECK(changed);
+    char *result = yyjson_mut_write(doc, 0, out_size);
+    CHECK(result);
+    yyjson_mut_doc_free(doc);
+    return result;
+}
 static void test_manifest_rejections(void) {
     const char *svg = "<svg width='20' height='20'><rect width='20' height='20' fill='red'/></svg>";
     PPBytes source = {(const uint8_t *)svg, strlen(svg)};
@@ -109,7 +169,7 @@ static void test_manifest_rejections(void) {
     char name[80], hash[65];
     char *json = resource_manifest(source, "svg", false, 0, &id);
     hex_id(id, hash);
-    snprintf(name, sizeof(name), "resources/%s", hash);
+    snprintf(name, sizeof(name), "assets/%s", hash);
     write_zip(json, NULL, (PPBytes){0}, false);
     reject_load();
     write_zip(json, name, (PPBytes){(const uint8_t *)"corrupt", 7}, false);
@@ -130,7 +190,7 @@ static void test_manifest_rejections(void) {
     PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyFixture.ttf");
     json = resource_manifest((PPBytes){font.data, font.size}, "font", true, 1000, &id);
     hex_id(id, hash);
-    snprintf(name, sizeof(name), "resources/%s", hash);
+    snprintf(name, sizeof(name), "fonts/%s", hash);
     write_zip(json, name, (PPBytes){font.data, font.size}, false);
     reject_load();
     free(json);
@@ -151,8 +211,12 @@ static void test_manifest_rejections(void) {
     }
     CHECK(patched);
     json = resource_manifest((PPBytes){font.data, font.size}, "font", true, 0, &id);
+    size_t forged_size;
+    char *forged = changed_metadata(json, strlen(json), 3, &forged_size);
+    free(json);
+    json = forged; /* Restricted actual bytes falsely claim installable embedding. */
     hex_id(id, hash);
-    snprintf(name, sizeof(name), "resources/%s", hash);
+    snprintf(name, sizeof(name), "fonts/%s", hash);
     write_zip(json, name, (PPBytes){font.data, font.size}, false);
     reject_load();
     free(json);
@@ -201,7 +265,7 @@ static void test_restricted_collection_sibling(void) {
     char *json = resource_manifest((PPBytes){font.data, font.size}, "font", true, 0, &id), hash[65],
          name[75];
     hex_id(id, hash);
-    snprintf(name, sizeof(name), "resources/%s", hash);
+    snprintf(name, sizeof(name), "fonts/%s", hash);
     write_zip(json, name, (PPBytes){font.data, font.size}, false);
     reject_load();
     free(json);
@@ -279,7 +343,7 @@ static void test_declared_limits(void) {
     CHECK(mz_zip_writer_add_mem(&zip, "manifest.json", empty, strlen(empty), 0));
     for (unsigned i = 0; i < 9; i++) {
         char name[75];
-        snprintf(name, sizeof(name), "resources/%064x", i);
+        snprintf(name, sizeof(name), "assets/%064x", i);
         CHECK(mz_zip_writer_add_mem(&zip, name, "x", 1, 0));
     }
     void *data = NULL;
@@ -288,18 +352,18 @@ static void test_declared_limits(void) {
     CHECK(mz_zip_writer_end(&zip));
     for (size_t p = 0; p + 46 < size; p++) {
         uint8_t *entry = (uint8_t *)data + p;
-        if (!memcmp(entry, "PK\1\2", 4) && !memcmp(entry + 46, "resources/", 10))
+        if (!memcmp(entry, "PK\1\2", 4) && !memcmp(entry + 46, "assets/", 7))
             put_le32(entry + 24, 64 * 1024 * 1024);
     }
     write_bytes(package, data, size);
     mz_free(data);
     reject_load();
     CHECK(error.code == PP_ERROR_RESOURCE_LIMIT);
-    char name[75] = "resources/0000000000000000000000000000000000000000000000000000000000000000";
+    char name[75] = "assets/0000000000000000000000000000000000000000000000000000000000000000";
     write_zip(empty, name, (PPBytes){(const uint8_t *)"x", 1}, false);
     PPBlob bytes = read_bytes(package);
     for (size_t p = 0; p + 46 < bytes.size; p++)
-        if (!memcmp(bytes.data + p, "PK\1\2", 4) && !memcmp(bytes.data + p + 46, "resources/", 10))
+        if (!memcmp(bytes.data + p, "PK\1\2", 4) && !memcmp(bytes.data + p + 46, "assets/", 7))
             put_le32(bytes.data + p + 24, 64 * 1024 * 1024 + 1);
     write_bytes(package, bytes.data, bytes.size);
     pp_blob_destroy(&bytes);
@@ -393,7 +457,7 @@ static void test_named_instance_is_not_collection_face(void) {
     char *json = resource_manifest((PPBytes){font.data, font.size}, "font", true, 65536, &resource);
     char hash[65], name[75];
     hex_id(resource, hash);
-    snprintf(name, sizeof(name), "resources/%s", hash);
+    snprintf(name, sizeof(name), "fonts/%s", hash);
     write_zip(json, name, (PPBytes){font.data, font.size}, false);
     free(json);
     CHECK(!pp_project_load(package, assets, &candidate, &error));
@@ -415,4 +479,106 @@ static void test_named_instance_is_not_collection_face(void) {
     pp_assets_destroy(assets);
     pp_blob_destroy(&font);
     CHECK(pp_platform_remove_file(original, &error));
+}
+
+static void test_wrong_resource_namespace(void) {
+    PPAssets *assets = NULL;
+    PPProject *project = NULL;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_project_create(assets, &project, &error));
+    const char *svg = "<svg width='20' height='20'><rect width='20' height='20' fill='red'/></svg>";
+    PPItem image = {0};
+    image.kind = PP_ITEM_IMAGE;
+    image.opacity = 1;
+    image.image_longest_dip = 20;
+    CHECK(pp_asset_import(assets, (PPBytes){(const uint8_t *)svg, strlen(svg)}, PP_ASSET_SVG,
+                          &image.image_asset, &error));
+    CHECK(pp_project_add_item(project, PP_ANCHOR_TOP_LEFT, &image, NULL, &error));
+    PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyFixture.ttf");
+    /* Exercise actual nondefault permission metadata, using owned fixture bytes. */
+    unsigned tables = (font.data[4] << 8) | font.data[5];
+    bool patched = false;
+    for (unsigned i = 0; i < tables; i++) {
+        uint8_t *record = font.data + 12 + 16 * i;
+        if (!memcmp(record, "OS/2", 4)) {
+            size_t offset = be32(record + 8);
+            CHECK(offset + 10 <= font.size);
+            font.data[offset + 8] = 1; /* no-subsetting */
+            font.data[offset + 9] = 8; /* editable embedding */
+            patched = true;
+            break;
+        }
+    }
+    PPFontInfo info;
+    CHECK(patched && pp_font_inspect((PPBytes){font.data, font.size}, 0, &info, &error));
+    CHECK(info.embedding == PP_FONT_EDITABLE && info.no_subsetting && !info.bitmap_only);
+    PPItem text = {0};
+    text.kind = PP_ITEM_TEXT;
+    text.text = "A";
+    text.opacity = 1;
+    text.text_style.requested_family = "Pointy Fixture";
+    text.text_style.font_size_dip = 32;
+    text.text_style.color[3] = 255;
+    CHECK(pp_asset_import(assets, (PPBytes){font.data, font.size}, PP_ASSET_FONT,
+                          &text.text_style.primary_asset, &error));
+    pp_blob_destroy(&font);
+    CHECK(pp_project_add_item(project, PP_ANCHOR_TOP_LEFT, &text, NULL, &error));
+    for (int variant = 0; variant < 8; variant++) {
+        CHECK(pp_project_save(project, package, &error));
+        PPProject *complete = NULL;
+        CHECK(pp_project_load(package, assets, &complete, &error));
+        pp_project_destroy(complete);
+        PPBlob saved = read_bytes(package);
+        mz_zip_archive reader = {0}, writer = {0};
+        CHECK(mz_zip_reader_init_mem(&reader, saved.data, saved.size, 0));
+        CHECK(mz_zip_writer_init_heap(&writer, 0, 0));
+        char hash[65], expected[80], replacement[80];
+        hex_id(variant == 1 ? text.text_style.primary_asset : image.image_asset, hash);
+        snprintf(expected, sizeof(expected), "%s/%s", variant == 1 ? "fonts" : "assets", hash);
+        snprintf(replacement, sizeof(replacement), "%s/%s",
+                 variant == 0   ? "fonts"
+                 : variant == 1 ? "assets"
+                                : "resources",
+                 hash);
+        unsigned renamed = 0;
+        for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&reader); i++) {
+            mz_zip_archive_file_stat stat;
+            CHECK(mz_zip_reader_file_stat(&reader, i, &stat));
+            size_t size = 0;
+            void *data = mz_zip_reader_extract_to_heap(&reader, i, &size, 0);
+            CHECK(data);
+            const char *name = stat.m_filename;
+            char *altered = NULL;
+            if (variant < 3 && !strcmp(name, expected)) {
+                name = replacement;
+                renamed++;
+            }
+            if (variant >= 3 && !strcmp(name, "manifest.json")) {
+                altered = changed_metadata(data, size, variant, &size);
+                renamed++;
+            }
+            CHECK(mz_zip_writer_add_mem(&writer, name, altered ? (void *)altered : data, size,
+                                        MZ_BEST_SPEED));
+            free(altered);
+            mz_free(data);
+        }
+        CHECK(renamed == 1);
+        void *repacked = NULL;
+        size_t size = 0;
+        CHECK(mz_zip_writer_finalize_heap_archive(&writer, &repacked, &size));
+        CHECK(mz_zip_writer_end(&writer));
+        CHECK(mz_zip_reader_end(&reader));
+        pp_blob_destroy(&saved);
+        write_bytes(package, repacked, size);
+        mz_free(repacked);
+        uint64_t revision = pp_project_revision(project);
+        size_t retained = pp_assets_raster_bytes(assets);
+        PPProject *candidate = NULL;
+        CHECK(!pp_project_load(package, assets, &candidate, &error));
+        CHECK(!candidate && error.code == PP_ERROR_FORMAT);
+        CHECK(pp_project_revision(project) == revision &&
+              pp_assets_raster_bytes(assets) == retained);
+    }
+    pp_project_destroy(project);
+    pp_assets_destroy(assets);
 }

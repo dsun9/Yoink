@@ -103,8 +103,8 @@ bool pp_project_load(const char *path, PPAssets *assets, PPProject **out, PPErro
     }
     for (size_t i = 0; i < manifest.count; i++) {
         PPStoredResource *r = &manifest.resources[i];
-        char name[75] = "resources/";
-        pp_store_hex(r->id, name + 10);
+        char name[PP_STORE_RESOURCE_NAME];
+        pp_store_resource_name(r->id, r->kind, name);
         index = mz_zip_reader_locate_file(&zip, name, NULL, 0);
         if (index < 0) {
             pp_store_error(error, PP_ERROR_FORMAT, "Missing manifest resource");
@@ -121,6 +121,8 @@ bool pp_project_load(const char *path, PPAssets *assets, PPProject **out, PPErro
         if (!pp_asset_import(staging, (PPBytes){bytes.data, bytes.size}, r->kind, &actual, error))
             goto done;
         pp_blob_destroy(&bytes);
+        if (!pp_manifest_check_font(r, staging, error))
+            goto done;
     }
     if (!pp_manifest_project(&manifest, staging, &candidate, error))
         goto done;

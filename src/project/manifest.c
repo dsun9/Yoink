@@ -6,6 +6,7 @@
 #include <limits.h>
 
 static const char *kind_names[] = {"png", "gif", "svg", "font"};
+static const char *embedding_names[] = {"installable", "editable", "preview_only", "restricted"};
 static bool zero_id(PPAssetId id) {
     static const PPAssetId zero = {0};
     return !memcmp(&id, &zero, sizeof(id));
@@ -13,6 +14,12 @@ static bool zero_id(PPAssetId id) {
 void pp_store_hex(PPAssetId id, char out[65]) {
     for (int i = 0; i < 32; i++)
         snprintf(out + 2 * i, 3, "%02x", id.bytes[i]);
+}
+void pp_store_resource_name(PPAssetId id, PPAssetKind kind, char out[PP_STORE_RESOURCE_NAME]) {
+    const char *prefix = kind == PP_ASSET_FONT ? "fonts/" : "assets/";
+    size_t length = strlen(prefix);
+    memcpy(out, prefix, length);
+    pp_store_hex(id, out + length);
 }
 bool pp_store_id(const char *text, PPAssetId *out) {
     if (!text || strlen(text) != 64)
@@ -146,6 +153,40 @@ static bool count_manifest_text(const char *text, size_t *total, PPError *error)
     *total += length;
     return true;
 }
+static yyjson_mut_val *font_faces_json(yyjson_mut_doc *doc, PPAsset *asset, size_t *metadata_bytes,
+                                       PPError *error) {
+    PPFontInfo info;
+    PPBytes bytes = pp_asset_source(asset);
+    if (!pp_font_inspect(bytes, 0, &info, error))
+        return NULL;
+    /* Charge before allocating the array or its records. This conservatively
+     * bounds resource_count * face_count even when strings fit the manifest. */
+    const size_t face_bytes = 128;
+    if (!info.face_count || info.face_count > 4096 ||
+        info.face_count > (PP_STORE_MANIFEST - *metadata_bytes) / face_bytes) {
+        pp_store_error(error, PP_ERROR_RESOURCE_LIMIT, "Font metadata exceeds manifest budget");
+        return NULL;
+    }
+    size_t count = info.face_count;
+    *metadata_bytes += count * face_bytes;
+    yyjson_mut_val *faces = yyjson_mut_arr(doc);
+    if (!faces)
+        goto memory;
+    for (size_t i = 0; i < count; i++) {
+        if (!pp_font_inspect(bytes, (int)i, &info, error))
+            return NULL;
+        yyjson_mut_val *face = yyjson_mut_obj(doc);
+        if (!face || !yyjson_mut_arr_append(faces, face) ||
+            !yyjson_mut_obj_add_str(doc, face, "embedding", embedding_names[info.embedding]) ||
+            !yyjson_mut_obj_add_bool(doc, face, "no_subsetting", info.no_subsetting) ||
+            !yyjson_mut_obj_add_bool(doc, face, "bitmap_only", info.bitmap_only))
+            goto memory;
+    }
+    return faces;
+memory:
+    pp_store_error(error, PP_ERROR_MEMORY, "Cannot construct font embedding metadata");
+    return NULL;
+}
 #define ADD(expr)                                                                                  \
     do {                                                                                           \
         if (!(expr))                                                                               \
@@ -164,7 +205,7 @@ bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPMa
     if (!doc)
         return pp_store_error(error, PP_ERROR_MEMORY, "Cannot allocate manifest");
     uint64_t total = 0;
-    size_t item_count = 0, text_bytes = 0;
+    size_t item_count = 0, text_bytes = 0, metadata_bytes = 0;
     bool ok = false;
     yyjson_mut_val *root = yyjson_mut_obj(doc), *settings = yyjson_mut_obj(doc),
                    *lists = yyjson_mut_arr(doc), *resources = yyjson_mut_arr(doc);
@@ -248,6 +289,12 @@ bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPMa
         ADD(yyjson_mut_obj_add_strcpy(doc, value, "sha256", hash));
         ADD(yyjson_mut_obj_add_str(doc, value, "kind", kind_names[r->kind]));
         ADD(yyjson_mut_obj_add_str(doc, value, "notice", r->notice));
+        if (r->kind == PP_ASSET_FONT) {
+            yyjson_mut_val *faces = font_faces_json(doc, r->asset, &metadata_bytes, error);
+            if (!faces)
+                goto done;
+            ADD(yyjson_mut_obj_add_val(doc, value, "faces", faces));
+        }
     }
     *json = yyjson_mut_write(doc, 0, size);
     ADD(*json);
@@ -271,6 +318,48 @@ done:
 static const char *string_value(yyjson_val *value) {
     const char *s = yyjson_get_str(value);
     return s && strlen(s) == yyjson_get_len(value) ? s : NULL;
+}
+static bool valid_faces_metadata(yyjson_val *faces) {
+    if (!yyjson_is_arr(faces) || !yyjson_arr_size(faces) || yyjson_arr_size(faces) > 4096)
+        return false;
+    size_t i, count;
+    yyjson_val *face;
+    yyjson_arr_foreach(faces, i, count, face) {
+        const char *embedding = string_value(yyjson_obj_get(face, "embedding"));
+        if (!yyjson_is_obj(face) || yyjson_obj_size(face) != 3 || !embedding ||
+            !yyjson_is_bool(yyjson_obj_get(face, "no_subsetting")) ||
+            !yyjson_is_bool(yyjson_obj_get(face, "bitmap_only")))
+            return false;
+        size_t kind;
+        for (kind = 0; kind < 4; kind++)
+            if (!strcmp(embedding, embedding_names[kind]))
+                break;
+        if (kind == 4)
+            return false;
+    }
+    return true;
+}
+bool pp_manifest_check_font(const PPStoredResource *resource, PPAssets *assets, PPError *error) {
+    if (resource->kind != PP_ASSET_FONT)
+        return true;
+    PPAsset *asset = pp_asset_retain(assets, resource->id);
+    PPBytes bytes = pp_asset_source(asset);
+    PPFontInfo info;
+    bool ok = asset && pp_font_inspect(bytes, 0, &info, error);
+    if (ok)
+        ok = yyjson_arr_size(resource->faces) == info.face_count;
+    for (size_t i = 0; ok && i < yyjson_arr_size(resource->faces); i++) {
+        yyjson_val *face = yyjson_arr_get(resource->faces, i);
+        ok = pp_font_inspect(bytes, (int)i, &info, error) && info.embeddable;
+        if (ok)
+            ok = !strcmp(string_value(yyjson_obj_get(face, "embedding")),
+                         embedding_names[info.embedding]) &&
+                 yyjson_get_bool(yyjson_obj_get(face, "no_subsetting")) == info.no_subsetting &&
+                 yyjson_get_bool(yyjson_obj_get(face, "bitmap_only")) == info.bitmap_only;
+    }
+    pp_asset_release(asset);
+    return ok || pp_store_error(error, PP_ERROR_FORMAT,
+                                "Font embedding metadata or permission differs from actual bytes");
 }
 static bool safe_tree(yyjson_val *value, unsigned depth) {
     if (depth > 16)
@@ -329,7 +418,7 @@ bool pp_manifest_read(PPBytes bytes, PPManifest *manifest, PPError *error) {
         PPStoredResource *r = &manifest->resources[i];
         const char *kind = string_value(yyjson_obj_get(value, "kind"));
         r->notice = string_value(yyjson_obj_get(value, "notice"));
-        if (!yyjson_is_obj(value) || yyjson_obj_size(value) != 3 ||
+        if (!yyjson_is_obj(value) ||
             !pp_store_id(string_value(yyjson_obj_get(value, "sha256")), &r->id) || !kind ||
             !r->notice)
             goto invalid;
@@ -340,6 +429,13 @@ bool pp_manifest_read(PPBytes bytes, PPManifest *manifest, PPError *error) {
         if (k == 4)
             goto invalid;
         r->kind = (PPAssetKind)k;
+        if (yyjson_obj_size(value) != (r->kind == PP_ASSET_FONT ? 4 : 3))
+            goto invalid;
+        if (r->kind == PP_ASSET_FONT) {
+            r->faces = yyjson_obj_get(value, "faces");
+            if (!valid_faces_metadata(r->faces))
+                goto invalid;
+        }
         for (size_t j = 0; j < i; j++)
             if (!memcmp(&r->id, &manifest->resources[j].id, sizeof(r->id)))
                 goto invalid;

@@ -129,11 +129,6 @@ static void test_portable_round_trip(void) {
     mz_zip_archive zip = {0};
     CHECK(mz_zip_reader_init_mem(&zip, zipbytes.data, zipbytes.size, 0));
     CHECK(mz_zip_reader_get_num_files(&zip) == 4);
-    for (mz_uint i = 0; i < 4; i++) {
-        mz_zip_archive_file_stat st;
-        CHECK(mz_zip_reader_file_stat(&zip, i, &st));
-        CHECK(!strchr(st.m_filename, ':') && st.m_filename[0] != '/');
-    }
     size_t n;
     char *extracted = mz_zip_reader_extract_file_to_heap(&zip, "manifest.json", &n, 0);
     CHECK(extracted);
@@ -144,6 +139,52 @@ static void test_portable_round_trip(void) {
     mz_free(extracted);
     CHECK(!strstr(json, "scene") && !strstr(json, "window") && !strstr(json, "display") &&
           !strstr(json, directory));
+    yyjson_doc *manifest = yyjson_read(json, n, 0);
+    CHECK(manifest);
+    yyjson_val *resources = yyjson_obj_get(yyjson_doc_get_root(manifest), "resources");
+    size_t resource_index, resource_count, fonts = 0;
+    yyjson_val *resource;
+    char primary_hash[65];
+    hex_id(text.text_style.primary_asset, primary_hash);
+    yyjson_arr_foreach(resources, resource_index, resource_count, resource) {
+        yyjson_val *faces = yyjson_obj_get(resource, "faces");
+        if (!strcmp(yyjson_get_str(yyjson_obj_get(resource, "kind")), "font")) {
+            fonts++;
+            bool collection =
+                !strcmp(yyjson_get_str(yyjson_obj_get(resource, "sha256")), primary_hash);
+            CHECK(yyjson_is_arr(faces) && yyjson_arr_size(faces) == (collection ? 2 : 1));
+            size_t face_index, face_count;
+            yyjson_val *face;
+            yyjson_arr_foreach(faces, face_index, face_count, face) {
+                const char *embedding = yyjson_get_str(yyjson_obj_get(face, "embedding"));
+                CHECK(embedding && !strcmp(embedding, "installable"));
+                CHECK(yyjson_is_false(yyjson_obj_get(face, "no_subsetting")));
+                CHECK(yyjson_is_false(yyjson_obj_get(face, "bitmap_only")));
+            }
+        } else
+            CHECK(!faces);
+    }
+    CHECK(fonts == 2);
+    yyjson_doc_free(manifest);
+    char resource_hash[65], expected_name[80];
+    hex_id(image.image_asset, resource_hash);
+    snprintf(expected_name, sizeof(expected_name), "assets/%s", resource_hash);
+    CHECK(mz_zip_reader_locate_file(&zip, expected_name, NULL, 0) >= 0);
+    hex_id(text.text_style.primary_asset, resource_hash);
+    snprintf(expected_name, sizeof(expected_name), "fonts/%s", resource_hash);
+    CHECK(mz_zip_reader_locate_file(&zip, expected_name, NULL, 0) >= 0);
+    hex_id(text.text_style.fallback_asset, resource_hash);
+    snprintf(expected_name, sizeof(expected_name), "fonts/%s", resource_hash);
+    CHECK(mz_zip_reader_locate_file(&zip, expected_name, NULL, 0) >= 0);
+    for (mz_uint i = 0; i < 4; i++) {
+        mz_zip_archive_file_stat st;
+        CHECK(mz_zip_reader_file_stat(&zip, i, &st));
+        CHECK(!strchr(st.m_filename, ':') && st.m_filename[0] != '/');
+        CHECK(strcmp(st.m_filename, "manifest.json") == 0 ||
+              strncmp(st.m_filename, "assets/", 7) == 0 ||
+              strncmp(st.m_filename, "fonts/", 6) == 0);
+    }
+
     free(json);
     mz_zip_reader_end(&zip);
     pp_blob_destroy(&zipbytes);
@@ -196,12 +237,14 @@ static void test_portable_round_trip(void) {
 static void test_missing_aptos_default_and_unresolved_text(void);
 static void test_candidate_pressure_and_notice_isolation(void);
 static void test_named_instance_save_preserves_original(void);
+static void test_font_metadata_budget(void);
 int main(void) {
     begin_test();
     test_portable_round_trip();
     test_missing_aptos_default_and_unresolved_text();
     test_candidate_pressure_and_notice_isolation();
     test_named_instance_save_preserves_original();
+    test_font_metadata_budget();
     end_test();
     puts("portable round trip and atomic failures passed");
     return 0;
@@ -357,4 +400,71 @@ static void test_named_instance_save_preserves_original(void) {
     pp_project_destroy(project);
     CHECK(!pp_assets_external_raster_bytes(assets));
     pp_assets_destroy(assets);
+}
+
+static uint32_t read_be32(const uint8_t *p) {
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+static void write_be32(uint8_t *p, uint32_t value) {
+    p[0] = (uint8_t)(value >> 24);
+    p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8);
+    p[3] = (uint8_t)value;
+}
+static void test_font_metadata_budget(void) {
+    PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyFixture.ttf");
+    const uint32_t faces = 4096, header = 12 + 4 * faces;
+    /* FreeType requires room for at least 28 bytes per declared face header,
+       even when valid collection offsets share the same directory. */
+    size_t collection_size = header + font.size + 28 * faces + 1;
+    PPBlob collection = {calloc(1, collection_size), collection_size};
+    CHECK(collection.data);
+    memcpy(collection.data, "ttcf", 4);
+    write_be32(collection.data + 4, 0x10000);
+    write_be32(collection.data + 8, faces);
+    for (uint32_t i = 0; i < faces; i++)
+        write_be32(collection.data + 12 + 4 * i, header);
+    memcpy(collection.data + header, font.data, font.size);
+    unsigned tables = (font.data[4] << 8) | font.data[5];
+    for (unsigned i = 0; i < tables; i++) {
+        uint8_t *record = collection.data + header + 12 + 16 * i;
+        write_be32(record + 8, read_be32(record + 8) + header);
+    }
+    pp_blob_destroy(&font);
+    PPFontInfo info;
+    CHECK(pp_font_inspect((PPBytes){collection.data, collection.size}, 4095, &info, &error));
+    CHECK(info.face_count == faces && info.embeddable);
+    PPAssets *assets = NULL;
+    PPProject *project = NULL;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_project_create(assets, &project, &error));
+    PPItem item = {0};
+    item.kind = PP_ITEM_TEXT;
+    item.text = "A";
+    item.opacity = 1;
+    item.text_style.requested_family = "Pointy Fixture";
+    item.text_style.font_size_dip = 16;
+    item.text_style.color[3] = 255;
+    uint8_t original[32];
+    for (unsigned resource = 0; resource < 5; resource++) {
+        /* Distinct owned sources sharing legal face offsets exercise the
+           resource_count * face_count bound without large font payloads. */
+        collection.data[collection.size - 1] = (uint8_t)resource;
+        CHECK(pp_asset_import(assets, (PPBytes){collection.data, collection.size}, PP_ASSET_FONT,
+                              &item.text_style.primary_asset, &error));
+        CHECK(pp_project_add_item(project, PP_ANCHOR_TOP_LEFT, &item, NULL, &error));
+        if (resource == 3) {
+            CHECK(pp_project_save(project, package, &error));
+            digest_file(package, original);
+        }
+    }
+    uint64_t revision = pp_project_revision(project);
+    CHECK(!pp_project_save(project, package, &error));
+    CHECK(error.code == PP_ERROR_RESOURCE_LIMIT);
+    CHECK(strstr(error.message, "metadata"));
+    CHECK(pp_project_revision(project) == revision);
+    assert_reopens(original);
+    pp_project_destroy(project);
+    pp_assets_destroy(assets);
+    pp_blob_destroy(&collection);
 }

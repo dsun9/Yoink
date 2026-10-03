@@ -10,12 +10,14 @@
 #define PP_STORE_MANIFEST ((size_t)2 * 1024 * 1024)
 #define PP_STORE_ENTRIES 4096
 #define PP_STORE_NAME 1024
+#define PP_STORE_RESOURCE_NAME 72 /* assets/ + 64 hexadecimal digits + NUL */
 
 typedef struct PPStoredResource {
     PPAssetId id;
     PPAssetKind kind;
     PPAsset *asset;     /* retained only when collecting a save */
     const char *notice; /* borrowed from project or manifest document */
+    yyjson_val *faces;  /* font embedding metadata borrowed from manifest document */
 } PPStoredResource;
 typedef struct PPManifest {
     yyjson_doc *doc;
@@ -24,11 +26,13 @@ typedef struct PPManifest {
 } PPManifest;
 bool pp_store_error(PPError *error, int code, const char *message);
 void pp_store_hex(PPAssetId id, char out[65]);
+void pp_store_resource_name(PPAssetId id, PPAssetKind kind, char out[PP_STORE_RESOURCE_NAME]);
 bool pp_store_id(const char *text, PPAssetId *out);
 bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPManifest *manifest,
                        PPError *error);
 bool pp_manifest_read(PPBytes bytes, PPManifest *manifest, PPError *error);
 bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out, PPError *error);
+bool pp_manifest_check_font(const PPStoredResource *resource, PPAssets *assets, PPError *error);
 void pp_manifest_destroy(PPManifest *manifest);
 bool pp_archive_open(FILE *file, mz_zip_archive *zip, PPError *error);
 bool pp_archive_extract(mz_zip_archive *zip, mz_uint index, size_t limit, PPBlob *out,
