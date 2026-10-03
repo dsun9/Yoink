@@ -2,7 +2,7 @@
 
 Date: 2026-10-03
 
-Status: conversational design approved; written specification ready for review.
+Status: written specification approved on 2026-10-03.
 
 ## 1. Purpose and success criteria
 
