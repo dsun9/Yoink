@@ -3,13 +3,17 @@
  * Unsupported semantics are errors; metadata/title/desc subtrees are ignored. */
 #include "limits.h"
 #include <expat.h>
+#include <plutovg.h>
 #include <ctype.h>
+#include <float.h>
+#include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #define MAX_NODES 16384
 #define MAX_REFERENCES 65536
-typedef struct Node { char *id; int child,sibling,first_ref,state; unsigned expansions,render_depth; const char *tag; } Node;
+enum { PAINT_INHERIT, PAINT_NONE, PAINT_ACTIVE };
+typedef struct Node { char *id; int child,sibling,first_ref,state; unsigned expansions,render_depth; const char *tag; int fill,stroke; bool partial_opacity; } Node;
 typedef struct Reference { char *id; int next,target; bool paint; } Reference;
 typedef struct Validation {
     XML_Parser parser; PPError *error; bool failed; unsigned depth,ignored;
@@ -17,6 +21,7 @@ typedef struct Validation {
 } Validation;
 static const char *const tags[]={"svg","g","defs","symbol","use","path","rect","circle","ellipse","line","polygon","polyline","linearGradient","radialGradient","stop",NULL};
 static const char *const attrs[]={"id","x","y","width","height","viewBox","preserveAspectRatio","d","points","cx","cy","r","rx","ry","x1","y1","x2","y2","fx","fy","transform","gradientTransform","gradientUnits","spreadMethod","offset","color","display","visibility","fill","fill-opacity","fill-rule","opacity","stop-color","stop-opacity","stroke","stroke-width","stroke-opacity","stroke-linecap","stroke-linejoin","stroke-miterlimit","stroke-dasharray","stroke-dashoffset",NULL};
+static const char *const shapes[]={"path","rect","circle","ellipse","line","polygon","polyline",NULL};
 static const char *listed(const char *name,const char *const *list) { for(;*list;list++) if(!strcmp(name,*list)) return *list;return NULL; }
 static void fail(Validation *v,int code,const char *reason) { if(!v->failed) pp_media_error(v->error,code,reason);v->failed=true;XML_StopParser(v->parser,XML_FALSE); }
 static char *copy(const char *s,size_t n) { char *p=malloc(n+1);if(p) { memcpy(p,s,n);p[n]=0; }return p; }
@@ -24,6 +29,81 @@ static void reference(Validation *v,int node,const char *id,size_t length,bool p
     if(!length || length>256 || v->ref_count==MAX_REFERENCES) { fail(v,PP_ERROR_RESOURCE_LIMIT,"SVG reference limit exceeded");return; }
     Reference *r=&v->refs[v->ref_count]; r->id=copy(id,length);if(!r->id) { fail(v,PP_ERROR_MEMORY,"Could not allocate SVG reference");return; }
     r->next=v->nodes[node].first_ref;r->target=-1;r->paint=paint;v->nodes[node].first_ref=v->ref_count++;
+}
+typedef struct Value { const char *data; size_t length; } Value;
+static Value trimmed(const char *s) {
+    while(isspace((unsigned char)*s)) s++;
+    size_t n=strlen(s);while(n && isspace((unsigned char)s[n-1])) n--;
+    return (Value){s,n};
+}
+static bool keyword(Value value,const char *word) { return value.length==strlen(word) && !memcmp(value.data,word,value.length); }
+static bool color_value(Value value) {
+    if(keyword(value,"currentColor")) return true;
+    plutovg_color_t color;
+    return value.length && plutovg_color_parse(&color,value.data,(int)value.length)==(int)value.length;
+}
+/* Restrict numbers to the decimal grammar used by the pinned SVG parser;
+ * strtod alone would also accept hex numbers and nonfinite spellings. */
+static bool decimal(Value value,double *number,size_t *consumed) {
+    size_t p=0,digits=0;if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) p++;
+    while(p<value.length && isdigit((unsigned char)value.data[p])) { p++;digits++; }
+    if(p<value.length && value.data[p]=='.') { p++;while(p<value.length && isdigit((unsigned char)value.data[p])) { p++;digits++; } }
+    if(!digits) return false;
+    if(p<value.length && (value.data[p]=='e' || value.data[p]=='E')) {
+        p++;if(p<value.length && (value.data[p]=='+' || value.data[p]=='-')) p++;
+        size_t start=p;while(p<value.length && isdigit((unsigned char)value.data[p])) p++;if(start==p) return false;
+    }
+    char *end;*number=strtod(value.data,&end);
+    if(end!=value.data+p || !isfinite(*number) || fabs(*number)>FLT_MAX) return false;
+    *consumed=p;return true;
+}
+static bool opacity_value(Value value,double *opacity) {
+    size_t p;if(!decimal(value,opacity,&p)) return false;
+    if(p<value.length && value.data[p]=='%') { *opacity/=100;p++; }
+    if(p!=value.length) return false;
+    *opacity=fmax(0,fmin(1,*opacity));return true;
+}
+static bool length_value(Value value,bool negative,size_t *consumed) {
+    double number;size_t p;if(!decimal(value,&number,&p) || (!negative && number<0)) return false;
+    if(p<value.length && value.data[p]=='%') p++;
+    else if(p+2<=value.length) {
+        Value units={value.data+p,2};
+        if(keyword(units,"px") || keyword(units,"pt") || keyword(units,"pc") || keyword(units,"in") || keyword(units,"cm") || keyword(units,"mm")) p+=2;
+    }
+    *consumed=p;return true;
+}
+static bool dash_array(Value value) {
+    if(keyword(value,"none") || keyword(value,"inherit")) return true;
+    size_t p=0,count=0;
+    while(p<value.length) {
+        size_t n;if(++count>128 || !length_value((Value){value.data+p,value.length-p},false,&n)) return false;p+=n;
+        if(p==value.length) return true;
+        size_t boundary=p;while(p<value.length && isspace((unsigned char)value.data[p])) p++;
+        if(p<value.length && value.data[p]==',') { p++;while(p<value.length && isspace((unsigned char)value.data[p])) p++;if(p==value.length) return false; }
+        if(p==boundary) return false;
+    }
+    return false;
+}
+static void paint_value(Validation *v,int node,const char *name,Value value) {
+    Node *n=&v->nodes[node];int kind=PAINT_ACTIVE;
+    if(keyword(value,"none")) kind=PAINT_NONE;
+    else if(keyword(value,"inherit")) kind=PAINT_INHERIT;
+    else if(value.length>=3 && !memcmp(value.data,"url",3)) {
+        size_t p=3;while(p<value.length && isspace((unsigned char)value.data[p])) p++;
+        if(p==value.length || value.data[p++]!='(') goto unsupported;
+        while(p<value.length && isspace((unsigned char)value.data[p])) p++;
+        if(p==value.length || value.data[p++]!='#') goto unsupported;
+        size_t start=p;while(p<value.length && value.data[p]!=')') { if(isspace((unsigned char)value.data[p])) goto unsupported;p++; }
+        if(p==value.length || p==start) goto unsupported;
+        size_t id_length=p++-start;
+        while(p<value.length && isspace((unsigned char)value.data[p])) p++;
+        if(p<value.length && !color_value((Value){value.data+p,value.length-p})) goto unsupported;
+        reference(v,node,value.data+start,id_length,true);
+    } else if(!color_value(value)) goto unsupported;
+    if(!strcmp(name,"fill")) n->fill=kind;else n->stroke=kind;
+    return;
+unsupported:
+    fail(v,PP_ERROR_FORMAT,"Unsupported SVG paint value; use a supported color, none, inherit, or local gradient");
 }
 static void attribute(Validation *v,int node,const char *name,const char *value) {
     if(!strcmp(name,"xmlns")) { if(strcmp(value,"http://www.w3.org/2000/svg")) fail(v,PP_ERROR_FORMAT,"Unsupported SVG namespace");return; }
@@ -43,11 +123,34 @@ static void attribute(Validation *v,int node,const char *name,const char *value)
         for(int i=0;i<node;i++) if(v->nodes[i].id && !strcmp(v->nodes[i].id,value)) { fail(v,PP_ERROR_FORMAT,"Duplicate SVG ID");return; }
         v->nodes[node].id=copy(value,strlen(value));if(!v->nodes[node].id) fail(v,PP_ERROR_MEMORY,"Could not allocate SVG ID");return;
     }
-    const char *url=strstr(value,"url(");
-    if(url) {
-        if((strcmp(name,"fill") && strcmp(name,"stroke")) || url!=value || value[4]!='#') { fail(v,PP_ERROR_FORMAT,"Unsupported or external SVG paint reference");return; }
-        const char *end=strchr(value+5,')');if(!end || end[1]) { fail(v,PP_ERROR_FORMAT,"Unsupported SVG paint reference syntax");return; }
-        reference(v,node,value+5,(size_t)(end-(value+5)),true);
+    Value parsed=trimmed(value);
+    if(!strcmp(name,"fill") || !strcmp(name,"stroke")) { paint_value(v,node,name,parsed);return; }
+    if(!strcmp(name,"color") || !strcmp(name,"stop-color")) {
+        if(!color_value(parsed) && !(strcmp(name,"stop-color") && keyword(parsed,"inherit"))) fail(v,PP_ERROR_FORMAT,"Unsupported SVG color value");
+        return;
+    }
+    if(!strcmp(name,"opacity") || !strcmp(name,"fill-opacity") || !strcmp(name,"stroke-opacity") || !strcmp(name,"stop-opacity")) {
+        if((!strcmp(name,"fill-opacity") || !strcmp(name,"stroke-opacity")) && keyword(parsed,"inherit")) return;
+        double opacity;if(!opacity_value(parsed,&opacity)) { fail(v,PP_ERROR_FORMAT,"Unsupported SVG opacity value");return; }
+        if(!strcmp(name,"opacity") && opacity>0 && opacity<1) {
+            if(!listed(v->nodes[node].tag,shapes)) { fail(v,PP_ERROR_FORMAT,"Fractional SVG container/use opacity requires unsupported group compositing");return; }
+            v->nodes[node].partial_opacity=true;
+        }
+        return;
+    }
+    if(!strcmp(name,"fill-rule") || !strcmp(name,"stroke-linecap") || !strcmp(name,"stroke-linejoin")) {
+        bool valid=keyword(parsed,"inherit");
+        if(!strcmp(name,"fill-rule")) valid=valid || keyword(parsed,"nonzero") || keyword(parsed,"evenodd");
+        else if(!strcmp(name,"stroke-linecap")) valid=valid || keyword(parsed,"butt") || keyword(parsed,"round") || keyword(parsed,"square");
+        else valid=valid || keyword(parsed,"miter") || keyword(parsed,"round") || keyword(parsed,"bevel");
+        if(!valid) fail(v,PP_ERROR_FORMAT,"Unsupported SVG fill rule or stroke cap/join value");return;
+    }
+    if(!strcmp(name,"stroke-width") || !strcmp(name,"stroke-dashoffset")) {
+        size_t n;if(!keyword(parsed,"inherit") && (!length_value(parsed,!strcmp(name,"stroke-dashoffset"),&n) || n!=parsed.length)) fail(v,PP_ERROR_FORMAT,"Unsupported SVG stroke length value");return;
+    }
+    if(!strcmp(name,"stroke-dasharray")) { if(!dash_array(parsed)) fail(v,PP_ERROR_FORMAT,"Unsupported SVG dash array or more than 128 dashes");return; }
+    if(!strcmp(name,"stroke-miterlimit")) {
+        double number;size_t n;if(!keyword(parsed,"inherit") && (!decimal(parsed,&number,&n) || n!=parsed.length || number<1)) fail(v,PP_ERROR_FORMAT,"Unsupported SVG stroke miter limit");return;
     }
     if(strstr(value,"var(") || strstr(value,"!important")) fail(v,PP_ERROR_FORMAT,"Unsupported SVG CSS painting value");
 }
@@ -80,6 +183,23 @@ static bool visit(Validation *v,int i,unsigned depth) {
     for(int r=n->first_ref;r>=0;r=v->refs[r].next) { Reference *ref=&v->refs[r];if(!visit(v,ref->target,depth+1)) return false;Node *target=&v->nodes[ref->target];n->expansions+=1+target->expansions;if(n->render_depth<target->render_depth+1) n->render_depth=target->render_depth+1; }
     if(n->expansions>256 || n->render_depth>128) { fail(v,PP_ERROR_RESOURCE_LIMIT,"SVG local expansion exceeds 256 references or 128 render levels");return false; }n->state=2;return true;
 }
+/* Only fill/stroke presence is propagated, following render_use's temporary
+ * parent replacement. This is a rejection check, not a second style renderer. */
+static bool check_opacity(Validation *v,int i,int fill,int stroke,unsigned depth) {
+    if(depth>128) { fail(v,PP_ERROR_RESOURCE_LIMIT,"SVG opacity context exceeds 128 render levels");return false; }
+    Node *n=&v->nodes[i];
+    if(n->fill!=PAINT_INHERIT) fill=n->fill;
+    if(n->stroke!=PAINT_INHERIT) stroke=n->stroke;
+    if(n->partial_opacity && strcmp(n->tag,"line") && fill==PAINT_ACTIVE && stroke==PAINT_ACTIVE) {
+        fail(v,PP_ERROR_FORMAT,"Fractional SVG object opacity with both fill and stroke requires unsupported compositing");return false;
+    }
+    if(!strcmp(n->tag,"use")) {
+        for(int r=n->first_ref;r>=0;r=v->refs[r].next) if(!v->refs[r].paint && !check_opacity(v,v->refs[r].target,fill,stroke,depth+1)) return false;
+    } else if(!strcmp(n->tag,"svg") || !strcmp(n->tag,"g") || !strcmp(n->tag,"symbol")) {
+        for(int child=n->child;child>=0;child=v->nodes[child].sibling) if(!check_opacity(v,child,fill,stroke,depth+1)) return false;
+    }
+    return true;
+}
 bool pp_svg_validate(PPBytes b,PPError *e) {
     Validation v={0};v.error=e;v.parser=XML_ParserCreate(NULL);v.nodes=calloc(MAX_NODES,sizeof(*v.nodes));v.refs=calloc(MAX_REFERENCES,sizeof(*v.refs));
     if(!v.parser || !v.nodes || !v.refs) { if(v.parser) XML_ParserFree(v.parser);free(v.nodes);free(v.refs);return pp_media_error(e,PP_ERROR_MEMORY,"Could not allocate SVG validator"); }
@@ -97,5 +217,6 @@ bool pp_svg_validate(PPBytes b,PPError *e) {
         }
     }
     if(!v.failed && !v.count) fail(&v,PP_ERROR_FORMAT,"SVG has no root");if(!v.failed) visit(&v,0,1);
+    if(!v.failed) check_opacity(&v,0,PAINT_ACTIVE,PAINT_NONE,1);
     XML_ParserFree(v.parser);for(int i=0;i<v.count;i++) free(v.nodes[i].id);for(int i=0;i<v.ref_count;i++) free(v.refs[i].id);free(v.nodes);free(v.refs);return !v.failed;
 }
