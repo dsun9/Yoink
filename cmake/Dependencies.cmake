@@ -11,3 +11,44 @@ FetchContent_Declare(SDL
   GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
   GIT_TAG 829a65d769d935c4852f8159e964312c0957260a)
 FetchContent_MakeAvailable(SDL)
+
+# PNG/zlib targets are shared with the forthcoming FreeType color-font build.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_VENDORED ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_DEPS_SHARED OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_STRICT ON CACHE BOOL "" FORCE)
+foreach(option SAMPLES TESTS BACKEND_WIC BACKEND_IMAGEIO BACKEND_STB ANI AVIF BMP JPG JXL LBM PCX PNM QOI SVG TGA TIF WEBP XCF XPM XV)
+  set(SDLIMAGE_${option} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(SDLIMAGE_PNG ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_PNG_LIBPNG ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_GIF ON CACHE BOOL "" FORCE)
+set(SDLIMAGE_PNG_SAVE OFF CACHE BOOL "" FORCE)
+set(SDLIMAGE_GIF_SAVE OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(SDL_image
+  GIT_REPOSITORY https://github.com/libsdl-org/SDL_image.git
+  GIT_TAG 0891fc30428b518e7d018677bd6fa95c1a50f4c6
+  GIT_SUBMODULES external/libpng external/zlib)
+FetchContent_MakeAvailable(SDL_image)
+include(${CMAKE_CURRENT_LIST_DIR}/PatchSDLImage.cmake)
+if(NOT TARGET PNG::PNG)
+  add_library(PNG::PNG ALIAS png_static)
+endif()
+set(PLUTOSVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(PLUTOSVG_ENABLE_FREETYPE OFF CACHE BOOL "" FORCE)
+set(PLUTOVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(PlutoSVG
+  GIT_REPOSITORY https://github.com/sammycage/plutosvg.git
+  GIT_TAG fd8a080b3d0bccc41f1ae708d3785e7f08398a58
+  GIT_SUBMODULES plutovg)
+FetchContent_MakeAvailable(PlutoSVG)
+set(EXPAT_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+foreach(option TOOLS EXAMPLES TESTS DOCS)
+  set(EXPAT_BUILD_${option} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(EXPAT_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(Expat
+  GIT_REPOSITORY https://github.com/libexpat/libexpat.git
+  GIT_TAG 2120251ef8e5fd5f398063b6508be27796689bd9
+  SOURCE_SUBDIR expat)
+FetchContent_MakeAvailable(Expat)
