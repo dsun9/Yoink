@@ -13,6 +13,6 @@ int main(int argc, char **argv) {
         }
         return pp_overlay_probe(argv[2], duration);
     }
-    puts("Usage: PointyPointer --overlay-probe ring|changing-alpha [--duration-ms N]");
+    puts("Usage: PointyPointer --overlay-probe ring|changing-alpha|anchors|emoji [--duration-ms N]");
     return argc == 1 ? 0 : 2;
 }

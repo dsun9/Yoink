@@ -5,7 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+int pp_text_probe(unsigned duration_ms);
 int pp_overlay_probe(const char *mode, unsigned duration_ms) {
+    if(!strcmp(mode,"emoji")) return pp_text_probe(duration_ms);
     if(!strcmp(mode,"anchors")) return pp_anchors_probe(duration_ms);
     bool changing = !strcmp(mode,"changing-alpha");
     if (!changing && strcmp(mode,"ring")) { fprintf(stderr,"Unknown probe mode: %s\n",mode); return 2; }

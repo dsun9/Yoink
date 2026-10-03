@@ -2,6 +2,11 @@
 #define POINTY_PLATFORM_H
 #include "pointy/render.h"
 #include "pointy/display.h"
+typedef struct PPBlob { uint8_t *data; size_t size; } PPBlob;
+/* Owned bytes; import into PPAssets before freeing. Explicit font import uses
+ * pp_asset_import(PP_ASSET_FONT) + pp_font_inspect for portable project bytes. */
+bool pp_platform_find_font(const char *family, PPBlob *out, PPError *error);
+void pp_blob_destroy(PPBlob *blob);
 typedef struct PPSurface PPSurface;
 typedef enum PPPlatformEventKind {
     PP_EVENT_POINTER_MOVE, PP_EVENT_BUTTON_DOWN, PP_EVENT_BUTTON_UP,
