@@ -41,6 +41,7 @@ bool pp_font_inspect(PPBytes bytes, int face_index, PPFontInfo *out, PPError *er
         goto done;
     }
     out->face_index = face_index;
+    out->face_count = (size_t)face->num_faces;
     snprintf(out->family, sizeof(out->family), "%s", face->family_name ? face->family_name : "Unknown");
     snprintf(out->style, sizeof(out->style), "%s", face->style_name ? face->style_name : "Unknown");
     pp_font_embedding_flags(FT_Get_FSType_Flags(face), out);

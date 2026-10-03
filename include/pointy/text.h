@@ -8,6 +8,7 @@ typedef enum PPFontEmbedding {
 typedef struct PPFontInfo {
     char family[128], style[128];
     int face_index;
+    size_t face_count; /* Complete source collection, including unselected faces. */
     PPFontEmbedding embedding;
     bool embeddable, no_subsetting, bitmap_only;
     size_t unicode_glyphs;

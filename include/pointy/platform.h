@@ -2,6 +2,18 @@
 #define POINTY_PLATFORM_H
 #include "pointy/render.h"
 #include "pointy/display.h"
+#include <stdio.h>
+
+/* UTF-8 paths; caller owns FILE handles and temporary_path (free). Temporary
+ * creation is exclusive and in the target directory. Flush includes native
+ * stable-storage flush. Replace requires all writer handles already closed. */
+FILE *pp_platform_open_file(const char *path, const char *mode, PPError *error);
+FILE *pp_platform_temporary_file(const char *target, char **temporary_path, PPError *error);
+bool pp_platform_file_seek(FILE *file, uint64_t offset);
+bool pp_platform_file_size(FILE *file, uint64_t *size);
+bool pp_platform_flush_file(FILE *file, PPError *error);
+bool pp_platform_replace_file(const char *temporary_path, const char *target_path, PPError *error);
+bool pp_platform_remove_file(const char *path, PPError *error);
 typedef struct PPBlob { uint8_t *data; size_t size; } PPBlob;
 /* Owned bytes; import into PPAssets before freeing. Explicit font import uses
  * pp_asset_import(PP_ASSET_FONT) + pp_font_inspect for portable project bytes. */

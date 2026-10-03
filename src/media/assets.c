@@ -54,6 +54,10 @@ PPAssetKind pp_asset_kind(const PPAsset *a) { return a ? a->kind : (PPAssetKind)
 PPVec2 pp_asset_intrinsic_size(const PPAsset *a) { return a ? (PPVec2){a->info.width,a->info.height} : (PPVec2){0}; }
 size_t pp_assets_external_raster_bytes(const PPAssets *a) { return a ? a->external_bytes : 0; }
 size_t pp_assets_raster_bytes(const PPAssets *a) { return a ? a->cache_bytes+a->external_bytes : 0; }
+void pp_assets_trim_cache(PPAssets *assets) {
+    for (PPAsset *asset = assets ? assets->first : NULL; asset; asset = asset->next)
+        if (!asset->retains) pp_media_clear(asset);
+}
 bool pp_assets_reserve_raster(PPAssets *a, size_t bytes, PPError *error) {
     if (!a || !bytes) return pp_media_error(error, PP_ERROR_ARGUMENT, "Missing raster manager or bytes");
     if (bytes > PP_MEDIA_RESOURCE_BYTES)

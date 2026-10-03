@@ -32,6 +32,8 @@ bool pp_assets_reserve_raster(PPAssets *assets, size_t bytes, PPError *error);
 void pp_assets_release_raster(PPAssets *assets, size_t bytes);
 size_t pp_assets_external_raster_bytes(const PPAssets *assets);
 size_t pp_assets_raster_bytes(const PPAssets *assets);
+/* Evicts every unretained decoded cache, keeping owned source bytes. */
+void pp_assets_trim_cache(PPAssets *assets);
 /* Borrows cache: retain asset during use. PNG/GIF frames remain valid while any
  * retain exists. SVG has one raster: a successful different-size request on the
  * same asset invalidates the previous frame, including for other retainers.

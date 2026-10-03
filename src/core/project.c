@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <SDL3/SDL.h>
+
+typedef struct PPNotice { PPAssetId id; char *text; struct PPNotice *next; } PPNotice;
 
 struct PPProject {
     PPAssets *assets;
@@ -11,6 +14,7 @@ struct PPProject {
     size_t count;
     uint64_t next_id, revision;
     PPProjectSettings settings;
+    PPNotice *notices;
 };
 
 static bool project_error(PPError *error, int code, const char *message) {
@@ -61,6 +65,11 @@ bool pp_project_default(PPAssets *assets, PPProject **out, PPError *error) {
     item.text = "\xf0\x9f\x91\x89";
     item.opacity = 1;
     if (!pp_text_default_style(assets, &item.text_style, error)) goto failed;
+    char *notice = SDL_LoadFile(PP_RESOURCES "/licenses/NotoEmoji-OFL.txt", NULL);
+    if (!notice) { project_error(error, PP_ERROR_PLATFORM, "Cannot load bundled Noto font notice"); goto failed; }
+    bool notice_ok = pp_project_set_notice(project, item.text_style.fallback_asset, notice, error);
+    SDL_free(notice);
+    if (!notice_ok) goto failed;
     for (int a = 0; a < PP_ANCHOR_COUNT; a++)
         if (!pp_project_add_item(project, (PPAnchor)a, &item, NULL, error)) goto failed;
     *out = project;
@@ -75,7 +84,36 @@ void pp_project_destroy(PPProject *project) {
     for (size_t i = 0; i < project->count; i++) pp_item_snapshot_release(project->items[i]);
     for (int a = 0; a < PP_ANCHOR_COUNT; a++) free((void *)project->anchors[a].item_ids);
     free(project->items);
+    while (project->notices) { PPNotice *next = project->notices->next; free(project->notices->text); free(project->notices); project->notices = next; }
     free(project);
+}
+
+const char *pp_project_notice(const PPProject *project, PPAssetId id) {
+    for (const PPNotice *n = project ? project->notices : NULL; n; n = n->next)
+        if (!memcmp(&n->id, &id, sizeof(id))) return n->text;
+    return "";
+}
+
+bool pp_project_set_notice(PPProject *project, PPAssetId id, const char *notice, PPError *error) {
+    if (!project) return project_error(error, PP_ERROR_ARGUMENT, "Missing project for font notice");
+    PPAsset *asset = pp_asset_retain(project->assets, id);
+    if (!asset) return project_error(error, PP_ERROR_ARGUMENT, "Notice resource is not imported");
+    pp_asset_release(asset);
+    if (!notice) notice = "";
+    size_t size = strlen(notice);
+    if (size > 2 * 1024 * 1024) return project_error(error, PP_ERROR_RESOURCE_LIMIT, "Font notice exceeds manifest limit");
+    char *copy = malloc(size + 1);
+    if (!copy) return project_error(error, PP_ERROR_MEMORY, "Cannot copy font notice");
+    memcpy(copy, notice, size + 1);
+    PPNotice *n = project->notices;
+    while (n && memcmp(&n->id, &id, sizeof(id))) n = n->next;
+    if (!n) {
+        n = calloc(1, sizeof(*n));
+        if (!n) { free(copy); return project_error(error, PP_ERROR_MEMORY, "Cannot allocate font notice"); }
+        n->id = id; n->next = project->notices; project->notices = n;
+    }
+    free(n->text); n->text = copy; project->revision++;
+    return true;
 }
 
 bool pp_project_validate(const PPProject *project, PPError *error) {

@@ -76,3 +76,12 @@ FetchContent_MakeAvailable(SDL_ttf)
 include(${CMAKE_CURRENT_LIST_DIR}/PatchSDLTTF.cmake)
 target_link_libraries(freetype PRIVATE png_static zlibstatic)
 target_link_libraries(SDL3_ttf-static PRIVATE png_static zlibstatic)
+
+# Portable project manifests and ZIP containers (immutable upstream revisions).
+set(YYJSON_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(YYJSON_BUILD_MISC OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(yyjson GIT_REPOSITORY https://github.com/ibireme/yyjson.git GIT_TAG ac8f6074e1fbc43ec496aa1404b460d08b55d7a5)
+FetchContent_MakeAvailable(yyjson)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(miniz GIT_REPOSITORY https://github.com/richgel999/miniz.git GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d)
+FetchContent_MakeAvailable(miniz)

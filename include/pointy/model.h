@@ -49,6 +49,10 @@ const PPItem *pp_project_item(const PPProject *project, uint64_t id);
 const PPItem *pp_project_target(const PPProject *project, PPAnchor anchor);
 PPAssets *pp_project_assets(const PPProject *project);
 uint64_t pp_project_revision(const PPProject *project);
+/* Project-specific UTF-8 attribution keyed by source digest, copied on set.
+ * A NULL/empty notice clears it; getter borrows until mutation/destruction. */
+bool pp_project_set_notice(PPProject *project, PPAssetId id, const char *notice, PPError *error);
+const char *pp_project_notice(const PPProject *project, PPAssetId id);
 /* Returns a retained snapshot, valid through project edits/destruction. */
 PPItemSnapshot *pp_project_snapshot(const PPProject *project, uint64_t id);
 bool pp_item_snapshot_create(PPAssets *assets, const PPItem *item, PPItemSnapshot **out, PPError *error);
