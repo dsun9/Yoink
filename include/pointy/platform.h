@@ -4,12 +4,13 @@
 typedef struct PPSurface PPSurface;
 typedef enum PPPlatformEventKind {
     PP_EVENT_POINTER_MOVE, PP_EVENT_BUTTON_DOWN, PP_EVENT_BUTTON_UP,
-    PP_EVENT_WHEEL, PP_EVENT_QUIT
+    PP_EVENT_WHEEL, PP_EVENT_QUIT, PP_EVENT_CANCEL
 } PPPlatformEventKind;
 typedef enum PPButton { PP_BUTTON_NONE, PP_BUTTON_LEFT, PP_BUTTON_RIGHT, PP_BUTTON_MIDDLE } PPButton;
 enum { PP_MOD_SHIFT = 1, PP_MOD_CONTROL = 2, PP_MOD_ALT = 4 };
 typedef struct PPPlatformEvent {
     PPSurface *surface;
+    uint64_t instance_id; /* Zero is an unbound preview; stable IDs belong to the scene. */
     PPPlatformEventKind kind;
     PPVec2 desktop_point;
     PPButton button;
@@ -23,6 +24,13 @@ bool pp_surface_create(PPSurface **out, PPError *error);
 bool pp_surface_present(PPSurface *surface, const PPFrame *frame,
     PPRect desktop_bounds, PPError *error);
 void pp_surface_destroy(PPSurface *surface);
+void pp_surface_set_instance_id(PPSurface *surface, uint64_t instance_id);
+/* Application-owned background drag tracking. Only an accepted left press can
+ * acquire it. A press already released during native pumping cannot acquire
+ * capture; its queued trajectory still completes normally. Release,
+ * cancellation and surface destruction clear ownership. */
+bool pp_platform_capture(PPSurface *surface, PPError *error);
+void pp_platform_release_capture(void);
 /* Pumps native messages on the main thread, then pops one normalized event. */
 bool pp_platform_poll(PPPlatformEvent *out);
 #endif

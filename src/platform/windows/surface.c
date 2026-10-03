@@ -5,7 +5,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
-struct PPSurface { HWND window; HDC dc; HBITMAP bitmap; HGDIOBJ original; uint8_t *bits; int width, height; };
 static const wchar_t surface_class[] = L"PointyPointer.Surface";
 static bool fail(PPSurface *surface, PPError *error, int code, const char *message) {
     DWORD failure = GetLastError();
@@ -37,11 +36,14 @@ bool pp_surface_create(PPSurface **out, PPError *error) {
     PPSurface *surface = calloc(1, sizeof(*surface));
     if (!surface) return fail(NULL, error, PP_ERROR_MEMORY, "Cannot allocate surface");
     surface->dc = CreateCompatibleDC(NULL);
-    surface->window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+    /* Declare topmost at creation: background promotion with SetWindowPos can
+     * be denied after the user has clicked another process's window. */
+    surface->window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
         surface_class, L"PointyPointer overlay", WS_POPUP, 0, 0, 1, 1, NULL, NULL, instance, surface);
     if (!surface->dc || !surface->window) {
         fail(surface, error, PP_ERROR_PLATFORM, "Cannot create overlay"); pp_surface_destroy(surface); return false;
     }
+    if (!pp_windows_input_add(surface, error)) { pp_surface_destroy(surface); return false; }
     *out = surface; return true;
 }
 static void release_bitmap(PPSurface *surface) {
@@ -75,12 +77,14 @@ bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds,
     BOOL ok = screen && UpdateLayeredWindow(surface->window, screen, &destination, &size, surface->dc, &source, 0, &blend, ULW_ALPHA);
     DWORD failure = GetLastError(); if (screen) ReleaseDC(NULL, screen);
     if (!ok) { SetLastError(failure); return fail(surface,error,PP_ERROR_PLATFORM,"Cannot present overlay"); }
+    surface->origin = destination;
     if (!SetWindowPos(surface->window, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW))
         return fail(surface,error,PP_ERROR_PLATFORM,"Cannot place overlay");
     return true;
 }
 void pp_surface_destroy(PPSurface *surface) {
     if (!surface) return;
+    pp_windows_input_remove(surface);
     if (surface->window) DestroyWindow(surface->window);
     pp_windows_forget(surface); release_bitmap(surface);
     if (surface->dc) DeleteDC(surface->dc);

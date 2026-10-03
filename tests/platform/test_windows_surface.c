@@ -34,12 +34,26 @@ static void pump(void) {
         Sleep(1);
     } while (GetTickCount64() < until);
 }
+typedef struct Injection { INPUT *input; UINT count, sent; } Injection;
+static DWORD WINAPI inject(void *context) {
+    Injection *request = context;
+    request->sent = SendInput(request->count, request->input, sizeof(INPUT));
+    return 0;
+}
+static void send_input(INPUT *input, UINT count) {
+    /* Keep the low-level hook's main thread pumping during OS injection. */
+    Injection request = {input, count, 0};
+    HANDLE thread = CreateThread(NULL, 0, inject, &request, 0, NULL); CHECK(thread);
+    ULONGLONG until = GetTickCount64() + 5000;
+    while (WaitForSingleObject(thread, 0) == WAIT_TIMEOUT && GetTickCount64() < until) pump();
+    CHECK(WaitForSingleObject(thread, 0) == WAIT_OBJECT_0);
+    CloseHandle(thread); CHECK(request.sent == count); pump();
+}
 static void press(bool right) {
     INPUT input[2] = {0}; input[0].type = input[1].type = INPUT_MOUSE;
     input[0].mi.dwFlags = right ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_LEFTDOWN;
     input[1].mi.dwFlags = right ? MOUSEEVENTF_RIGHTUP : MOUSEEVENTF_LEFTUP;
-    CHECK(SendInput(2, input, sizeof(INPUT)) == 2);
-    pump();
+    send_input(input, 2);
 }
 static void click(int x, int y, bool right) {
     /* Arrival and click are deliberately adjacent, with no pump or hover delay. */
@@ -86,7 +100,7 @@ static void test_windows_surface_routes_alpha(void) {
     CHECK(GetForegroundWindow() == foreground_before);
     CHECK(rotated.content_alpha[(size_t)(rotated.height/2)*rotated.width+rotated.width/2] == 0);
     INPUT wheel = {0}; wheel.type = INPUT_MOUSE; wheel.mi.dwFlags = MOUSEEVENTF_WHEEL; wheel.mi.mouseData = WHEEL_DELTA;
-    CHECK(SendInput(1, &wheel, sizeof(wheel)) == 1); pump();
+    send_input(&wheel, 1);
     printf("PASS alpha routing: receiver left=3 right=1; overlay left=1 right=1; focus preserved; rotated hole passes.\n");
     printf("Wheel observation at rotated hole: receiver=%ld overlay=%d (Task 2 gate pending).\n", receiver->wheels, overlay_wheels);
     pp_frame_destroy(&source); pp_frame_destroy(&rotated);
