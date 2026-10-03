@@ -44,6 +44,25 @@ struct PPAnchorPresenter {
     size_t instance_count;
     PPGestureConfig gestures;
 };
+static ProbeInstance *find_instance(PPAnchorPresenter *p,uint64_t id);
+
+static void finish_anchor_pull(PPAnchorPresenter *p, AnchorSurface *anchor, PPAnchorReveal *reveal) {
+    ProbeInstance *instance = find_instance(p, anchor->pulled_id);
+    if (instance) instance->dragging = false;
+    if (reveal) reveal->held = false;
+    anchor->pulled_id = 0;
+}
+
+static bool anchor_source_available(const PPAnchorPresenter *p, const AnchorSurface *anchor) {
+    const PPItem *target = pp_project_target(p->project, anchor->anchor);
+    if (!target || target->opacity <= 0) return false;
+    const PPSceneInstance *instance = pp_scene_get(p->scene, anchor->pulled_id);
+    if (!instance) return true;
+    uint64_t source_id = pp_item_snapshot_item(instance->snapshot)->id;
+    const PPItem *source = pp_project_item(p->project, source_id);
+    return source && source->opacity > 0;
+}
+
 static bool memory_error(PPError *error) {if(error) {error->code=PP_ERROR_MEMORY;snprintf(error->message,sizeof(error->message),"Cannot allocate anchor runtime");}return false;}
 static bool present(PPAnchorPresenter *p,PPSurface *surface,const PPFrame *source,PPPose pose,double scale,size_t *retained,PPError *error) {
     int width,height;
@@ -139,6 +158,16 @@ static bool sync_displays(PPAnchorPresenter *p,const PPDisplay *d,size_t count,P
 }
 bool pp_anchor_presenter_update(PPAnchorPresenter *p,const PPDisplay *d,size_t count,PPVec2 pointer,double now,PPError *error) {
     if(!p||(!d&&count)||count>SIZE_MAX/8/sizeof(AnchorSurface)||!isfinite(now)||now<0) return false;
+    /* A source mutation can coincide with a display change. End its pull
+     * before display synchronization can reposition a still-dragging sprite. */
+    for (size_t i = 0; i < p->anchor_count; i++) {
+        AnchorSurface *anchor = p->anchors + i;
+        if (!anchor_source_available(p, anchor)) {
+            PPAnchorReveal *reveal = i < p->runtime.count ? p->runtime.entries + i : NULL;
+            finish_anchor_pull(p, anchor, reveal);
+            anchor->interaction = (PPInteraction){0};
+        }
+    }
     if(!sync_displays(p,d,count,error)) return false;
     const PPProjectSettings *settings=pp_project_settings(p->project);
     p->gestures.rotation_step_deg=settings->rotation_step_deg;
@@ -157,7 +186,12 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p,const PPDisplay *d,size_t c
     pp_anchors_update(&p->runtime,d,count,pointer,now);if(p->runtime.failed) return memory_error(error);
     for(size_t i=0;i<p->anchor_count;i++) {
         AnchorSurface *a=p->anchors+i;PPAnchorReveal *r=p->runtime.entries+i;
-        if(!r->revealed) {if(a->shown) {pp_surface_hide(a->target);pp_surface_hide(a->preview);a->shown=false;a->interaction=(PPInteraction){0};a->pulled_id=0;}continue;}
+        if(!r->revealed) {
+            finish_anchor_pull(p, a, r);
+            a->interaction = (PPInteraction){0};
+            if(a->shown) {pp_surface_hide(a->target);pp_surface_hide(a->preview);a->shown=false;}
+            continue;
+        }
         double scale=a->display.desktop_units_per_dip;
         uint64_t revision=pp_project_revision(p->project);
         if(!a->shown||a->opacity!=r->opacity||a->scale!=scale||a->revision!=revision||now>=a->next_frame) {
@@ -228,9 +262,31 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,const PPPlatformEvent *event
     for(size_t i=0;i<p->anchor_count;i++) {
         AnchorSurface *a=p->anchors+i;if(event->surface!=a->target&&event->surface!=a->preview) continue;
         PPAnchorReveal *reveal=p->runtime.entries+i;
+        bool released = event->kind == PP_EVENT_BUTTON_UP && event->button == PP_BUTTON_LEFT;
+        ProbeInstance *pulled = find_instance(p, a->pulled_id);
+        if (event->kind == PP_EVENT_CANCEL || (released && pulled)) {
+            /* A queued release still supplies the final position even after
+             * the source definition changes. Cancel preserves the last pose. */
+            if (released && pulled) {
+                const PPDisplay *display = pp_display_at(p->displays, p->display_count, event->desktop_point);
+                if (display) {
+                    pulled->pose.center = pp_display_drag_center(display, event->desktop_point, a->grab_dip);
+                    pulled->display_id = display->id;
+                    pulled->drag_pointer = event->desktop_point;
+                    pulled->dirty = true;
+                }
+            }
+            finish_anchor_pull(p, a, reveal);
+            a->interaction = (PPInteraction){0};
+            return true;
+        }
         PPRect bounds=reveal->preview;
+        if(!anchor_source_available(p, a)) {
+            finish_anchor_pull(p, a, reveal);
+            a->interaction = (PPInteraction){0};
+            return true;
+        }
         const PPItem *item=pp_project_target(p->project,a->anchor);
-        if(!item||item->opacity<=0) return true;
         a->interaction.displayed_pose=(PPPose){{bounds.x+bounds.w*.5,bounds.y+bounds.h*.5},p->runtime.preview_dip[a->anchor],item->angle_deg,item->opacity};
         if(event->kind==PP_EVENT_BUTTON_DOWN&&event->button==PP_BUTTON_LEFT) {
             if(!p->runtime.enabled[a->anchor]) return true;
@@ -258,10 +314,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,const PPPlatformEvent *event
             s->pose=pose;s->display_id=display->id;s->grab_dip=a->grab_dip;s->drag_pointer=event->desktop_point;
             s->dragging=result.command!=PP_COMMAND_END_DRAG;s->dirty=true;
         }
-        if(event->kind==PP_EVENT_CANCEL||(event->kind==PP_EVENT_BUTTON_UP&&event->button==PP_BUTTON_LEFT)) {
-            ProbeInstance *s=find_instance(p,a->pulled_id);if(s) s->dragging=false;
-            reveal->held=false;a->pulled_id=0;
-        }
+        if(released) finish_anchor_pull(p, a, reveal);
         return true;
     }
     ProbeInstance *s=find_instance(p,event->instance_id);if(!s||event->surface!=s->surface) return true;

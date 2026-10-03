@@ -44,7 +44,78 @@ static void check_grab(PPAnchorPresenter *p,double pointer_x,double expected_cen
     PPSurface *s=instance_surface();CHECK(s&&s->shown);CHECK(s->bounds.w==width);
     CHECK(fabs(pose.center.x+35*s->bounds.w/96-pointer_x)<1e-8);
 }
+static void test_unavailable_source_finishes_pull(void) {
+    /* Each source mutation is exercised with update-before-cancel, a queued
+     * release before update, and a queued cancel before update. A later scale
+     * change exposes stale dragging through its old pointer/grab offset. */
+    for (int mutation = 0; mutation < 4; mutation++) {
+        for (int ending = 0; ending < 3; ending++) {
+            PPError error = {0};
+            PPAssets *assets = NULL;
+            CHECK(pp_assets_create(&assets, &error));
+            PPProject *project = test_arrow_project(assets);
+            if (mutation == 3) {
+                PPItem remaining = *pp_project_target(project, PP_ANCHOR_TOP_RIGHT);
+                remaining.id = 0;
+                CHECK(pp_project_add_item(project, PP_ANCHOR_TOP_RIGHT, &remaining, NULL, &error));
+            }
+            PPAnchorPresenter *p = NULL;
+            CHECK(pp_anchor_presenter_create(&p, (PPRenderer *)1, project, &error));
+            PPDisplay d[] = {
+                {1, {-1920,0,1920,1080}, 1.5, 1.5},
+                {2, {0,0,1920,1080}, 1, 1}
+            };
+            update(p, d, -8, 8, 1);
+            PPSurface *preview = NULL;
+            for (PPSurface *s = surfaces; s; s = s->next)
+                if (s->shown && s->bounds.x == -144 && s->bounds.w == 144) preview = s;
+            CHECK(preview);
+            event(p, preview, PP_EVENT_BUTTON_DOWN, -19.5, 72, 1.01);
+            event(p, preview, PP_EVENT_POINTER_MOVE, 300, 200, 1.02);
+            update(p, d, 300, 200, 1.02);
+            PPSurface *sprite = instance_surface();
+            CHECK(sprite && sprite->shown && sprite->red == 255);
+            PPItem item = *pp_project_target(project, PP_ANCHOR_TOP_RIGHT);
+            if (mutation == 0 || mutation == 3) {
+                CHECK(pp_project_remove_item(project, PP_ANCHOR_TOP_RIGHT, item.id, &error));
+            } else if (mutation == 1) {
+                CHECK(pp_project_set_enabled(project, PP_ANCHOR_TOP_RIGHT, false, &error));
+            } else {
+                item.opacity = 0;
+                CHECK(pp_project_edit_item(project, item.id, &item, &error));
+            }
+            double expected_center = 265;
+            if (ending != 0) {
+                PPPlatformEventKind kind = ending == 1 ? PP_EVENT_BUTTON_UP : PP_EVENT_CANCEL;
+                event(p, preview, kind, 320, 200, 1.03);
+                CHECK(!pp_anchor_presenter_reveals(p)->entries[PP_ANCHOR_TOP_RIGHT].held);
+                if (ending == 1) expected_center = 285;
+            }
+            update(p, d, 320, 200, 1.04);
+            if (mutation != 3) CHECK(!preview->shown);
+            CHECK(!pp_anchor_presenter_reveals(p)->entries[PP_ANCHOR_TOP_RIGHT].held);
+            /* Hiding may queue terminal events after the linkage is cleared. */
+            event(p, preview, PP_EVENT_CANCEL, 400, 250, 1.05);
+            event(p, preview, PP_EVENT_BUTTON_UP, 400, 250, 1.06);
+            d[1].desktop_units_per_dip = 2;
+            d[1].drawable_pixels_per_dip = 2;
+            update(p, d, 400, 250, 1.07);
+            PPPose pose;
+            CHECK(pp_anchor_presenter_instance_pose(p, 0, &pose));
+            CHECK(pose.center.x == expected_center && pose.center.y == 200);
+            CHECK(pose.longest_dip == 96 && pose.angle_deg == 0 && pose.opacity == 1);
+            CHECK(pp_anchor_presenter_instance_count(p) == 1 && instance_surface() == sprite);
+            CHECK(sprite->shown && sprite->red == 255 && sprite->bounds.w == 192);
+            pp_anchor_presenter_destroy(p);
+            pp_project_destroy(project);
+            CHECK(pp_assets_external_raster_bytes(assets) == 0);
+            pp_assets_destroy(assets);
+            CHECK(!surfaces);
+        }
+    }
+}
 int main(void) {
+    test_unavailable_source_finishes_pull();
     PPDisplay d[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
     PPProject *project=test_arrow_project(assets);
@@ -106,5 +177,5 @@ int main(void) {
     CHECK(pp_anchor_presenter_instance_count(p)==1);
     pp_anchor_presenter_destroy(p);CHECK(!surfaces);
     pp_project_destroy(project);CHECK(pp_assets_external_raster_bytes(assets)==0);pp_assets_destroy(assets);
-    puts("PASS shared project availability, retained sprite and mixed-DPI presentation");return 0;
+    puts("PASS shared content, source removal/disable/zero-opacity pull cancellation, queued terminal events and mixed-DPI presentation");return 0;
 }
