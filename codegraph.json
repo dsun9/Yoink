@@ -1,0 +1,10 @@
+{
+  "exclude": [
+    "Ref/",
+    "build/",
+    ".idea/"
+  ],
+  "includeIgnored": [
+    "Ref/BongoCat/"
+  ]
+}
