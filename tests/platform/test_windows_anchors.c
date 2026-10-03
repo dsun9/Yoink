@@ -54,6 +54,35 @@ static void move(int x,int y) {
 }
 static void mouse(DWORD flags) {if(flags&MOUSEEVENTF_LEFTDOWN) left_held=true;INPUT input={0};input.type=INPUT_MOUSE;input.mi.dwFlags=flags;inject_input(input);if(flags&MOUSEEVENTF_LEFTUP) left_held=false;}
 static void click(int x,int y) {move(x,y);mouse(MOUSEEVENTF_LEFTDOWN);mouse(MOUSEEVENTF_LEFTUP);}
+static BOOL CALLBACK find_sprite(HWND window,LPARAM context) {
+    DWORD process;GetWindowThreadProcessId(window,&process);if(process!=GetCurrentProcessId()) return TRUE;
+    char name[80]={0};GetClassNameA(window,name,sizeof(name));if(strcmp(name,"PointyPointer.Surface")) return TRUE;
+    PPSurface *s=(PPSurface *)GetWindowLongPtrW(window,GWLP_USERDATA);
+    if(s&&s->instance_id==1) {*(PPSurface **)context=s;return FALSE;}return TRUE;
+}
+static void check_seam_sprite(double pointer_x,double grab_x,int expected_width) {
+    PPPose pose;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&pose));PPSurface *s=NULL;EnumWindows(find_sprite,(LPARAM)&s);
+    CHECK(s&&IsWindowVisible(s->window));CHECK(s->width==expected_width);CHECK(pose.longest_dip==96);
+    CHECK(fabs(pose.center.x+grab_x*s->width/96-pointer_x)<2);
+    CHECK(fabs(s->origin.x+s->width*.5+grab_x*s->width/96-pointer_x)<2);
+}
+static void test_native_presentation_at_simulated_mixed_scale_seam(void) {
+    pp_anchor_presenter_destroy(presenter);presenter=NULL;pp_displays_free(displays);count=2;displays=calloc(count,sizeof(*displays));CHECK(displays);
+    /* Two model displays share a physical test coordinate x=400 on the single
+     * actual monitor. The native surfaces/input are real; this is not physical
+     * two-monitor coverage. Both pointer and center are inside its bounds. */
+    displays[0]=(PPDisplay){101,{0,0,400,1080},1.5,1.5};displays[1]=(PPDisplay){102,{400,0,1000,1080},1,1};
+    PPError error={0};CHECK(pp_anchor_presenter_create(&presenter,renderer,&error));
+    for(int a=0;a<8;a++) pp_anchor_presenter_enable(presenter,(PPAnchor)a,a==PP_ANCHOR_TOP_RIGHT);
+    move(390,8);move(380,72);mouse(MOUSEEVENTF_LEFTDOWN);move(410,200);
+    double grab=(380-328)/1.5;check_seam_sprite(410,grab,96);
+    PPPose pose;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&pose));CHECK(pose.center.x<400); /* Center left, pointer right. */
+    mouse(MOUSEEVENTF_LEFTUP);check_seam_sprite(410,grab,96);
+    mouse(MOUSEEVENTF_LEFTDOWN);move(390,200);check_seam_sprite(390,grab,144);
+    move(410,200);check_seam_sprite(410,grab,96);mouse(MOUSEEVENTF_LEFTUP);check_seam_sprite(410,grab,96);
+    CHECK(GetForegroundWindow()==(HWND)receiver->window);
+    puts("PASS real native presentation for anchor/placed drags at simulated 1.5/1 mixed-DPI seam, including release geometry");
+}
 static void test_native_anchors(void) {
     PPError error={0};CHECK(pp_platform_displays(&displays,&count,&error));CHECK(count>0);
     printf("Hardware enumeration: %zu physical monitor(s); second-display hardware coverage requires >=2.\n",count);
@@ -83,16 +112,20 @@ static void test_native_anchors(void) {
     move(px,py);mouse(MOUSEEVENTF_LEFTDOWN);move(200,150);CHECK(pp_anchor_presenter_instance_count(presenter)==1);
     PPPose before;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&before));CHECK(before.longest_dip==96);
     /* Simulate a scale event during real native capture. No OS settings change. */
-    displays[0].desktop_units_per_dip=displays[0].drawable_pixels_per_dip=1.5;pump(20);move(230,170);
+    double changed_scale=actual.desktop_units_per_dip==1?1.5:1;
+    CHECK(changed_scale!=actual.desktop_units_per_dip);
+    printf("Simulated native-drag scale event: %.3f -> %.3f\n",actual.desktop_units_per_dip,changed_scale);
+    displays[0].desktop_units_per_dip=displays[0].drawable_pixels_per_dip=changed_scale;pump(20);move(230,170);
     PPPose after;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&after));CHECK(after.longest_dip==96);
     double grab_x=px/actual.desktop_units_per_dip-48,grab_y=py/actual.desktop_units_per_dip-48;
-    CHECK(fabs(after.center.x-(230-grab_x*1.5))<2);CHECK(fabs(after.center.y-(170-grab_y*1.5))<2);
+    CHECK(fabs(after.center.x-(230-grab_x*changed_scale))<2);CHECK(fabs(after.center.y-(170-grab_y*changed_scale))<2);
     /* Removing the source display cancels capture and recovers the sprite onto
      * a synthetic remaining display. Geometry is simulated; OS routing is real. */
     displays[0]=(PPDisplay){actual.id+1,{400,100,400,400},1,1};pump(20);
     CHECK(pp_anchor_presenter_instance_pose(presenter,0,&after));CHECK(after.center.x>=448&&after.center.x<=752&&after.center.y>=148&&after.center.y<=452);
     CHECK(pp_windows_input_owner()==NULL);mouse(MOUSEEVENTF_LEFTUP);CHECK(GetForegroundWindow()==(HWND)receiver->window);
     puts("PASS native outside-target and transparent-preview first clicks, target/preview transition, threshold cancellation, simulated scale/disconnect during native drag.");
+    test_native_presentation_at_simulated_mixed_scale_seam();
 }
 static int diagnose_without_input(void) {
     PPError error={0};PPDisplay *items=NULL;size_t n=0;CHECK(pp_platform_displays(&items,&n,&error));

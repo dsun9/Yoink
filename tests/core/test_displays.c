@@ -48,4 +48,10 @@ static void test_same_id_geometry_invalidation(void) {
     changed=original;changed.id=2;CHECK(!pp_displays_equal(&original,1,&changed,1));
     CHECK(!pp_displays_equal(&original,1,NULL,0));CHECK(pp_displays_equal(NULL,0,NULL,0));
 }
-int main(void) {test_anchor_layout_and_recovery();test_reveal_transition_fade_and_shared_disable();test_same_id_geometry_invalidation();puts("PASS display layout, native/logical conversion, recovery, scale grab, reveal fade and shared enable mask");return 0;}
+static void test_pointer_and_center_straddle_mixed_scale_edge(void) {
+    PPDisplay d[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    PPVec2 pointer={10,200},grab={40,0};const PPDisplay *active=pp_display_at(d,2,pointer);
+    CHECK(active->id==2);PPVec2 center=pp_display_drag_center(active,pointer,grab);CHECK(center.x==-30);
+    CHECK(pp_display_at(d,2,center)->id==1);CHECK(center.x+grab.x*active->desktop_units_per_dip==pointer.x);
+}
+int main(void) {test_anchor_layout_and_recovery();test_reveal_transition_fade_and_shared_disable();test_same_id_geometry_invalidation();test_pointer_and_center_straddle_mixed_scale_edge();puts("PASS display layout, native/logical conversion, recovery, scale grab, reveal fade and shared enable mask");return 0;}

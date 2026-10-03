@@ -16,12 +16,12 @@ typedef struct AnchorSurface {
 } AnchorSurface;
 typedef struct ProbeInstance {
     PPSurface *surface;
-    uint64_t id;
+    uint64_t id,display_id;
     PPPose pose,drawn;
     PPInteraction interaction;
-    PPVec2 grab_dip;
+    PPVec2 grab_dip,drag_pointer;
     double scale;
-    bool dirty;
+    bool dirty,dragging;
 } ProbeInstance;
 struct PPAnchorPresenter {
     PPRenderer *renderer;
@@ -61,6 +61,10 @@ static void close_anchors(PPAnchorPresenter *p) {
     for(size_t i=0;i<p->anchor_count;i++) {pp_surface_destroy(p->anchors[i].target);pp_surface_destroy(p->anchors[i].preview);}
     free(p->anchors);p->anchors=NULL;p->anchor_count=0;
 }
+static const PPDisplay *display_by_id(const PPDisplay *d,size_t count,uint64_t id) {
+    for(size_t i=0;i<count;i++) if(d[i].id==id) return d+i;
+    return NULL;
+}
 static bool sync_displays(PPAnchorPresenter *p,const PPDisplay *d,size_t count,PPError *error) {
     if(pp_displays_equal(p->displays,p->display_count,d,count)&&p->anchor_count==count*8) return true;
     bool changed=count*8!=p->anchor_count;
@@ -88,6 +92,9 @@ static bool sync_displays(PPAnchorPresenter *p,const PPDisplay *d,size_t count,P
     for(size_t i=0;i<p->instance_count;i++) {
         ProbeInstance *instance=p->instances+i;
         if(changed&&instance->interaction.pressed) {pp_surface_hide(instance->surface);memset(&instance->interaction,0,sizeof(instance->interaction));instance->dirty=true;}
+        if(changed) instance->dragging=false;
+        const PPDisplay *active=display_by_id(d,count,instance->display_id);
+        if(active&&instance->dragging) {instance->pose.center=pp_display_drag_center(active,instance->drag_pointer,instance->grab_dip);instance->dirty=true;}
         PPVec2 recovered=pp_recover_center(d,count,instance->pose.center,instance->pose.longest_dip);
         if(recovered.x!=instance->pose.center.x||recovered.y!=instance->pose.center.y) {instance->pose.center=recovered;memset(&instance->interaction,0,sizeof(instance->interaction));instance->dirty=true;}
     }return true;
@@ -109,7 +116,8 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p,const PPDisplay *d,size_t c
         }
     }
     for(size_t i=0;i<p->instance_count;i++) {
-        ProbeInstance *s=p->instances+i;const PPDisplay *display=pp_display_at(d,count,s->pose.center);
+        ProbeInstance *s=p->instances+i;const PPDisplay *display=display_by_id(d,count,s->display_id);
+        if(!display) {display=pp_display_at(d,count,s->pose.center);if(display) s->display_id=display->id;}
         if(!display) {pp_surface_hide(s->surface);s->dirty=true;continue;}
         double scale=display->desktop_units_per_dip;
         if(s->dirty||s->scale!=scale) {if(!present(p,s->surface,&p->source,s->pose,scale,error)) goto failed;s->dirty=false;s->drawn=s->pose;s->scale=scale;}
@@ -158,23 +166,30 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,const PPPlatformEvent *event
             PPPose pose={pp_display_drag_center(display,event->desktop_point,a->grab_dip),96,0,1};
             ProbeInstance *s=find_instance(p,a->pulled_id);
             if(!s) {s=create_instance(p,pose,error);if(!s) return false;a->pulled_id=s->id;}
-            s->pose=pose;s->dirty=true;
+            s->pose=pose;s->display_id=display->id;s->grab_dip=a->grab_dip;s->drag_pointer=event->desktop_point;
+            s->dragging=result.command!=PP_COMMAND_END_DRAG;s->dirty=true;
         }
-        if(event->kind==PP_EVENT_CANCEL||(event->kind==PP_EVENT_BUTTON_UP&&event->button==PP_BUTTON_LEFT)) {reveal->held=false;a->pulled_id=0;}
+        if(event->kind==PP_EVENT_CANCEL||(event->kind==PP_EVENT_BUTTON_UP&&event->button==PP_BUTTON_LEFT)) {
+            ProbeInstance *s=find_instance(p,a->pulled_id);if(s) s->dragging=false;
+            reveal->held=false;a->pulled_id=0;
+        }
         return true;
     }
     ProbeInstance *s=find_instance(p,event->instance_id);if(!s||event->surface!=s->surface) return true;
     s->interaction.displayed_pose=s->pose;
     if(event->kind==PP_EVENT_BUTTON_DOWN&&event->button==PP_BUTTON_LEFT) {
-        const PPDisplay *d=pp_display_at(p->displays,p->display_count,s->pose.center);if(!d) return true;
-        s->grab_dip=(PPVec2){(event->desktop_point.x-s->pose.center.x)/d->desktop_units_per_dip,(event->desktop_point.y-s->pose.center.y)/d->desktop_units_per_dip};
+        if(s->scale<=0) return true;
+        /* The press belongs to the presented raster. Its center can be across
+         * a seam from the display that supplied that raster's scale. */
+        s->grab_dip=(PPVec2){(event->desktop_point.x-s->pose.center.x)/s->scale,(event->desktop_point.y-s->pose.center.y)/s->scale};
         pp_platform_capture(s->surface,NULL);
     }
     PPInteractionResult result;pp_interaction_step(&s->interaction,event,&p->gestures,&result);
     if(result.command==PP_COMMAND_BEGIN_DRAG||result.command==PP_COMMAND_MOVE_DRAG||result.command==PP_COMMAND_END_DRAG) {
         const PPDisplay *d=pp_display_at(p->displays,p->display_count,event->desktop_point);
-        if(d) {s->pose.center=pp_display_drag_center(d,event->desktop_point,s->grab_dip);s->dirty=true;}
+        if(d) {s->pose.center=pp_display_drag_center(d,event->desktop_point,s->grab_dip);s->display_id=d->id;s->drag_pointer=event->desktop_point;s->dragging=result.command!=PP_COMMAND_END_DRAG;s->dirty=true;}
     }
+    if(event->kind==PP_EVENT_CANCEL) s->dragging=false;
     if(result.command==PP_COMMAND_DELETE) {size_t index=(size_t)(s-p->instances);pp_surface_destroy(s->surface);memmove(s,s+1,(p->instance_count-index-1)*sizeof(*s));p->instance_count--;}
     return true;
 }
