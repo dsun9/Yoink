@@ -62,6 +62,10 @@ static void test_gestures_and_transforms(void) {
     e.wheel_delta=-1; pp_interaction_step(&state,&e,&config,&out);
     CHECK(fabs(up*(out.pose.longest_dip/(96*up))-1)<1e-12);
     CHECK(fabs(out.pose.longest_dip-96)<1e-12);
+    e.wheel_delta=100000; pp_interaction_step(&state,&e,&config,&out);
+    CHECK(out.command==PP_COMMAND_RESIZE && out.pose.longest_dip==4096);
+    e.wheel_delta=-100000; pp_interaction_step(&state,&e,&config,&out);
+    CHECK(out.command==PP_COMMAND_RESIZE && out.pose.longest_dip==1);
     e=event(PP_EVENT_BUTTON_DOWN,0,0,3); e.button=PP_BUTTON_RIGHT;
     pp_interaction_step(&state,&e,&config,&out); CHECK(out.command==PP_COMMAND_DELETE);
     e=event(PP_EVENT_BUTTON_DOWN,110,205,4); pp_interaction_step(&state,&e,&config,&out);

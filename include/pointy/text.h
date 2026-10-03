@@ -25,6 +25,8 @@ typedef struct PPTextDiagnostics {
     size_t fallback_runs, missing_glyphs, missing_requested_families;
 } PPTextDiagnostics;
 bool pp_font_inspect(PPBytes font, int face_index, PPFontInfo *out, PPError *error);
+/* Loads owned bundled fallback and optional local Aptos bytes into assets. */
+bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error);
 /* Single-threaded. Assets must outlive rendering. Fonts borrow retained source
  * bytes until closed, including fallback fonts. out must be empty and becomes
  * an owned premultiplied frame (pp_frame_destroy). Diagnostics are value records.

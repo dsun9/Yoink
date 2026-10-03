@@ -10,10 +10,10 @@ typedef struct PPAsset PPAsset;
 /* Single-threaded manager; it must outlive every retained asset. Projects borrow
  * the app-owned manager. Imports copy the source bytes; IDs hash only those bytes.
  * Limits: 8192 per axis, 4096 GIF frames, 256 MiB decoded per resource, 512 MiB
- * total asset decoded/raster cache, and 256 MiB source bytes per import.
- * Budget counts RGBA + content_alpha planes in this manager. Source bytes,
- * decoder scratch, SVG document scratch, and separately owned text/presenter
- * frames are outside it. Runtime must budget those owned raster frames too. */
+ * total retained rasters, and 256 MiB source bytes per import.
+ * Asset caches count RGBA + content_alpha automatically. Separately owned
+ * text/presenter frames count only through explicit raster reservations below.
+ * Source bytes, decoder scratch and SVG document scratch are outside it. */
 bool pp_assets_create(PPAssets **out, PPError *error);
 void pp_assets_destroy(PPAssets *assets);
 bool pp_asset_import(PPAssets *assets, PPBytes bytes, PPAssetKind kind, PPAssetId *out, PPError *error);
@@ -21,6 +21,17 @@ PPAsset *pp_asset_retain(PPAssets *assets, PPAssetId id);
 void pp_asset_release(PPAsset *asset);
 /* Source remains valid until manager destruction, including cache eviction. */
 PPBytes pp_asset_source(const PPAsset *asset);
+PPAssetKind pp_asset_kind(const PPAsset *asset);
+PPVec2 pp_asset_intrinsic_size(const PPAsset *asset);
+/* Separately owned CPU rasters (text, scaled/presentation copies) must reserve
+ * before retention and release exactly once at destruction. Includes stride *
+ * height RGBA bytes + width * height coverage bytes. Reservations share the
+ * 512 MiB budget with asset caches, including future cache allocations. Each
+ * reservation is at most 256 MiB. GPU/source/transient decoder bytes excluded. */
+bool pp_assets_reserve_raster(PPAssets *assets, size_t bytes, PPError *error);
+void pp_assets_release_raster(PPAssets *assets, size_t bytes);
+size_t pp_assets_external_raster_bytes(const PPAssets *assets);
+size_t pp_assets_raster_bytes(const PPAssets *assets);
 /* Borrows cache: retain asset during use. PNG/GIF frames remain valid while any
  * retain exists. SVG has one raster: a successful different-size request on the
  * same asset invalidates the previous frame, including for other retainers.

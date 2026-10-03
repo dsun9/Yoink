@@ -2,9 +2,12 @@
 #include "../../src/platform/windows/windows_internal.h"
 #include "receiver_shared.h"
 #include "../test.h"
+#include "../project_fixture.h"
 #include <math.h>
 static PPAnchorPresenter *presenter;
 static PPRenderer *renderer;
+static PPAssets *assets;
+static PPProject *project;
 static PPDisplay *displays;
 static size_t count;
 static ReceiverState *receiver;
@@ -26,6 +29,7 @@ static void trace_point(const char *stage,int x,int y) {
 }
 static void cleanup(void) {
     pp_anchor_presenter_destroy(presenter);pp_renderer_destroy(renderer);pp_displays_free(displays);pp_platform_release_capture();
+    pp_project_destroy(project);pp_assets_destroy(assets);
     if(left_held) {INPUT input={0};input.type=INPUT_MOUSE;input.mi.dwFlags=MOUSEEVENTF_LEFTUP;SendInput(1,&input,sizeof(input));}
     if(receiver&&receiver->window) PostMessageW((HWND)receiver->window,WM_CLOSE,0,0);
     if(child.hProcess) {WaitForSingleObject(child.hProcess,3000);CloseHandle(child.hProcess);CloseHandle(child.hThread);}
@@ -72,7 +76,7 @@ static void test_native_presentation_at_simulated_mixed_scale_seam(void) {
      * actual monitor. The native surfaces/input are real; this is not physical
      * two-monitor coverage. Both pointer and center are inside its bounds. */
     displays[0]=(PPDisplay){101,{0,0,400,1080},1.5,1.5};displays[1]=(PPDisplay){102,{400,0,1000,1080},1,1};
-    PPError error={0};CHECK(pp_anchor_presenter_create(&presenter,renderer,&error));
+    PPError error={0};CHECK(pp_anchor_presenter_create(&presenter,renderer,project,&error));
     for(int a=0;a<8;a++) pp_anchor_presenter_enable(presenter,(PPAnchor)a,a==PP_ANCHOR_TOP_RIGHT);
     move(390,8);move(380,72);mouse(MOUSEEVENTF_LEFTDOWN);move(410,200);
     double grab=(380-328)/1.5;check_seam_sprite(410,grab,96);
@@ -92,7 +96,8 @@ static void test_native_anchors(void) {
     PPDisplay actual=displays[primary];free(displays);displays=malloc(sizeof(*displays));CHECK(displays);displays[0]=actual;count=1;
     printf("Primary bounds=(%.0f,%.0f,%.0f,%.0f), desktop units/DIP=%.3f, drawable pixels/DIP=%.3f\n",actual.bounds.x,actual.bounds.y,actual.bounds.w,actual.bounds.h,actual.desktop_units_per_dip,actual.drawable_pixels_per_dip);
     CHECK(SetWindowPos((HWND)receiver->window,NULL,(int)actual.bounds.x-8,(int)actual.bounds.y-32,380,330,SWP_NOZORDER));
-    CHECK(pp_renderer_create(&renderer,&error));CHECK(pp_anchor_presenter_create(&presenter,renderer,&error));
+    CHECK(pp_assets_create(&assets,&error));project=test_arrow_project(assets);
+    CHECK(pp_renderer_create(&renderer,&error));CHECK(pp_anchor_presenter_create(&presenter,renderer,project,&error));
     for(int a=1;a<8;a++) pp_anchor_presenter_enable(presenter,(PPAnchor)a,false);
     int transparent_x=(int)round(25*actual.desktop_units_per_dip),transparent_y=(int)round(80*actual.desktop_units_per_dip);
     move(250,220);pump(150);LONG clicks=receiver->clicks;trace_point("before initial click",transparent_x,transparent_y);click(transparent_x,transparent_y);trace_point("after initial click",transparent_x,transparent_y);CHECK(receiver->clicks==clicks+1);

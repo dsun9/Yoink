@@ -19,9 +19,9 @@ void pp_media_clear(PPAsset *a) {
 bool pp_media_reserve(PPAsset *a,size_t bytes,PPError *error) {
     if(bytes>PP_MEDIA_RESOURCE_BYTES) return pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Decoded resource exceeds 256 MiB");
     /* Account both old and new SVG raster until replacement succeeds. */
-    for(PPAsset *other=a->owner->first;a->owner->cache_bytes>PP_MEDIA_TOTAL_BYTES-bytes && other;other=other->next)
+    for(PPAsset *other=a->owner->first;a->owner->cache_bytes+a->owner->external_bytes>PP_MEDIA_TOTAL_BYTES-bytes && other;other=other->next)
         if(other!=a && !other->retains) pp_media_clear(other);
-    if(a->owner->cache_bytes>PP_MEDIA_TOTAL_BYTES-bytes) return pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Active decoded content exceeds 512 MiB cache budget");
+    if(a->owner->cache_bytes+a->owner->external_bytes>PP_MEDIA_TOTAL_BYTES-bytes) return pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Active decoded content exceeds 512 MiB raster budget");
     return true;
 }
 bool pp_media_allocate(PPAsset *a,size_t count,PPError *error) {
@@ -50,6 +50,24 @@ bool pp_asset_import(PPAssets *assets,PPBytes b,PPAssetKind kind,PPAssetId *out,
 PPAsset *pp_asset_retain(PPAssets *assets,PPAssetId id) { if(!assets) return NULL; for(PPAsset *a=assets->first;a;a=a->next) if(!memcmp(&a->id,&id,sizeof(id))) { a->retains++; return a; } return NULL; }
 void pp_asset_release(PPAsset *a) { if(a && a->retains) a->retains--; }
 PPBytes pp_asset_source(const PPAsset *a) { return a?(PPBytes){a->source,a->source_size}:(PPBytes){0}; }
+PPAssetKind pp_asset_kind(const PPAsset *a) { return a ? a->kind : (PPAssetKind)-1; }
+PPVec2 pp_asset_intrinsic_size(const PPAsset *a) { return a ? (PPVec2){a->info.width,a->info.height} : (PPVec2){0}; }
+size_t pp_assets_external_raster_bytes(const PPAssets *a) { return a ? a->external_bytes : 0; }
+size_t pp_assets_raster_bytes(const PPAssets *a) { return a ? a->cache_bytes+a->external_bytes : 0; }
+bool pp_assets_reserve_raster(PPAssets *a, size_t bytes, PPError *error) {
+    if (!a || !bytes) return pp_media_error(error, PP_ERROR_ARGUMENT, "Missing raster manager or bytes");
+    if (bytes > PP_MEDIA_RESOURCE_BYTES)
+        return pp_media_error(error, PP_ERROR_RESOURCE_LIMIT, "Owned raster exceeds 256 MiB");
+    for (PPAsset *other = a->first; pp_assets_raster_bytes(a) > PP_MEDIA_TOTAL_BYTES-bytes && other; other = other->next)
+        if (!other->retains) pp_media_clear(other);
+    if (pp_assets_raster_bytes(a) > PP_MEDIA_TOTAL_BYTES-bytes)
+        return pp_media_error(error, PP_ERROR_RESOURCE_LIMIT, "Active rasters exceed 512 MiB");
+    a->external_bytes += bytes;
+    return true;
+}
+void pp_assets_release_raster(PPAssets *a, size_t bytes) {
+    if (a && bytes <= a->external_bytes) a->external_bytes -= bytes;
+}
 bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *next,PPError *e) {
     if(out) *out=NULL;
     if(!a || !out || !next || !isfinite(t) || t<0) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid frame request or instance clock");

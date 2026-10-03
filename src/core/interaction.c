@@ -46,9 +46,11 @@ void pp_interaction_step(PPInteraction *s,const PPPlatformEvent *e,const PPGestu
     } else if(e->kind==PP_EVENT_WHEEL && isfinite(e->wheel_delta) && e->wheel_delta!=0) {
         out->easing_seconds=c->easing_seconds;
         if(e->modifiers&PP_MOD_ALT) {
+            if(!isfinite(c->resize_factor)||c->resize_factor<=1 ||
+                !isfinite(s->target_pose.longest_dip)||s->target_pose.longest_dip<=0) return;
             double factor=pow(c->resize_factor,e->wheel_delta);
             double target=s->target_pose.longest_dip*factor;
-            if(!isfinite(target)||target<=0) return;
+            target=fmin(4096.0,fmax(1.0,target));
             s->target_pose.longest_dip=target;out->pose.longest_dip=target;out->command=PP_COMMAND_RESIZE;
         } else {
             double target=s->target_pose.angle_deg+c->rotation_step_deg*e->wheel_delta;

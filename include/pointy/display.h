@@ -25,6 +25,8 @@ typedef struct PPAnchorRuntime {
     PPAnchorReveal *entries;
     size_t count;
     bool enabled[PP_ANCHOR_COUNT], configured, failed;
+    double activation_dip, preview_dip[PP_ANCHOR_COUNT], easing_seconds;
+    bool layout_configured;
 } PPAnchorRuntime;
 PPRect pp_anchor_bounds(const PPDisplay *display, PPAnchor anchor, double size_dip);
 PPRect pp_anchor_preview_bounds(const PPDisplay *display, PPAnchor anchor, double size_dip);
@@ -35,6 +37,9 @@ bool pp_displays_equal(const PPDisplay *a,size_t a_count,const PPDisplay *b,size
 PPVec2 pp_display_drag_center(const PPDisplay *display, PPVec2 pointer, PPVec2 grab_dip);
 PPVec2 pp_recover_center(const PPDisplay *displays, size_t count, PPVec2 old_center, double longest_dip);
 void pp_anchors_enable(PPAnchorRuntime *runtime, PPAnchor anchor, bool enabled);
+/* Borrowed project settings can configure geometry without per-display lists. */
+void pp_anchors_layout(PPAnchorRuntime *runtime, double activation_dip,
+    const double preview_dip[PP_ANCHOR_COUNT], double easing_seconds);
 void pp_anchors_update(PPAnchorRuntime *runtime, const PPDisplay *displays, size_t count, PPVec2 pointer, double now);
 void pp_anchors_destroy(PPAnchorRuntime *runtime);
 #endif
