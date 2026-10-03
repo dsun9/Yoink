@@ -1,5 +1,6 @@
 #include "gl_api.h"
 #include "pointy/render.h"
+#include "../core/geometry_internal.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,10 +72,10 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
         return error_set(error, PP_ERROR_ARGUMENT, "Invalid frame transform");
     double scale = longest_dip*pixels_per_dip/(source->width > source->height ? source->width : source->height);
     double angle = fmod(angle_deg, 360)*3.14159265358979323846/180, c = cos(angle), s = sin(angle);
-    double w = ceil(scale*(fabs(c)*source->width+fabs(s)*source->height)-1e-9);
-    double h = ceil(scale*(fabs(s)*source->width+fabs(c)*source->height)-1e-9);
-    if (!isfinite(w) || !isfinite(h) || w < 1 || h < 1 || w > 16384 || h > 16384)
+    int drawable_w,drawable_h;
+    if (!pp_geometry_extent(source,longest_dip,angle_deg,pixels_per_dip,&drawable_w,&drawable_h))
         return error_set(error, PP_ERROR_ARGUMENT, "Transformed frame dimensions exceed limits");
+    double w=drawable_w,h=drawable_h;
     PPFrame frame = {0}; frame.width = (int)w; frame.height = (int)h; frame.stride = (size_t)frame.width*4;
     size_t count = (size_t)frame.width*frame.height;
     frame.pixels = malloc(count*4); frame.content_alpha = malloc(count);

@@ -2,7 +2,7 @@
 #define POINTY_INTERACTION_H
 #include "pointy/platform.h"
 typedef struct PPPose {
-    PPVec2 center; /* Physical desktop coordinates. */
+    PPVec2 center; /* Native desktop units, independent of drawable pixel scale. */
     double longest_dip, angle_deg, opacity;
 } PPPose;
 typedef struct PPGestureConfig {
@@ -32,6 +32,17 @@ typedef struct PPInteractionResult {
     PPPose from_pose, pose;
     double easing_seconds;
 } PPInteractionResult;
+typedef struct PPSamplingGrid {
+    PPVec2 desktop_origin; /* Actual presented top-left after native rounding. */
+    double drawable_pixels_per_desktop_unit;
+} PPSamplingGrid;
+/* Select the drawable pixel containing desktop_point and sample its center.
+ * The grid origin must match the actual presentation origin; transformed
+ * drawable extents are shared with pp_renderer_transform. */
+bool pp_content_hit_on_grid(const PPFrame *source, const PPPose *pose,
+    double desktop_units_per_dip, const PPSamplingGrid *grid, PPVec2 desktop_point);
+/* Convenience for one drawable pixel per desktop unit: the presentation
+ * origin is round(center - drawable_extent/2), with ties away from zero. */
 bool pp_content_hit(const PPFrame *source, const PPPose *pose,
     double desktop_units_per_dip, PPVec2 desktop_point);
 void pp_interaction_step(PPInteraction *state, const PPPlatformEvent *event,

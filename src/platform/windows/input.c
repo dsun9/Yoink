@@ -80,6 +80,7 @@ void pp_windows_input_remove(PPSurface *surface) {
     if(!surfaces && hook) {pp_platform_release_capture();UnhookWindowsHookEx(hook);hook=NULL;}
 }
 bool pp_windows_input_owned(PPSurface *surface) {return owner==surface || accepted_press==surface;}
+PPSurface *pp_windows_input_owner(void) {return owner?owner:accepted_press;}
 void pp_windows_input_check(void) {
     if(owner && (!owner->window || !IsWindowVisible(owner->window))) pp_windows_input_cancel(owner);
 }

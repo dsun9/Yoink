@@ -2,22 +2,28 @@
 #include "pointy/interaction.h"
 #include "receiver_shared.h"
 #include "../test.h"
+#include "../../src/platform/windows/windows_internal.h"
 #include <math.h>
 static PROCESS_INFORMATION child;
 static ReceiverState *receiver;
 static HANDLE mapping;
 static PPSurface *surface;
+static PPSurface *aux_surface;
 static HWND old_foreground;
 static POINT old_cursor;
 static UINT old_routing;
 static bool have_routing;
 static bool alt_held;
+static bool left_held;
 static int downs,moves,ups,wheels,cancels;
 static unsigned wheel_modifiers;
 static double wheel_total;
 static bool capture_on_down;
+static PPInteraction *interaction_watch;
+static PPGestureConfig interaction_config;
 static void cleanup(void) {
-    pp_surface_destroy(surface); pp_platform_release_capture();
+    pp_surface_destroy(aux_surface);pp_surface_destroy(surface); pp_platform_release_capture();
+    if(left_held) {INPUT input={0};input.type=INPUT_MOUSE;input.mi.dwFlags=MOUSEEVENTF_LEFTUP;SendInput(1,&input,sizeof(input));}
     if(alt_held) {INPUT input={0};input.type=INPUT_KEYBOARD;input.ki.wVk=VK_MENU;input.ki.dwFlags=KEYEVENTF_KEYUP;SendInput(1,&input,sizeof(input));}
     if(have_routing) SystemParametersInfoW(SPI_SETMOUSEWHEELROUTING,0,(void *)(UINT_PTR)old_routing,0);
     if(receiver && receiver->window) PostMessageW((HWND)receiver->window,WM_CLOSE,0,0);
@@ -29,6 +35,7 @@ static void pump(void) {
     ULONGLONG until=GetTickCount64()+100;
     do {PPPlatformEvent e;while(pp_platform_poll(&e)) {
         CHECK(e.surface==surface);CHECK(e.instance_id==42);
+        if(interaction_watch) {PPInteractionResult out;pp_interaction_step(interaction_watch,&e,&interaction_config,&out);}
         if(e.kind==PP_EVENT_BUTTON_DOWN) {downs++;if(capture_on_down) {PPError error={0};CHECK(pp_platform_capture(surface,&error));}}
         if(e.kind==PP_EVENT_POINTER_MOVE) moves++;
         if(e.kind==PP_EVENT_BUTTON_UP) ups++;
@@ -70,7 +77,11 @@ static void injection(Injection *request) {
     CHECK(WaitForSingleObject(thread,0)==WAIT_OBJECT_0);CloseHandle(thread);CHECK(request->ok);pump();
 }
 static void move(int x,int y) {Injection request={true,x,y,0,0,false};injection(&request);}
-static void mouse(DWORD flags,DWORD data) {Injection request={false,0,0,flags,data,false};injection(&request);}
+static void mouse(DWORD flags,DWORD data) {
+    if(flags&MOUSEEVENTF_LEFTDOWN) left_held=true;
+    Injection request={false,0,0,flags,data,false};injection(&request);
+    if(flags&MOUSEEVENTF_LEFTUP) left_held=false;
+}
 static void key(WORD value,DWORD flags) {
     if(value==VK_MENU && !(flags&KEYEVENTF_KEYUP)) alt_held=true;
     Injection request={false,0,0,flags,0,false,value};injection(&request);
@@ -82,6 +93,41 @@ static PPFrame ring(void) {
     for(int y=0;y<64;y++) for(int x=0;x<64;x++) if(hypot(x-31.5,y-31.5)>=18&&hypot(x-31.5,y-31.5)<=29) {
         f.pixels[(y*64+x)*4]=255;f.pixels[(y*64+x)*4+3]=255;f.content_alpha[y*64+x]=255;
     }return f;
+}
+static void drain_interaction(PPInteraction *state,bool *cancel_a) {
+    PPPlatformEvent event;
+    while(pp_platform_poll(&event)) {
+        if(event.kind==PP_EVENT_CANCEL && event.instance_id==42) *cancel_a=true;
+        PPInteractionResult out;pp_interaction_step(state,&event,&interaction_config,&out);
+    }
+}
+static void test_queue_exhaustion_preserves_owner(void) {
+    PPError error={0};PPSurface *other=NULL;CHECK(pp_surface_create(&other,&error));
+    aux_surface=other;
+    pp_surface_set_instance_id(other,43);pp_platform_gesture_config(&interaction_config);
+    PPInteraction state={0};state.displayed_pose=(PPPose){{252,252},64,0,1};interaction_watch=&state;
+    move(277,252);mouse(MOUSEEVENTF_LEFTDOWN,0);move(430,350);CHECK(state.dragging);
+    /* A hook move and B's unowned WndProc hover bypass adjacent coalescing. */
+    for(int i=0;i<512;i++) {
+        if(i%2) CHECK(pp_windows_enqueue(pp_windows_event(surface,WM_MOUSEMOVE,(POINT){431+i%3,350},0)));
+        else SendMessageW(other->window,WM_MOUSEMOVE,0,MAKELPARAM(1,1));
+    }
+    SendMessageW(other->window,WM_MOUSEMOVE,0,MAKELPARAM(2,1));
+    CHECK(pp_platform_capture(surface,&error)); /* Expendable hover must not revoke A. */
+    bool cancelled=false;drain_interaction(&state,&cancelled);CHECK(!cancelled && state.dragging);
+    mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!state.pressed && !state.dragging);
+
+    state=(PPInteraction){0};state.displayed_pose=(PPPose){{252,252},64,0,1};
+    move(277,252);mouse(MOUSEEVENTF_LEFTDOWN,0);move(430,350);CHECK(state.dragging);
+    /* Native ownership may end before its queued release reaches the core. */
+    pp_platform_release_capture();
+    CHECK(pp_windows_enqueue(pp_windows_event(surface,WM_LBUTTONUP,(POINT){430,350},0)));
+    for(int i=0;i<511;i++) CHECK(pp_windows_enqueue(pp_windows_event(other,WM_MOUSEWHEEL,(POINT){1,1},(DWORD)WHEEL_DELTA<<16)));
+    pp_windows_enqueue(pp_windows_event(other,WM_MOUSEWHEEL,(POINT){1,1},(DWORD)WHEEL_DELTA<<16));
+    cancelled=false;drain_interaction(&state,&cancelled);
+    CHECK(cancelled && !state.pressed && !state.dragging);
+    mouse(MOUSEEVENTF_LEFTUP,0);interaction_watch=NULL;pp_surface_destroy(other);aux_surface=NULL;
+    puts("PASS overflow drops expendable hover and cancels A's discarded queued release even after native ownership ended.");
 }
 static void test_capture_and_wheel(void) {
     PPError error={0};PPFrame frame=ring();CHECK(pp_surface_create(&surface,&error));
@@ -150,6 +196,7 @@ static void test_capture_and_wheel(void) {
     move(277,252);int old_wheels=wheels;mouse(MOUSEEVENTF_WHEEL,WHEEL_DELTA);
     CHECK(wheels==old_wheels+1);
     CHECK(GetForegroundWindow()==(HWND)receiver->window);
+    test_queue_exhaustion_preserves_owner();
     pp_surface_destroy(surface);surface=NULL;
     pp_frame_destroy(&frame);puts("PASS owned drag outside surface, foreground preservation, cancellation/destruction cleanup, wheel rim/hole with both OS routing modes.");
 }

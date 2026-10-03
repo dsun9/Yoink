@@ -7,9 +7,25 @@ static PPPlatformEvent event(PPPlatformEventKind kind, double x, double y, doubl
     e.desktop_point = (PPVec2){x,y}; e.button = PP_BUTTON_LEFT; e.timestamp = time; return e;
 }
 static void test_gestures_and_transforms(void) {
+    uint8_t boundary_alpha[]={255,0};uint8_t boundary_pixels[]={255,0,0,255,0,0,0,0};
+    PPFrame boundary={boundary_pixels,boundary_alpha,2,1,8};
+    PPPose boundary_pose={{1,.5},2,0,1};
+    CHECK(pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){0,0}));
+    CHECK(!pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){1,0}));
+    boundary_pose.center=(PPVec2){1.6,.5};
+    CHECK(pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){1,0}));
+    CHECK(!pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){2,0}));
+    boundary_pose.center=(PPVec2){-.5,.5};
+    CHECK(pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){-2,0}));
+    CHECK(!pp_content_hit(&boundary,&boundary_pose,1,(PPVec2){-1,0}));
+    PPSamplingGrid grid={{-.75,-1.25},2};boundary_pose.center=(PPVec2){-.25,-1};
+    boundary_pose.longest_dip=1;
+    CHECK(pp_content_hit_on_grid(&boundary,&boundary_pose,1,&grid,(PPVec2){-.75,-1.25}));
+    CHECK(!pp_content_hit_on_grid(&boundary,&boundary_pose,1,&grid,(PPVec2){-.25,-1.25}));
+    CHECK(!pp_content_hit_on_grid(&boundary,&boundary_pose,1,&grid,(PPVec2){-.01,-1.1}));
     uint8_t alpha[64*64] = {0}; uint8_t pixels[64*64*4] = {0};
     for (int y=0;y<64;y++) for(int x=0;x<64;x++) {
-        double r=hypot(x-31.5,y-31.5); if(r>=18 && r<=29) alpha[y*64+x]=255;
+        double r=hypot(x-31.5,y-31.5); if(r>=18 && r<=29) {alpha[y*64+x]=255;pixels[(y*64+x)*4+3]=255;}
     }
     PPFrame source={pixels,alpha,64,64,256}; PPPose pose={{200,300},128,90,1};
     CHECK(!pp_content_hit(&source,&pose,1.5,(PPVec2){200,300}));

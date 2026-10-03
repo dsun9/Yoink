@@ -1,4 +1,5 @@
 #include "pointy/platform.h"
+#include "pointy/interaction.h"
 #include "receiver_shared.h"
 #include "../test.h"
 #include <math.h>
@@ -134,6 +135,41 @@ static void test_failed_presentation_removes_interceptor(void) {
     click(290,265,false); CHECK(receiver->clicks == 4 && overlay_clicks == 1);
     puts("PASS failed presentation: native interceptor removed, next click reaches receiver.");
 }
+static void test_hit_matches_presented_boundary_pixels(void) {
+    uint8_t pixels[]={255,0,0,255, 0,0,0,0};uint8_t alpha[]={255,0};
+    PPFrame source={pixels,alpha,2,1,8};PPError error={0};
+    pp_surface_destroy(surface);surface=NULL;CHECK(pp_surface_create(&surface,&error));
+    const PPPose poses[]={{{221,220.5},2,0,1},{{221.6,220.5},2,0,1},
+        {{-1.5,-2.25},3,0,1},{{222.25,221.75},4,37,1},{{221.2,222.3},4,90,1}};
+    for(size_t i=0;i<sizeof(poses)/sizeof(poses[0]);i++) {
+        PPFrame output={0};CHECK(pp_renderer_transform(renderer,&source,poses[i].longest_dip,poses[i].angle_deg,1,1,&output,&error));
+        PPRect bounds={poses[i].center.x-output.width*.5,poses[i].center.y-output.height*.5,output.width,output.height};
+        CHECK(pp_surface_present(surface,&output,bounds,&error));
+        for(int y=0;y<output.height;y++) for(int x=0;x<output.width;x++) {
+            PPVec2 point={round(bounds.x)+x,round(bounds.y)+y};
+            CHECK(pp_content_hit(&source,&poses[i],1,point)==(output.pixels[(size_t)y*output.stride+x*4+3]!=0));
+        }
+        if(i==0) {
+            LONG below=receiver->clicks;int above=overlay_clicks;
+            click(221,220,false);CHECK(receiver->clicks==below+1 && overlay_clicks==above);
+            click(220,220,false);CHECK(receiver->clicks==below+1 && overlay_clicks==above+1);
+        }
+        pp_frame_destroy(&output);
+    }
+    /* Native desktop points may represent multiple drawable pixels. Compare
+     * the explicit grid against the actual GL output at two such ratios. */
+    const double ratios[]={2,1.5};PPPose pose={{-.25,-1},3,37,1};
+    for(size_t i=0;i<sizeof(ratios)/sizeof(ratios[0]);i++) {
+        PPFrame output={0};CHECK(pp_renderer_transform(renderer,&source,3,37,1,ratios[i],&output,&error));
+        PPSamplingGrid grid={{-.75,-1.25},ratios[i]};
+        for(int y=0;y<output.height;y++) for(int x=0;x<output.width;x++) {
+            PPVec2 point={grid.desktop_origin.x+(x+.25)/ratios[i],grid.desktop_origin.y+(y+.25)/ratios[i]};
+            CHECK(pp_content_hit_on_grid(&source,&pose,1,&grid,point)==(output.pixels[(size_t)y*output.stride+x*4+3]!=0));
+        }
+        pp_frame_destroy(&output);
+    }
+    puts("PASS portable hit samples agree with rendered alpha and native boundary clicks, including fractional/negative origins.");
+}
 int main(int argc, char **argv) {
     CHECK(argc == 2); old_foreground = GetForegroundWindow(); GetCursorPos(&old_cursor); atexit(cleanup);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -147,5 +183,5 @@ int main(int argc, char **argv) {
     while (!receiver->window && GetTickCount64() < until) Sleep(10);
     CHECK(receiver->window); CHECK(SetForegroundWindow((HWND)receiver->window));
     test_windows_surface_routes_alpha(); test_renderer_preserves_rows_and_premultiplication();
-    test_failed_presentation_removes_interceptor(); return 0;
+    test_failed_presentation_removes_interceptor();test_hit_matches_presented_boundary_pixels(); return 0;
 }
