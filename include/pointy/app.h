@@ -86,4 +86,6 @@ const char *pp_app_diagnostic(const PPApp *app);
 const PPAppUIState *pp_app_ui(const PPApp *app);
 bool pp_app_dirty(const PPApp *app);
 uint64_t pp_app_generation(const PPApp *app);
+/* Retain a runtime diagnostic for settings without changing project revision. */
+void pp_app_report(PPApp *app, const PPError *error);
 #endif

@@ -149,6 +149,27 @@ flows, or theme picker. Browser CSS/ARIA audits do not establish native desktop
 accessibility. Nuklear has no UI Automation accessibility tree; keyboard and
 visible-focus coverage must be reported separately from screen-reader support.
 
+## Replacement drawer
+
+The native drawer reuses `src/ui/backend.c` controls and `src/ui/theme.c` tokens.
+Its only operation is replacement of one temporary sprite. The originating
+position's current list supplies the choices; project defaults and dirty state
+stay unchanged. This is a non-modal selector with a bounded internal scroller,
+keyboard focus outline, Escape dismissal, and a persistent Close button.
+
+The compact borderless window is at most 340 by 360 logical units and is clamped
+to the current display. Actual content thumbnails make images and emoji
+identifiable when the control font cannot render their labels. The empty state
+points to Settings and keeps the existing sprite. Display scale changes rebuild
+the drawer at the new scale while keeping its focused item.
+
+Drawer and settings windows stay above sprites. Closing by selection or Escape
+restores the preceding foreground window when the drawer still owns focus.
+An outside click reaches its original target and preserves that target's new
+focus. `tests/platform/test_sprite_flow.c` covers hidden rendering, keyboard
+scroll, scales and the coordinated native focus/input flow. Nuklear's existing
+screen-reader limitation also applies to this drawer.
+
 ## Do's and Don'ts
 
 - Keep the eight spatial positions exact and selection separate from default.

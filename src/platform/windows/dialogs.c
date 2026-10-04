@@ -16,10 +16,33 @@ static SRWLOCK dialog_lock = SRWLOCK_INIT;
 static PPDialogRequest *requests;
 static uint32_t parent_id;
 static HWND settings_window;
+static HWND drawer_window, drawer_previous_focus;
+
+HWND pp_windows_drawer_window(void) { return drawer_window; }
+void pp_platform_drawer_window(uint32_t window_id) {
+  SDL_Window *window=SDL_GetWindowFromID(window_id);
+  drawer_previous_focus=GetForegroundWindow();
+  drawer_window=window?SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL):NULL;
+}
+void pp_platform_drawer_close(bool restore_focus) {
+  bool owned=drawer_window&&GetForegroundWindow()==drawer_window;
+  if(drawer_window) ShowWindow(drawer_window,SW_HIDE);
+  drawer_window=NULL;
+  if(restore_focus&&owned&&IsWindow(drawer_previous_focus)) SetForegroundWindow(drawer_previous_focus);
+  drawer_previous_focus=NULL;
+}
 
 HWND pp_windows_settings_window(void) {
-  return settings_window && IsWindowVisible(settings_window) ? settings_window
-                                                             : NULL;
+  HWND settings=settings_window&&IsWindowVisible(settings_window)?settings_window:NULL;
+  HWND drawer=drawer_window&&IsWindowVisible(drawer_window)?drawer_window:NULL;
+  if(!settings) return drawer;
+  if(!drawer) return settings;
+  /* Insert a new sprite below both UI windows, regardless of which UI the
+   * user most recently focused. Existing sprite presentations keep Z order. */
+  HWND below=NULL;
+  for(HWND window=GetTopWindow(NULL);window;window=GetWindow(window,GW_HWNDNEXT))
+    if(window==settings||window==drawer) below=window;
+  return below;
 }
 void pp_platform_settings_window(uint32_t window_id) {
   SDL_Window *window = SDL_GetWindowFromID(window_id);

@@ -8,6 +8,7 @@ typedef struct PPAnchorPresenter PPAnchorPresenter;
  * then transformed for native desktop presentation. Active display selection
  * stays attached to a drag through release, including mixed-scale seams. */
 bool pp_anchor_presenter_create(PPAnchorPresenter **out,PPRenderer *renderer,PPProject *project,PPError *error);
+bool pp_anchor_presenter_create_shared(PPAnchorPresenter **out,PPRenderer *renderer,const PPProject *project,PPScene *scene,PPError *error);
 bool pp_anchor_presenter_update(PPAnchorPresenter *p,const PPDisplay *displays,size_t count,PPVec2 pointer,double now,PPError *error);
 bool pp_anchor_presenter_event(PPAnchorPresenter *p,const PPPlatformEvent *event,PPError *error);
 void pp_anchor_presenter_enable(PPAnchorPresenter *p,PPAnchor anchor,bool enabled);

@@ -6,9 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 static const wchar_t surface_class[] = L"PointyPointer.Surface";
+static void release_bitmap(PPSurface *surface);
 static bool fail(PPSurface *surface, PPError *error, int code, const char *message) {
     DWORD failure = GetLastError();
     if (surface && surface->window) { DestroyWindow(surface->window); surface->window = NULL; pp_windows_forget(surface); }
+    /* No surviving DIB may outlive a failed presentation reservation. */
+    if (surface) release_bitmap(surface);
     if (error) {
         error->code = code;
         if (code == PP_ERROR_PLATFORM) snprintf(error->message, sizeof(error->message), "%s (Win32 %lu)", message, failure);
@@ -79,7 +82,8 @@ bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds,
     if (!ok) { SetLastError(failure); return fail(surface,error,PP_ERROR_PLATFORM,"Cannot present overlay"); }
     surface->origin = destination;
     HWND settings = pp_windows_settings_window();
-    if (!SetWindowPos(surface->window, settings ? settings : HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW))
+    UINT order=IsWindowVisible(surface->window)?SWP_NOZORDER:0;
+    if (!SetWindowPos(surface->window, settings ? settings : HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW|order))
         return fail(surface,error,PP_ERROR_PLATFORM,"Cannot place overlay");
     return true;
 }

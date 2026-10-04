@@ -482,3 +482,6 @@ bool pp_app_dirty(const PPApp *app) {
 uint64_t pp_app_generation(const PPApp *app) {
   return app ? app->generation : 0;
 }
+void pp_app_report(PPApp *app, const PPError *error) {
+  if (app && error) snprintf(app->diagnostic,sizeof(app->diagnostic),"%s",error->message);
+}

@@ -9,6 +9,7 @@ typedef struct PPUIWindowOptions {
   PPRect geometry;
   float scale; /* 0 follows the display. Nonzero is a controlled UI scale. */
   bool resizable;
+  bool compact; /* Drawer: borderless and no settings minimum geometry. */
 } PPUIWindowOptions;
 /* Explicit independent context/window/GL/font ownership for settings and
  * drawer. Internal drawing helpers live in src/ui/backend.h; no global Nuklear

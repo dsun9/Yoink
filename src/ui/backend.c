@@ -129,6 +129,7 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
                           SDL_WINDOW_ALWAYS_ON_TOP;
   if (options->resizable)
     flags |= SDL_WINDOW_RESIZABLE;
+  if (options->compact) flags |= SDL_WINDOW_BORDERLESS | SDL_WINDOW_UTILITY;
   ui->window = SDL_CreateWindow(options->title, (int)options->geometry.w,
                                 (int)options->geometry.h, flags);
   if (ui->window)
@@ -142,8 +143,9 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
     ui->scale = 1;
   SDL_SetWindowSize(ui->window, (int)(options->geometry.w * ui->scale),
                     (int)(options->geometry.h * ui->scale));
-  SDL_SetWindowMinimumSize(ui->window, (int)(640 * ui->scale),
-                           (int)(480 * ui->scale));
+  if (!options->compact)
+    SDL_SetWindowMinimumSize(ui->window, (int)(640 * ui->scale),
+                             (int)(480 * ui->scale));
   SDL_SetWindowPosition(ui->window, (int)options->geometry.x,
                         (int)options->geometry.y);
   SDL_GL_SetSwapInterval(1);
@@ -465,7 +467,8 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error) {
   glDisable(GL_SCISSOR_TEST);
   ui->activate = ui->escape = false;
   ui->navigation = PP_KEY_NONE;
-  SDL_SetCursor(ui->text_target      ? ui->text_cursor
+  if (ui->visible && SDL_GetMouseFocus()==ui->window)
+    SDL_SetCursor(ui->text_target      ? ui->text_cursor
                 : ui->pointer_target ? ui->hand_cursor
                                      : ui->arrow_cursor);
   if (glGetError() != GL_NO_ERROR)

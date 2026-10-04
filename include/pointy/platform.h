@@ -63,6 +63,11 @@ void pp_platform_dialog_parent(uint32_t window_id);
  * are owned by this window; neither their client area nor settings is an overlay
  * input target. This does not raise/activate unrelated windows. */
 void pp_platform_settings_window(uint32_t window_id);
+/* Drawer priority and prior foreground ownership. Outside dismissal never
+ * restores focus over the user's new target. No keyboard hook is installed. */
+void pp_platform_drawer_window(uint32_t window_id);
+void pp_platform_drawer_close(bool restore_focus);
+void pp_surface_raise(PPSurface *surface);
 bool pp_surface_create(PPSurface **out, PPError *error);
 /* Borrows frame. Desktop bounds use physical desktop pixels. Dimensions must
  * match the frame. Failure hides and destroys the native interceptor; caller

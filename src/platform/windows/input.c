@@ -7,6 +7,7 @@ static HHOOK hook;
 static PPSurface *surfaces,*owner,*accepted_press;
 static PPSurface *button_targets[4];
 static bool capture_eligible;
+HWND pp_windows_drawer_window(void);
 static PPButton button(UINT message) {
     switch(message) {
     case WM_LBUTTONDOWN:case WM_LBUTTONUP:return PP_BUTTON_LEFT;
@@ -49,6 +50,12 @@ static LRESULT CALLBACK observe(int code,WPARAM w,LPARAM l) {
     }
     PPButton b=button(message);if(b==PP_BUTTON_NONE) return CallNextHookEx(hook,code,w,l);
     bool down=message==WM_LBUTTONDOWN||message==WM_RBUTTONDOWN||message==WM_MBUTTONDOWN;
+    HWND drawer=pp_windows_drawer_window();
+    if(down&&drawer&&GetAncestor(WindowFromPoint(mouse->pt),GA_ROOT)!=drawer) {
+        /* Observe the original outside click; do not consume or replay it. */
+        PPPlatformEvent outside={.kind=PP_EVENT_BUTTON_DOWN,.desktop_point={mouse->pt.x,mouse->pt.y},.button=b};
+        pp_windows_enqueue(outside);
+    }
     PPSurface *s;
     if(down) {
         s=target(mouse->pt);
@@ -93,6 +100,18 @@ bool pp_platform_capture(PPSurface *surface,PPError *error) {
     owner=surface;return true;
 }
 void pp_surface_set_instance_id(PPSurface *surface,uint64_t id) {if(surface) surface->instance_id=id;}
+void pp_surface_raise(PPSurface *surface) {
+    if(!surface||!surface->window) return;
+    for(HWND window=GetTopWindow(NULL);window;window=GetWindow(window,GW_HWNDNEXT)) {
+        for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==window&&s->instance_id&&IsWindowVisible(window)) {
+            if(s!=surface) {
+                HWND before=GetWindow(window,GW_HWNDPREV);
+                SetWindowPos(surface->window,before?before:HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+            }
+            return;
+        }
+    }
+}
 void pp_platform_gesture_config(PPGestureConfig *out) {
     if(!out) return;
     *out=(PPGestureConfig){GetSystemMetrics(SM_CXDRAG)*.5,GetSystemMetrics(SM_CYDRAG)*.5,
