@@ -16,6 +16,16 @@ typedef struct PPItemEditor {
   double animation_start, next_frame;
   bool changed, preview_dirty;
 } PPItemEditor;
+typedef enum PPProjectAction {
+  PP_PROJECT_ACTION_NONE,
+  PP_PROJECT_ACTION_NEW,
+  PP_PROJECT_ACTION_OPEN,
+  PP_PROJECT_ACTION_SAVE,
+  PP_PROJECT_ACTION_SAVE_AS,
+  PP_PROJECT_ACTION_CLOSE,
+  PP_PROJECT_ACTION_REMOVE,
+  PP_PROJECT_ACTION_COMMAND
+} PPProjectAction;
 struct PPSettings {
   PPApp *app; /* Borrowed, must outlive settings. */
   PPUIBackend *backend;
@@ -31,9 +41,15 @@ struct PPSettings {
   PPDialogKind dialog_kind;
   PPAnchor dialog_anchor;
   uint64_t dialog_item, dialog_generation;
+  PPProjectAction pending_action;
+  PPCommand pending_command; /* Only value-only selection/list commands. */
+  bool drawing_fields;
 };
 bool pp_settings_command(PPSettings *settings, PPCommand command);
 void pp_project_actions(PPSettings *settings);
+void pp_project_request_action(PPSettings *settings, PPProjectAction action);
+void pp_project_apply_action(PPSettings *settings);
+void pp_settings_close(PPSettings *settings);
 void pp_project_confirmation(PPSettings *settings);
 void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
                         bool add_image);

@@ -1,6 +1,7 @@
 #include "../../src/platform/windows/windows_internal.h"
 #include "../../src/ui/settings_internal.h"
 #include "../test.h"
+#include "pointy/project_store.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -440,7 +441,223 @@ static void create_settings(float scale, bool hidden) {
     CHECK(GetForegroundWindow() == window());
   }
 }
+static void hidden_key(PPKey key, unsigned modifiers) {
+  PPPlatformEvent event = {.kind = PP_EVENT_KEY_DOWN,
+                           .window_id = pp_settings_window_id(settings),
+                           .key = key,
+                           .modifiers = modifiers};
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_KEY_UP;
+  pp_settings_event(settings, &event);
+}
+static void hidden_click(const char *id) {
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, id, &bounds));
+  PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE,
+                           .window_id = pp_settings_window_id(settings),
+                           .button = PP_BUTTON_LEFT,
+                           .window_point = {bounds.x + bounds.w / 2,
+                                            bounds.y + bounds.h / 2}};
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_BUTTON_DOWN;
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_BUTTON_UP;
+  pp_settings_event(settings, &event);
+}
+static void hidden_project_action(bool button, bool save) {
+  if (button)
+    hidden_click(save ? "save" : "new");
+  else
+    hidden_key(save ? PP_KEY_S : PP_KEY_N, PP_MOD_CONTROL);
+}
+static void hidden_text(const char *text) {
+  for (const char *p = text; *p; p++) {
+    PPPlatformEvent event = {.kind = PP_EVENT_TEXT,
+                             .window_id = pp_settings_window_id(settings),
+                             .codepoint = (unsigned char)*p};
+    pp_settings_event(settings, &event);
+  }
+}
+static void hidden_retained_editor_actions(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor original_anchor = pp_app_ui(app)->anchor;
+  uint64_t original_item = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT,
+                                         .anchor = original_anchor}, &error));
+  uint64_t other_item = pp_app_ui(app)->selected_item;
+  PPItem other = *pp_project_item(pp_app_project(app), other_item);
+  other.text = "Other item";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                                         .item_id = other_item, .item = &other},
+                       &error));
+  create_settings(1, true);
+  /* Keep both the selection column and edit field visible for this batch. */
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  pump(30);
+  const char *names[] = {"native close", "Close settings", "anchor selection",
+                         "item selection", "Add text", "Remove item"};
+  for (int action = 0; action < 6; action++) {
+    for (int invalid = 0; invalid < 2; invalid++) {
+      fprintf(stderr, "Batched %s + %s\n", invalid ? "invalid size" : "item text",
+              names[action]);
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ANCHOR,
+                                             .anchor = original_anchor}, &error));
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM,
+                                             .item_id = original_item}, &error));
+      PPItem baseline = *pp_project_item(pp_app_project(app), original_item);
+      baseline.text = "Before";
+      baseline.text_style.font_size_dip = 64;
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                                             .item_id = original_item,
+                                             .item = &baseline}, &error));
+      pp_settings_revert(settings);
+      pump(30);
+      pp_ui_focus(settings->backend, invalid ? "item-size" : "item-text");
+      pump(30);
+      hidden_key(PP_KEY_A, PP_MOD_CONTROL);
+      pp_settings_draw(settings);
+      size_t item_count = pp_project_anchor(pp_app_project(app), original_anchor)->count;
+      hidden_text(invalid ? "0" : "After");
+      if (action == 0) {
+        PPPlatformEvent close = {.kind = PP_EVENT_WINDOW_CLOSE,
+                                 .window_id = pp_settings_window_id(settings)};
+        pp_settings_event(settings, &close);
+      } else if (action == 1)
+        hidden_click("close-settings");
+      else if (action == 2)
+        hidden_click("anchor-1");
+      else if (action == 3) {
+        char id[48];
+        snprintf(id, sizeof(id), "item-%llu", (unsigned long long)other_item);
+        hidden_click(id);
+      } else
+        hidden_click(action == 4 ? "add-text" : "remove-item");
+      pp_settings_draw(settings);
+      CHECK(!settings->failed && !settings->dialog_pending);
+      const PPItem *edited = pp_project_item(pp_app_project(app), original_item);
+      CHECK(!strcmp(edited->text, invalid ? "Before" : "After"));
+      CHECK(edited->text_style.font_size_dip == 64);
+      CHECK(!strcmp(pp_project_item(pp_app_project(app), other_item)->text,
+                    "Other item"));
+      CHECK(pp_settings_invalid(settings) == (invalid != 0));
+      if (action < 2) {
+        CHECK(!pp_app_ui(app)->settings_open);
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SHOW_SETTINGS},
+                             &error));
+        pp_settings_draw(settings);
+        CHECK(!strcmp(settings->editor.text, invalid ? "Before" : "After"));
+        CHECK(!strcmp(settings->editor.size, invalid ? "0" : "64"));
+        CHECK(pp_settings_invalid(settings) == (invalid != 0));
+      } else {
+        CHECK(pp_app_ui(app)->anchor ==
+              (action == 2 && !invalid ? PP_ANCHOR_TOP_CENTER : original_anchor));
+        if (action == 3 || invalid)
+          CHECK(pp_app_ui(app)->selected_item ==
+                (action == 3 && !invalid ? other_item : original_item));
+      }
+      if (action == 4) {
+        CHECK(pp_project_anchor(pp_app_project(app), original_anchor)->count ==
+              item_count + (invalid ? 0 : 1));
+        if (!invalid) {
+          CHECK(pp_app_ui(app)->selected_item != original_item);
+          CHECK(!strcmp(pp_project_item(pp_app_project(app),
+                                        pp_app_ui(app)->selected_item)->text,
+                        "After"));
+        }
+      }
+      if (action == 5) {
+        CHECK(settings->remove_confirmation == !invalid);
+        if (!invalid) {
+          hidden_key(PP_KEY_ESCAPE, 0);
+          pp_settings_draw(settings);
+          CHECK(!settings->remove_confirmation);
+        }
+      }
+      CHECK(!IsWindowVisible(window()) && GetForegroundWindow() != window());
+    }
+  }
+  pp_settings_destroy(settings);
+  settings = NULL;
+  pp_app_destroy(app);
+  app = NULL;
+  puts("PASS hidden batched text/invalid draft + close/reopen and selection.");
+}
+static void hidden_batched_project_actions(void) {
+  /* Each case starts with a saved, clean project. Removing the action deferral
+   * must fail these checks on saved bytes, draft retention or New protection. */
+  snprintf(test_directory, sizeof(test_directory),
+           PP_SMOKE_OUTPUT "/settings-batch-%lu-%llu", GetCurrentProcessId(),
+           GetTickCount64());
+  CHECK(CreateDirectoryA(test_directory, NULL));
+  snprintf(package, sizeof(package), "%s/batch.pointy", test_directory);
+  for (int button = 0; button < 2; button++) {
+    for (int invalid = 0; invalid < 2; invalid++) {
+      for (int save = 1; save >= 0; save--) {
+        fprintf(stderr, "Batched %s + %s via %s\n",
+                invalid ? "invalid size" : "item text", save ? "Save" : "New",
+                button ? "button" : "shortcut");
+        PPAppOptions options = {"", false};
+        CHECK(pp_app_create(&app, &options, &error));
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+                                               .name = "Baseline"}, &error));
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SAVE_AS,
+                                               .path = package}, &error));
+        create_settings(1, true);
+        uint64_t generation = pp_app_generation(app);
+        uint64_t item_id = pp_app_ui(app)->selected_item;
+        double size = pp_project_item(pp_app_project(app), item_id)
+                          ->text_style.font_size_dip;
+        pp_ui_focus(settings->backend, invalid ? "item-size" : "item-text");
+        pump(30);
+        hidden_key(PP_KEY_A, PP_MOD_CONTROL);
+        pp_settings_draw(settings);
+        if (invalid && save)
+          CHECK(pp_app_command(app,
+                               &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+                                            .name = "Unsaved model"}, &error));
+        const char *text = invalid ? "0" : "Batched item";
+        hidden_text(text);
+        hidden_project_action(button != 0, save != 0);
+        /* Deliberately no draw between text and the project action. */
+        pp_settings_draw(settings);
+        CHECK(!settings->failed && !settings->dialog_pending);
+        CHECK(pp_app_generation(app) == generation);
+        if (invalid) {
+          CHECK(pp_settings_invalid(settings));
+          CHECK(!strcmp(settings->editor.size, "0"));
+          CHECK(pp_project_item(pp_app_project(app), item_id)
+                    ->text_style.font_size_dip == size);
+          CHECK(!pp_app_ui(app)->transition_pending);
+          CHECK(pp_app_dirty(app) == (save != 0));
+        } else {
+          CHECK(!strcmp(pp_project_item(pp_app_project(app), item_id)->text,
+                        "Batched item"));
+          CHECK(pp_app_dirty(app) == (save == 0));
+          CHECK(pp_app_ui(app)->transition_pending == (save == 0));
+        }
+        PPProject *saved = NULL;
+        CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+        CHECK(!strcmp(pp_project_name(saved), "Baseline"));
+        if (!invalid && save)
+          CHECK(!strcmp(pp_project_item(saved, item_id)->text, "Batched item"));
+        pp_project_destroy(saved);
+        CHECK(!IsWindowVisible(window()) && GetForegroundWindow() != window());
+        pp_settings_destroy(settings);
+        settings = NULL;
+        pp_app_destroy(app);
+        app = NULL;
+      }
+    }
+  }
+  CHECK(pp_platform_remove_file(package, &error));
+  CHECK(RemoveDirectoryA(test_directory));
+  package[0] = test_directory[0] = 0;
+  puts("PASS hidden batched text/invalid draft + Save/New through shortcuts and buttons.");
+}
 static void render_only(void) {
+  hidden_retained_editor_actions();
+  hidden_batched_project_actions();
   INPUT arrow[2];
   key_inputs(VK_DOWN, arrow);
   fprintf(stderr, "Arrow descriptor: scan=%04x flags=%08lx mapped=%08x\n",

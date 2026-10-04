@@ -4,6 +4,20 @@
 #include <string.h>
 
 bool pp_settings_command(PPSettings *settings, PPCommand command) {
+  /* These commands replace the current editor binding. Keep its pending
+   * input on the original item until every field has been validated. Modal
+   * removal runs after field traversal and therefore needs no deferral. */
+  if (settings->drawing_fields &&
+      (command.kind == PP_COMMAND_SELECT_ANCHOR ||
+       command.kind == PP_COMMAND_SELECT_ITEM ||
+       command.kind == PP_COMMAND_ADD_TEXT ||
+       command.kind == PP_COMMAND_REMOVE_ITEM)) {
+    if (settings->pending_action == PP_PROJECT_ACTION_NONE) {
+      settings->pending_action = PP_PROJECT_ACTION_COMMAND;
+      settings->pending_command = command;
+    }
+    return true;
+  }
   PPError error = {0};
   bool ok = pp_app_command(settings->app, &command, &error);
   if (!ok)
@@ -81,6 +95,56 @@ void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
                                                            : NULL,
                           selected_file, settings);
 }
+void pp_project_request_action(PPSettings *settings, PPProjectAction action) {
+  /* A frame accepts one project action, just as an open modal or chooser does.
+   * Keep the first request while the current editor input is still pending. */
+  if (settings->pending_action == PP_PROJECT_ACTION_NONE)
+    settings->pending_action = action;
+}
+void pp_project_apply_action(PPSettings *settings) {
+  PPProjectAction action = settings->pending_action;
+  settings->pending_action = PP_PROJECT_ACTION_NONE;
+  if (action == PP_PROJECT_ACTION_NONE || settings->dialog_pending)
+    return;
+  /* Closing retains invalid drafts and a pending confirmation for reopening. */
+  if (action == PP_PROJECT_ACTION_CLOSE) {
+    pp_settings_close(settings);
+    return;
+  }
+  if (pp_app_ui(settings->app)->transition_pending ||
+      settings->remove_confirmation)
+    return;
+  if (pp_settings_invalid(settings)) {
+    snprintf(settings->status, sizeof(settings->status),
+             "Correct the highlighted fields or choose Revert fields before "
+             "continuing.");
+    return;
+  }
+  switch (action) {
+  case PP_PROJECT_ACTION_NEW:
+    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_NEW});
+    break;
+  case PP_PROJECT_ACTION_OPEN:
+    pp_settings_dialog(settings, PP_DIALOG_OPEN_PROJECT, false);
+    break;
+  case PP_PROJECT_ACTION_SAVE:
+    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SAVE});
+    if (pp_app_ui(settings->app)->needs_save_path)
+      pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
+    break;
+  case PP_PROJECT_ACTION_SAVE_AS:
+    pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
+    break;
+  case PP_PROJECT_ACTION_COMMAND:
+    pp_settings_command(settings, settings->pending_command);
+    break;
+  case PP_PROJECT_ACTION_REMOVE:
+    settings->remove_confirmation = true;
+    break;
+  default:
+    break;
+  }
+}
 void pp_project_actions(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   struct nk_context *ctx = &ui->context;
@@ -110,16 +174,13 @@ void pp_project_actions(PPSettings *settings) {
   bool actions_enabled = enabled && !pp_settings_invalid(settings);
   nk_layout_row_dynamic(ctx, 32, 4);
   if (pp_ui_button(ui, "new", "New", actions_enabled))
-    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_NEW});
+    pp_project_request_action(settings, PP_PROJECT_ACTION_NEW);
   if (pp_ui_button(ui, "open", "Open", actions_enabled))
-    pp_settings_dialog(settings, PP_DIALOG_OPEN_PROJECT, false);
-  if (pp_ui_button(ui, "save", "Save", actions_enabled)) {
-    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SAVE});
-    if (pp_app_ui(settings->app)->needs_save_path)
-      pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
-  }
+    pp_project_request_action(settings, PP_PROJECT_ACTION_OPEN);
+  if (pp_ui_button(ui, "save", "Save", actions_enabled))
+    pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE);
   if (pp_ui_button(ui, "save-as", "Save As", actions_enabled))
-    pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
+    pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE_AS);
   char unicode_notice[256];
   pp_ui_unicode_notice(ui, settings->project_name, unicode_notice,
                        sizeof(unicode_notice));

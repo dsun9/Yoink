@@ -69,6 +69,10 @@ static void geometry(PPSettings *settings) {
                                     height / settings->backend->scale}};
   pp_settings_command(settings, command);
 }
+void pp_settings_close(PPSettings *settings) {
+  geometry(settings);
+  pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_CLOSE_SETTINGS});
+}
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (!settings || !event ||
       event->window_id != pp_settings_window_id(settings))
@@ -77,10 +81,7 @@ void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (event->kind == PP_EVENT_WINDOW_CLOSE) {
     if (settings->dialog_pending)
       return;
-    geometry(settings);
-    pp_settings_command(settings,
-                        (PPCommand){.kind = PP_COMMAND_CLOSE_SETTINGS});
-    pp_ui_show(settings->backend, false);
+    pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
     return;
   }
   if (event->kind != PP_EVENT_KEY_DOWN || event->repeat ||
@@ -91,24 +92,14 @@ void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if ((event->modifiers & PP_MOD_CONTROL) &&
       (event->key == PP_KEY_S || event->key == PP_KEY_N ||
        event->key == PP_KEY_O)) {
-    if (pp_settings_invalid(settings)) {
-      snprintf(settings->status, sizeof(settings->status),
-               "Correct the highlighted fields or choose Revert fields before "
-               "continuing.");
-      return;
-    }
     if (event->key == PP_KEY_S) {
-      if (event->modifiers & PP_MOD_SHIFT)
-        pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
-      else {
-        pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SAVE});
-        if (pp_app_ui(settings->app)->needs_save_path)
-          pp_settings_dialog(settings, PP_DIALOG_SAVE_PROJECT, false);
-      }
+      pp_project_request_action(settings, event->modifiers & PP_MOD_SHIFT
+                                              ? PP_PROJECT_ACTION_SAVE_AS
+                                              : PP_PROJECT_ACTION_SAVE);
     } else if (event->key == PP_KEY_N)
-      pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_NEW});
+      pp_project_request_action(settings, PP_PROJECT_ACTION_NEW);
     else
-      pp_settings_dialog(settings, PP_DIALOG_OPEN_PROJECT, false);
+      pp_project_request_action(settings, PP_PROJECT_ACTION_OPEN);
   }
 }
 static void anchor_selector(PPSettings *settings) {
@@ -267,7 +258,7 @@ static void ordered_items(PPSettings *settings) {
   nk_layout_row_dynamic(ctx, 32, 1);
   if (pp_ui_button(ui, "remove-item", "Remove selected item",
                    enabled && selected_index < list->count))
-    settings->remove_confirmation = true;
+    pp_project_request_action(settings, PP_PROJECT_ACTION_REMOVE);
   nk_layout_row_dynamic(ctx, 40, 1);
   nk_label_wrap(ctx, "Selecting an item leaves the default unchanged. Make "
                      "default chooses what future pulls create.");
@@ -342,6 +333,7 @@ void pp_settings_draw(PPSettings *settings) {
   pp_ui_modal(ui, modal);
   nk_flags flags = NK_WINDOW_NO_SCROLLBAR | (modal ? NK_WINDOW_NO_INPUT : 0);
   struct nk_context *ctx = &ui->context;
+  settings->drawing_fields = true;
   if (nk_begin(ctx, "PointyPointer", nk_rect(0, 0, ui->width, ui->height),
                flags)) {
     pp_project_actions(settings);
@@ -389,17 +381,17 @@ void pp_settings_draw(PPSettings *settings) {
                          !settings->dialog_pending && !ui->composing))
       pp_settings_revert(settings);
     if (pp_ui_button(ui, "close-settings", "Close settings",
-                     !settings->dialog_pending)) {
-      geometry(settings);
-      pp_settings_command(settings,
-                          (PPCommand){.kind = PP_COMMAND_CLOSE_SETTINGS});
-    }
+                     !settings->dialog_pending))
+      pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
     if (pp_ui_button(ui, "quit", "Quit",
                      !settings->dialog_pending &&
                          !pp_settings_invalid(settings)))
       pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
   }
   nk_end(ctx);
+  settings->drawing_fields = false;
+  /* Every field has now consumed, validated and committed this input batch. */
+  pp_project_apply_action(settings);
   pp_project_confirmation(settings);
   if (!pp_ui_end(ui, &error))
     goto failed;
