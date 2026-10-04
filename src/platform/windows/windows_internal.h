@@ -19,4 +19,5 @@ void pp_windows_input_cancel(PPSurface *surface);
 bool pp_windows_input_owned(PPSurface *surface);
 PPSurface *pp_windows_input_owner(void);
 void pp_windows_input_check(void);
+HWND pp_windows_settings_window(void);
 #endif

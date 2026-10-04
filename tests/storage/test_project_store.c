@@ -13,6 +13,7 @@ static bool fail_third_write(void *context, PPError *e) {
     return fail_io(NULL, e);
 }
 static void compare_projects(PPProject *a, PPProject *b) {
+    CHECK(!strcmp(pp_project_name(a), pp_project_name(b)));
     CHECK(!memcmp(pp_project_settings(a), pp_project_settings(b), sizeof(PPProjectSettings)));
     for (int i = 0; i < PP_ANCHOR_COUNT; i++) {
         const PPAnchorList *x = pp_project_anchor(a, (PPAnchor)i),
@@ -67,6 +68,7 @@ static void test_portable_round_trip(void) {
     PPProject *project = NULL, *loaded = NULL;
     CHECK(pp_assets_create(&assets, &error));
     CHECK(pp_project_create(assets, &project, &error));
+    CHECK(pp_project_set_name(project, "Pr\xc3\xa9sentation \xf0\x9f\x91\x89", &error));
     PPBlob font = read_bytes(PP_FONT_FIXTURES "/PointyFixture.ttc"),
            noto = read_bytes(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
     char owned[MAX_PATH], moved[MAX_PATH], source_path[MAX_PATH];

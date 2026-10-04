@@ -212,6 +212,7 @@ bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPMa
     ADD(root && settings && lists && resources);
     yyjson_mut_doc_set_root(doc, root);
     ADD(yyjson_mut_obj_add_uint(doc, root, "schema", 1));
+    ADD(yyjson_mut_obj_add_str(doc, root, "name", pp_project_name(project)));
     ADD(yyjson_mut_obj_add_val(doc, root, "settings", settings));
     ADD(yyjson_mut_obj_add_val(doc, root, "lists", lists));
     ADD(yyjson_mut_obj_add_val(doc, root, "resources", resources));
@@ -398,11 +399,14 @@ bool pp_manifest_read(PPBytes bytes, PPManifest *manifest, PPError *error) {
         return pp_store_error(error, PP_ERROR_RESOURCE_LIMIT, "Manifest exceeds 2 MiB");
     manifest->doc = yyjson_read((const char *)bytes.data, bytes.size, 0);
     yyjson_val *root = yyjson_doc_get_root(manifest->doc);
-    if (!root || !safe_tree(root, 0) || !yyjson_is_obj(root) || yyjson_obj_size(root) != 4 ||
+    if (!root || !safe_tree(root, 0) || !yyjson_is_obj(root) || yyjson_obj_size(root) != 5 ||
         !yyjson_is_uint(yyjson_obj_get(root, "schema")) ||
         yyjson_get_uint(yyjson_obj_get(root, "schema")) != 1)
         return pp_store_error(error, PP_ERROR_FORMAT,
                               "Invalid manifest or unsupported schema version");
+    const char *name = string_value(yyjson_obj_get(root, "name"));
+    if (!name || !*name || strlen(name) > PP_PROJECT_NAME_MAX)
+        return pp_store_error(error, PP_ERROR_FORMAT, "Project name must contain 1–255 UTF-8 bytes");
     yyjson_val *resources = yyjson_obj_get(root, "resources");
     if (!yyjson_is_arr(resources) || yyjson_arr_size(resources) > PP_STORE_ENTRIES - 1)
         return pp_store_error(error, PP_ERROR_FORMAT, "Invalid manifest resources");
@@ -492,6 +496,8 @@ bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out
     yyjson_val *root = yyjson_doc_get_root(manifest->doc),
                *settings = yyjson_obj_get(root, "settings"), *lists = yyjson_obj_get(root, "lists");
     PPProjectSettings s;
+    if (!pp_project_set_name(project, string_value(yyjson_obj_get(root, "name")), error))
+        goto done;
     if (!yyjson_is_obj(settings) || yyjson_obj_size(settings) != 4 ||
         !number(settings, "activation_dip", &s.activation_dip) ||
         !number(settings, "rotation_step_deg", &s.rotation_step_deg) ||

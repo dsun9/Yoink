@@ -44,6 +44,30 @@ static void test_declared_limits(void);
 static void test_archive_trailer_agreement(void);
 static void test_named_instance_is_not_collection_face(void);
 static void test_wrong_resource_namespace(void);
+static void test_project_names(void) {
+    const char *names[]={NULL,""," \xc2\xa0","line\nname"};
+    for (size_t i=0;i<sizeof(names)/sizeof(*names)+2;i++) {
+        yyjson_doc *doc=yyjson_read(empty,strlen(empty),0);
+        CHECK(doc);
+        yyjson_mut_doc *mut=yyjson_doc_mut_copy(doc,NULL);
+        yyjson_doc_free(doc);
+        yyjson_mut_val *root=yyjson_mut_doc_get_root(mut);
+        CHECK(yyjson_mut_obj_remove_key(root,"name"));
+        char oversized[257]; memset(oversized,'a',256); oversized[256]=0;
+        if (i==4) CHECK(yyjson_mut_obj_add_str(mut,root,"name",oversized));
+        else if (i==5) CHECK(yyjson_mut_obj_add_strn(mut,root,"name","embedded\0nul",12));
+        else if (names[i]) CHECK(yyjson_mut_obj_add_str(mut,root,"name",names[i]));
+        char *json=yyjson_mut_write(mut,0,NULL); CHECK(json);
+        write_zip(json,NULL,(PPBytes){0},false);
+        reject_load();
+        free(json); yyjson_mut_doc_free(mut);
+    }
+    char malformed[1024]; strcpy(malformed,empty);
+    char *name=strstr(malformed,"Untitled project"); CHECK(name);
+    name[0]=(char)0xc0; name[1]=(char)0xaf;
+    write_zip(malformed,NULL,(PPBytes){0},false);
+    reject_load();
+}
 int main(void) {
     begin_test();
     PPBlob fixture = read_bytes(PP_PROJECT_FIXTURES "/empty-v1.json");
@@ -55,6 +79,7 @@ int main(void) {
     test_archive_trailer_agreement();
     test_named_instance_is_not_collection_face();
     test_wrong_resource_namespace();
+    test_project_names();
     pp_blob_destroy(&fixture);
     end_test();
     puts("archive rejection cases passed");

@@ -25,7 +25,13 @@ Canonical names are shorter than the general name limit. JSON nesting is bounded
 
 ## Manifest
 
-The root contains exactly `schema`, `settings`, `resources`, and `lists`. `schema` is the integer `1`.
+The root contains exactly `schema`, `name`, `settings`, `resources`, and `lists`. `schema` is the integer `1`.
+
+`name` is the owned project name, independent of its package filename. It is a
+required UTF-8 string of 1–255 bytes, with no embedded NUL or control characters
+and at least one non-whitespace character. New projects use `Untitled project`.
+Save As changes the filename without changing this name. This unreleased schema
+rejects missing, malformed, blank, or oversized names rather than inventing one.
 
 `settings` contains the four canonical values: `activation_dip`, `rotation_step_deg`, `resize_factor`, and `easing_seconds`. Their defaults are 16, 10, 1.1, and 0.12. Existing project-model ranges apply.
 

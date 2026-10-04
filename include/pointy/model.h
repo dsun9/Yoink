@@ -5,6 +5,7 @@
 
 #define PP_ITEM_MIN_SIZE 1.0
 #define PP_ITEM_MAX_SIZE 4096.0
+#define PP_PROJECT_NAME_MAX 255
 typedef enum PPItemKind { PP_ITEM_IMAGE, PP_ITEM_TEXT } PPItemKind;
 /* Input strings are borrowed for a call; projects/snapshots copy them. Project
  * item IDs are stable and nonzero. Ad-hoc snapshot inputs may use zero.
@@ -49,6 +50,10 @@ const PPItem *pp_project_item(const PPProject *project, uint64_t id);
 const PPItem *pp_project_target(const PPProject *project, PPAnchor anchor);
 PPAssets *pp_project_assets(const PPProject *project);
 uint64_t pp_project_revision(const PPProject *project);
+/* Owned UTF-8 name, independent of filename. 1..255 bytes, no control characters
+ * or whitespace-only names. Borrowed accessor expires on mutation/destruction. */
+bool pp_project_set_name(PPProject *project, const char *name, PPError *error);
+const char *pp_project_name(const PPProject *project);
 /* Project-specific UTF-8 attribution keyed by source digest, copied on set.
  * A NULL/empty notice clears it; getter borrows until mutation/destruction. */
 bool pp_project_set_notice(PPProject *project, PPAssetId id, const char *notice, PPError *error);

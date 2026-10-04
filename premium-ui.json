@@ -1,0 +1,18 @@
+{
+  "profile": "product-admin",
+  "canonicalMap": "DESIGN.md",
+  "sourceRoots": ["src/ui"],
+  "requiredCapabilities": ["Select/Listbox", "Form", "Scrollbar", "CRUD"],
+  "requiredCommands": ["build", "commands", "settingsSmoke", "designLint"],
+  "commands": {
+    "build": "cmake --build --preset windows-dev",
+    "commands": "ctest --preset windows-dev -R '^commands$' --output-on-failure",
+    "settingsSmoke": "ctest --preset windows-dev -R '^settings_smoke$' --output-on-failure",
+    "designLint": "npx --yes -p @google/design.md designmd lint DESIGN.md"
+  },
+  "evidence": {
+    "crudFullFlow": "tests/platform/test_settings_smoke.c",
+    "failurePaths": "tests/core/test_commands.c"
+  },
+  "nativeApplicability": "C/SDL3/OpenGL/Nuklear. Static auditor recognizes web suffixes only: zero C-source coverage. Contract/evidence-path checks remain applicable; runtime behavior is checked by native tests and inspected screenshots. No browser, table, date, remote API, URL, CSS or ARIA surface exists. No UI Automation accessibility tree is provided."
+}

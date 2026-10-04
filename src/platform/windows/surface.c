@@ -78,7 +78,8 @@ bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds,
     DWORD failure = GetLastError(); if (screen) ReleaseDC(NULL, screen);
     if (!ok) { SetLastError(failure); return fail(surface,error,PP_ERROR_PLATFORM,"Cannot present overlay"); }
     surface->origin = destination;
-    if (!SetWindowPos(surface->window, HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW))
+    HWND settings = pp_windows_settings_window();
+    if (!SetWindowPos(surface->window, settings ? settings : HWND_TOPMOST, 0,0,0,0, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE|SWP_SHOWWINDOW))
         return fail(surface,error,PP_ERROR_PLATFORM,"Cannot place overlay");
     return true;
 }

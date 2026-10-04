@@ -85,3 +85,7 @@ FetchContent_MakeAvailable(yyjson)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(miniz GIT_REPOSITORY https://github.com/richgel999/miniz.git GIT_TAG 77d0dce8627735138c51770d1799a1ef48f2117d)
 FetchContent_MakeAvailable(miniz)
+
+# Native settings and replacement drawer; never depend on the reference checkout.
+FetchContent_Declare(nuklear GIT_REPOSITORY https://github.com/Immediate-Mode-UI/Nuklear.git GIT_TAG 8109cfbabe04f8705408c5d8ab1a6cd48649ccda)
+FetchContent_MakeAvailable(nuklear)

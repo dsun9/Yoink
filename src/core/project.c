@@ -15,6 +15,7 @@ struct PPProject {
     uint64_t next_id, revision;
     PPProjectSettings settings;
     PPNotice *notices;
+    char name[PP_PROJECT_NAME_MAX + 1];
 };
 
 static bool project_error(PPError *error, int code, const char *message) {
@@ -49,6 +50,7 @@ bool pp_project_create(PPAssets *assets, PPProject **out, PPError *error) {
     project->assets = assets;
     project->next_id = 1;
     project->revision = 1;
+    strcpy(project->name, "Untitled project");
     project->settings = (PPProjectSettings){16, 10, 1.1, .12};
     for (int a = 0; a < PP_ANCHOR_COUNT; a++) project->anchors[a].enabled = true;
     *out = project;
@@ -87,6 +89,40 @@ void pp_project_destroy(PPProject *project) {
     while (project->notices) { PPNotice *next = project->notices->next; free(project->notices->text); free(project->notices); project->notices = next; }
     free(project);
 }
+
+bool pp_project_set_name(PPProject *project, const char *name, PPError *error) {
+    if (!project || !name)
+        return project_error(error, PP_ERROR_ARGUMENT, "Project name is required");
+    size_t length = strlen(name);
+    if (!length || length > PP_PROJECT_NAME_MAX)
+        return project_error(error, PP_ERROR_ARGUMENT, "Project name must contain 1–255 UTF-8 bytes");
+    bool visible = false;
+    for (size_t at = 0; at < length;) {
+        const unsigned char *p = (const unsigned char *)name + at;
+        size_t n = p[0] < 0x80 ? 1 : p[0] >= 0xc2 && p[0] <= 0xdf ? 2 :
+            p[0] >= 0xe0 && p[0] <= 0xef ? 3 : p[0] >= 0xf0 && p[0] <= 0xf4 ? 4 : 0;
+        if (!n || at + n > length) goto invalid;
+        uint32_t rune = p[0] & (n == 1 ? 0x7f : (1u << (7-n))-1);
+        for (size_t i = 1; i < n; i++) {
+            if ((p[i] & 0xc0) != 0x80) goto invalid;
+            rune = (rune << 6) | (p[i] & 0x3f);
+        }
+        if ((n == 3 && rune < 0x800) || (n == 4 && rune < 0x10000) ||
+                rune > 0x10ffff || (rune >= 0xd800 && rune <= 0xdfff) || rune < 0x20 || (rune >= 0x7f && rune <= 0x9f)) goto invalid;
+        bool whitespace = rune == 0x20 || rune == 0xa0 || rune == 0x1680 ||
+            (rune >= 0x2000 && rune <= 0x200a) || rune == 0x2028 || rune == 0x2029 || rune == 0x202f || rune == 0x205f || rune == 0x3000;
+        visible = visible || !whitespace;
+        at += n;
+    }
+    if (!visible) return project_error(error, PP_ERROR_ARGUMENT, "Project name cannot be blank");
+    if (!strcmp(project->name, name)) return true;
+    memcpy(project->name, name, length + 1);
+    project->revision++;
+    return true;
+invalid:
+    return project_error(error, PP_ERROR_ARGUMENT, "Project name needs valid UTF-8 without control characters");
+}
+const char *pp_project_name(const PPProject *project) { return project ? project->name : ""; }
 
 const char *pp_project_notice(const PPProject *project, PPAssetId id) {
     for (const PPNotice *n = project ? project->notices : NULL; n; n = n->next)

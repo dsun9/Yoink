@@ -22,8 +22,19 @@ void pp_blob_destroy(PPBlob *blob);
 typedef struct PPSurface PPSurface;
 typedef enum PPPlatformEventKind {
     PP_EVENT_POINTER_MOVE, PP_EVENT_BUTTON_DOWN, PP_EVENT_BUTTON_UP,
-    PP_EVENT_WHEEL, PP_EVENT_QUIT, PP_EVENT_CANCEL
+    PP_EVENT_WHEEL, PP_EVENT_QUIT, PP_EVENT_CANCEL,
+    PP_EVENT_KEY_DOWN, PP_EVENT_KEY_UP, PP_EVENT_TEXT, PP_EVENT_COMPOSITION,
+    PP_EVENT_WINDOW_CLOSE, PP_EVENT_WINDOW_RESIZE, PP_EVENT_FOCUS_LOST
 } PPPlatformEventKind;
+/* UI events use window_id and window_point (logical window coordinates).
+ * Sprite events retain the existing surface/desktop coordinate contract. */
+typedef enum PPKey {
+    PP_KEY_NONE, PP_KEY_TAB, PP_KEY_ENTER, PP_KEY_ESCAPE, PP_KEY_SPACE,
+    PP_KEY_LEFT, PP_KEY_RIGHT, PP_KEY_UP, PP_KEY_DOWN, PP_KEY_HOME, PP_KEY_END,
+    PP_KEY_PAGE_UP, PP_KEY_PAGE_DOWN, PP_KEY_BACKSPACE, PP_KEY_DELETE,
+    PP_KEY_A, PP_KEY_C, PP_KEY_V, PP_KEY_X, PP_KEY_Z, PP_KEY_S, PP_KEY_N, PP_KEY_O,
+    PP_KEY_SHIFT, PP_KEY_CONTROL, PP_KEY_ALT
+} PPKey;
 typedef enum PPButton { PP_BUTTON_NONE, PP_BUTTON_LEFT, PP_BUTTON_RIGHT, PP_BUTTON_MIDDLE } PPButton;
 enum { PP_MOD_SHIFT = 1, PP_MOD_CONTROL = 2, PP_MOD_ALT = 4 };
 typedef struct PPPlatformEvent {
@@ -34,7 +45,24 @@ typedef struct PPPlatformEvent {
     PPButton button;
     unsigned modifiers;
     double wheel_delta, timestamp;
+    uint32_t window_id, codepoint;
+    PPVec2 window_point;
+    PPKey key;
+    bool repeat, composing;
 } PPPlatformEvent;
+typedef enum PPDialogKind { PP_DIALOG_OPEN_PROJECT, PP_DIALOG_SAVE_PROJECT, PP_DIALOG_IMPORT_IMAGE, PP_DIALOG_IMPORT_FONT } PPDialogKind;
+/* Result is borrowed only during callback; NULL path/error means cancellation.
+ * The native callback copies into an owned queue; poll dispatches on main thread.
+ * Cancel detaches callbacks for userdata, including results not yet delivered. */
+typedef void (*PPDialogCallback)(void *userdata, const char *utf8_path, const PPError *error);
+void pp_platform_file_dialog(PPDialogKind kind, const char *suggested_path, PPDialogCallback callback, void *userdata);
+void pp_platform_poll_dialogs(void);
+void pp_platform_cancel_file_dialogs(void *userdata);
+void pp_platform_dialog_parent(uint32_t window_id);
+/* Register the settings window above sprites. Zero unregisters. Native dialogs
+ * are owned by this window; neither their client area nor settings is an overlay
+ * input target. This does not raise/activate unrelated windows. */
+void pp_platform_settings_window(uint32_t window_id);
 bool pp_surface_create(PPSurface **out, PPError *error);
 /* Borrows frame. Desktop bounds use physical desktop pixels. Dimensions must
  * match the frame. Failure hides and destroys the native interceptor; caller
