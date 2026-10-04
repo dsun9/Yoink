@@ -26,12 +26,17 @@ static PPSurface *target(POINT point) {
     return NULL;
 }
 void pp_platform_release_capture(void) {owner=NULL;accepted_press=NULL;capture_eligible=false;}
+void pp_surface_cancel_input(PPSurface *surface) {
+    if(!surface) return;
+    if(owner==surface || accepted_press==surface) pp_platform_release_capture();
+    for(int i=1;i<4;i++) if(button_targets[i]==surface) button_targets[i]=NULL;
+}
 void pp_windows_input_cancel(PPSurface *surface) {
     if(owner==surface || accepted_press==surface) {
         POINT point={0};GetCursorPos(&point);PPPlatformEvent event=pp_windows_event(surface,WM_CANCELMODE,point,0);
-        pp_platform_release_capture();pp_windows_enqueue(event);
+        pp_surface_cancel_input(surface);pp_windows_enqueue(event);
     }
-    for(int i=1;i<4;i++) if(button_targets[i]==surface) button_targets[i]=NULL;
+    pp_surface_cancel_input(surface);
 }
 static LRESULT CALLBACK observe(int code,WPARAM w,LPARAM l) {
     if(code!=HC_ACTION) return CallNextHookEx(hook,code,w,l);

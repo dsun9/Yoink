@@ -87,6 +87,10 @@ void pp_surface_set_instance_id(PPSurface *surface, uint64_t instance_id);
  * cancellation and surface destruction clear ownership. */
 bool pp_platform_capture(PPSurface *surface, PPError *error);
 void pp_platform_release_capture(void);
+/* Cancel only this surface's accepted press, capture and button routing.
+ * Does not enqueue a cancellation event; the caller resets its logical
+ * gesture. Other surfaces' input ownership is preserved. Main thread only. */
+void pp_surface_cancel_input(PPSurface *surface);
 /* Pumps native messages on the main thread, then pops one normalized event. */
 bool pp_platform_poll(PPPlatformEvent *out);
 #endif

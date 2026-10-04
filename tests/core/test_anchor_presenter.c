@@ -15,6 +15,7 @@ void pp_surface_hide(PPSurface *s) {s->shown=false;}
 void pp_surface_set_instance_id(PPSurface *s,uint64_t id) {s->id=id;}
 bool pp_platform_capture(PPSurface *s,PPError *error) {(void)s;(void)error;return true;}
 void pp_platform_release_capture(void) {}
+void pp_surface_cancel_input(PPSurface *s) {(void)s;}
 void pp_surface_raise(PPSurface *s) {(void)s;}
 bool pp_platform_poll(PPPlatformEvent *out) {(void)out;return false;}
 bool pp_platform_pointer(PPVec2 *out) {(void)out;return false;}

@@ -1,4 +1,5 @@
 #include "../../src/app/anchors.h"
+#include "../../src/app/presenter_internal.h"
 #include "../../src/app/runtime_internal.h"
 #include "../../src/core/geometry_internal.h"
 #include "../../src/ui/drawer_internal.h"
@@ -18,6 +19,7 @@ static PPSurface *surfaces;
 static int source_width;
 static PPSurface *fail_surface;
 static unsigned capture_releases;
+static PPSurface *capture_owner;
 bool pp_surface_create(PPSurface **out, PPError *error) {
   (void)error;
   *out = calloc(1, sizeof(**out));
@@ -45,6 +47,8 @@ bool pp_surface_present(PPSurface *s, const PPFrame *frame, PPRect bounds,
 void pp_surface_destroy(PPSurface *s) {
   if (!s)
     return;
+  if (capture_owner == s)
+    capture_owner = NULL;
   PPSurface **link = &surfaces;
   while (*link != s)
     link = &(*link)->next;
@@ -54,11 +58,18 @@ void pp_surface_destroy(PPSurface *s) {
 void pp_surface_hide(PPSurface *s) { s->shown = false; }
 void pp_surface_set_instance_id(PPSurface *s, uint64_t id) { s->id = id; }
 bool pp_platform_capture(PPSurface *s, PPError *error) {
-  (void)s;
   (void)error;
+  capture_owner = s;
   return true;
 }
-void pp_platform_release_capture(void) { capture_releases++; }
+void pp_platform_release_capture(void) {
+  capture_releases++;
+  capture_owner = NULL;
+}
+void pp_surface_cancel_input(PPSurface *s) {
+  if (capture_owner == s)
+    pp_platform_release_capture();
+}
 void pp_surface_raise(PPSurface *s) { (void)s; }
 bool pp_platform_poll(PPPlatformEvent *out) {
   (void)out;
@@ -385,9 +396,67 @@ static void test_failure_isolation(void) {
   CHECK(!surfaces);
   pp_app_destroy(app);
 }
+static void test_external_change_cancels_owned_input(void) {
+  PPApp *app = NULL;
+  PPRuntime *r = NULL;
+  PPError error = {0};
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory = ""},
+                      &error));
+  CHECK(pp_runtime_create(&r, app, &error));
+  uint64_t a = pull(r, 30), b = pull(r, 31);
+  for (int content = 0; content < 2; content++)
+    for (int drag = 0; drag < 2; drag++) {
+      double t = 32 + 4 * (2 * content + drag);
+      PPSurface *sa = sprite(a), *sb = sprite(b);
+      step(r, sa, PP_EVENT_BUTTON_DOWN, 320, 210, t);
+      if (drag)
+        step(r, sa, PP_EVENT_POINTER_MOVE, 500, 400, t + .01);
+      PPSprite *mapped = pp_sprites_find(r->presenter, a);
+      CHECK(capture_owner == sa && mapped->interaction.pressed);
+      CHECK(mapped->dragging == (bool)drag);
+      if (content) {
+        PPItem replacement =
+            *pp_project_target(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+        replacement.text = "Changed";
+        CHECK(pp_scene_replace(pp_app_scene(app), a, &replacement, t + .02,
+                               &error));
+      } else {
+        PPPose pose = pp_scene_get(pp_app_scene(app), a)->pose;
+        pose.center.x += 20;
+        CHECK(pp_scene_set_pose(pp_app_scene(app), a, pose, &error));
+      }
+      pp_runtime_tick(r, t + .03);
+      CHECK(!capture_owner);
+      CHECK(!mapped->interaction.pressed && !mapped->interaction.dragging &&
+            !mapped->dragging);
+      /* Old queued trajectory cannot move the newly synchronized instance. */
+      PPPose changed = pp_scene_get(pp_app_scene(app), a)->pose;
+      step(r, sa, PP_EVENT_POINTER_MOVE, 1000, 800, t + .04);
+      CHECK(!memcmp(&changed, &pp_scene_get(pp_app_scene(app), a)->pose,
+                    sizeof(changed)));
+      /* Synchronizing A must not release B's accepted press or drag. */
+      step(r, sb, PP_EVENT_BUTTON_DOWN, 320, 210, t + 1);
+      if (drag)
+        step(r, sb, PP_EVENT_POINTER_MOVE, 550, 440, t + 1.01);
+      CHECK(capture_owner == sb);
+      changed.center.y += 20;
+      CHECK(pp_scene_set_pose(pp_app_scene(app), a, changed, &error));
+      pp_runtime_tick(r, t + 1.02);
+      CHECK(capture_owner == sb &&
+            pp_sprites_find(r->presenter, b)->interaction.pressed);
+      step(r, sb, PP_EVENT_BUTTON_UP, 550, 440, t + 1.03);
+      CHECK(!capture_owner);
+    }
+  pp_runtime_destroy(r);
+  CHECK(!surfaces && !capture_owner);
+  pp_app_destroy(app);
+  puts("PASS external pose/content changes cancel accepted press and drag "
+       "ownership; unrelated ownership survives");
+}
 int main(void) {
   test_runtime_ownership();
   test_failure_isolation();
+  test_external_change_cancels_owned_input();
   puts("PASS runtime ownership, pulls, wheel, replacement, empty drawer, "
        "removal, stale IDs, transitions and failure isolation");
   return 0;

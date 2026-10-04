@@ -281,6 +281,9 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
     }
     if (instance->snapshot != s->seen_snapshot ||
         memcmp(&instance->pose, &s->pose, sizeof(s->pose))) {
+      /* End the matching native press before discarding the logical gesture.
+       * Another sprite may own a newer press; its capture must survive. */
+      pp_surface_cancel_input(s->surface);
       if (instance->snapshot != s->seen_snapshot) {
         pp_item_snapshot_release(s->seen_snapshot);
         s->seen_snapshot = pp_item_snapshot_retain(instance->snapshot);
