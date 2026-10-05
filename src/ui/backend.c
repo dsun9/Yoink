@@ -107,6 +107,43 @@ static bool create_fonts(PPUIBackend *ui, PPError *error) {
   return glGetError() == GL_NO_ERROR ||
          fail(error, "Cannot upload settings fonts");
 }
+static bool refresh_density(PPUIBackend *ui, PPError *error) {
+  float density = SDL_GetWindowPixelDensity(ui->window);
+  if (!isfinite(density) || density <= 0)
+    return true; /* A temporarily unavailable driver query keeps the old atlas. */
+  float scale = ui->window_scale * density;
+  if (scale == ui->scale)
+    return true;
+  /* Build before committing: a failed allocation/upload must leave every
+   * font reference in the retained Nuklear context pointing at live storage. */
+  PPUIBackend *candidate = calloc(1, sizeof(*candidate));
+  if (!candidate)
+    return fail(error, "Cannot allocate refreshed settings fonts");
+  candidate->scale = scale;
+  if (!create_fonts(candidate, error)) {
+    if (candidate->font_texture)
+      glDeleteTextures(1, &candidate->font_texture);
+    nk_font_atlas_clear(&candidate->atlas);
+    free(candidate);
+    return false;
+  }
+  struct nk_font_atlas old_atlas = ui->atlas;
+  GLuint old_texture = ui->font_texture;
+  ui->atlas = candidate->atlas;
+  ui->body_font = candidate->body_font;
+  ui->heading_font = candidate->heading_font;
+  ui->utility_font = candidate->utility_font;
+  ui->null_texture = candidate->null_texture;
+  ui->font_texture = candidate->font_texture;
+  ui->scale = scale;
+  memcpy(ui->font_diagnostic, candidate->font_diagnostic,
+         sizeof(ui->font_diagnostic));
+  nk_style_set_font(&ui->context, &ui->body_font->handle);
+  free(candidate);
+  glDeleteTextures(1, &old_texture);
+  nk_font_atlas_clear(&old_atlas);
+  return true;
+}
 bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
                           PPError *error) {
   if (out)
@@ -372,6 +409,10 @@ void pp_ui_backend_event(PPUIBackend *ui, const PPPlatformEvent *event) {
 bool pp_ui_begin(PPUIBackend *ui, PPError *error) {
   if (!SDL_GL_MakeCurrent(ui->window, ui->gl_context))
     return fail(error, SDL_GetError());
+  /* Density can change while Settings is hidden or between queued resize
+   * events. Refresh at the frame boundary, with this backend's GL context. */
+  if (!refresh_density(ui, error))
+    return false;
   if (!ui->input_started)
     nk_input_begin(&ui->context);
   nk_input_end(&ui->context);

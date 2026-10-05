@@ -87,6 +87,13 @@ correct size/sharpness, cursor grab offset, safe release and reachable recovery.
 Repeat with the receiver fullscreen on each display and switch Spaces with
 Mission Control. These physical cases remain manual and unverified.
 
+Also move an open Settings window from density 1 to 2 and back while retaining
+an invalid item draft and focused edit field. Text and the item preview should
+refresh sharply without changing the draft, selection, focus or window size.
+The `ui_density` core test controls only SDL's density query and exercises the
+real hidden Settings/backend, fonts and GL preview in both directions; it is
+not physical Mac traversal evidence.
+
 ## Additional native follow-up
 
 Open Settings, import PNG/GIF/SVG and a permitted local font through Cocoa

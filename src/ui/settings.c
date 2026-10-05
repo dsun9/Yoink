@@ -326,8 +326,11 @@ void pp_settings_draw(PPSettings *settings) {
   }
   PPUIBackend *ui = settings->backend;
   PPError error = {0};
+  float previous_scale = ui->scale;
   if (!pp_ui_begin(ui, &error))
     goto failed;
+  if (ui->scale != previous_scale)
+    settings->editor.preview_dirty = true;
   bool modal = pp_app_ui(settings->app)->transition_pending ||
                settings->remove_confirmation;
   pp_ui_modal(ui, modal);
