@@ -81,6 +81,30 @@ does not assume that ID. Failed harness runs terminated only their owned process
 
 ## Measured application loop
 
+### Failed Settings recovery amendment
+
+Review found that a retained failed Settings renderer prevented both reopening
+Settings and tray Quit. Settings/ Quit now attempt one draw using the retained
+backend and editor; success preserves pending drafts and the original failure
+diagnostic. If rendering fails again, a native dialog offers Retry Settings,
+Cancel, and explicit Quit without saving. The discard choice clearly includes
+both unsaved project changes and pending editor drafts. Save project and quit
+is offered only when input and drafts are validated and no file chooser is open;
+the existing Save As success/cancel callback still drains while rendering fails.
+
+The lifecycle fixture injects actual hidden Settings GL context failure and
+controls only the native dialog choices/results. It covers clean/dirty projects,
+invalid and queued valid drafts, repeated failure, Cancel/Retry retention, explicit
+discard, validated Save and Save As success/cancel. The native recovery dialog
+itself was **not interactively exercised**. The six-test native pass above predates
+this amendment; pointer routing and ordinary rendering code did not change.
+Focused lifecycle, UI events/density, hidden drawer and command checks pass in
+Debug **5/5, 48.59 s** and Release **5/5, 29.33 s**. The full hidden Settings
+retained-field batch also passes. Original failing lifecycle regression is retained
+as `task11-r1-red.log`; subsequent checks use `task11-r1-*` logs.
+
+### Loop measurement conditions
+
 Release `pointy_lifecycle_test.exe --benchmark` uses the same lifecycle iteration
 as the application: native/SDL events, dialog polling, tray queue, runtime,
 real display enumeration and pointer query, scheduler and wait. A fixture

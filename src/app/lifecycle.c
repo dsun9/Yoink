@@ -34,6 +34,8 @@ static bool settings(PPLifecycle *life, PPError *error) {
   return pp_app_command(life->app,&(PPCommand){.kind=PP_COMMAND_SHOW_SETTINGS},error);
 }
 bool pp_lifecycle_action(PPLifecycle *life, PPCommandKind command, PPError *error) {
+  if(!pp_settings_recover(life->settings,error))
+    return pp_app_ui(life->app)->quit_requested;
   if(command==PP_COMMAND_SHOW_SETTINGS) return settings(life,error);
   if(!pp_settings_can_transition(life->settings)) {
     settings(life,error);

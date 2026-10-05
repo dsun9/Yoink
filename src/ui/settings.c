@@ -320,10 +320,79 @@ bool pp_settings_can_transition(PPSettings *settings) {
   }
   return true;
 }
+bool pp_settings_recover(PPSettings *settings, PPError *error) {
+  if (!settings || !settings->failed)
+    return true;
+  for (;;) {
+    /* Retain the entire editor and Nuklear input batch. A transient context or
+     * allocation error can be retried without discarding pending draft text. */
+    settings->failed = settings->backend->failed = false;
+    pp_settings_command(settings, (PPCommand){.kind=PP_COMMAND_SHOW_SETTINGS});
+    pp_settings_draw(settings);
+    if (!settings->failed) {
+      snprintf(settings->status, sizeof(settings->status),
+               "Settings recovered. Earlier rendering failure: %.430s",
+               settings->render_failure);
+      return true;
+    }
+    bool can_save = !settings->dialog_pending &&
+                    !settings->backend->input_started &&
+                    settings->pending_action == PP_PROJECT_ACTION_NONE &&
+                    !pp_settings_invalid(settings);
+    char message[1600];
+    snprintf(message, sizeof(message),
+             "Settings could not render: %.500s\n\n"
+             "Your project and pending drafts are still in memory. Retry Settings "
+             "to try the retained editor again, or Cancel to keep running.\n\n"
+             "Quit without saving discards unsaved project changes AND pending "
+             "editor drafts. %s\n\n%.400s",
+             settings->render_failure,
+             can_save ? "Save project and quit saves the validated project first."
+                      : "Saving is unavailable until pending input/invalid drafts "
+                        "are resolved in Settings and any file chooser is closed.",
+             settings->status);
+    SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel"},
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "Retry Settings"},
+        {0, 2, "Quit without saving"},
+        {0, 3, "Save project and quit"}};
+    SDL_MessageBoxData box = {.flags=SDL_MESSAGEBOX_ERROR,
+                             .title="PointyPointer Settings recovery",
+                             .message=message, .numbuttons=can_save ? 4 : 3,
+                             .buttons=buttons};
+    int choice=0;
+    if (!SDL_ShowMessageBox(&box, &choice)) {
+      if(error) *error=(PPError){PP_ERROR_PLATFORM,"Cannot show Settings recovery choices; project remains in memory"};
+      return false;
+    }
+    if (choice==1)
+      continue; /* One new draw only after an explicit Retry choice. */
+    if (choice!=2 && !(choice==3 && can_save))
+      return false;
+    /* Replace a previous New/Open/Quit confirmation with the explicit native
+     * shutdown choice. Cancelling that old transition never changes project data. */
+    if (pp_app_ui(settings->app)->transition_pending)
+      pp_settings_command(settings,(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,
+                                               .choice=PP_UNSAVED_CANCEL});
+    if (!pp_settings_command(settings,(PPCommand){.kind=PP_COMMAND_QUIT}))
+      return false;
+    if (pp_app_ui(settings->app)->transition_pending &&
+        !pp_settings_command(settings,(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,
+            .choice=choice==3 ? PP_UNSAVED_SAVE : PP_UNSAVED_DISCARD}))
+      return false;
+    if (pp_app_ui(settings->app)->needs_save_path) {
+      settings->save_for_transition=true;
+      pp_settings_dialog(settings,PP_DIALOG_SAVE_PROJECT,false);
+    }
+    return false;
+  }
+}
 void pp_settings_draw(PPSettings *settings) {
-  if (!settings || settings->failed)
+  if (!settings)
     return;
   pp_platform_poll_dialogs();
+  if (settings->failed)
+    return;
   if (!pp_app_ui(settings->app)->settings_open) {
     pp_ui_show(settings->backend, false);
     return;
@@ -411,6 +480,8 @@ void pp_settings_draw(PPSettings *settings) {
   return;
 failed:
   settings->failed = true;
+  if (!settings->render_failure[0])
+    snprintf(settings->render_failure,sizeof(settings->render_failure),"%s",error.message);
   snprintf(settings->status, sizeof(settings->status), "%s", error.message);
   pp_ui_show(ui, false);
   fprintf(stderr, "Settings closed after rendering failure: %s\n",

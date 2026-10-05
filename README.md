@@ -16,6 +16,10 @@ restored. A missing or corrupt project falls back to the default pointing hand
 and leaves a diagnostic in Settings, without overwriting the original file.
 Closing Settings preserves its drafts and keeps the application running.
 Quit offers Save, Discard or Cancel for unsaved project changes.
+If Settings rendering fails, reopening Settings or choosing Quit retries the
+retained editor. A persistent failure offers native Retry/Cancel/shutdown choices
+without silently losing drafts; saving is offered only when pending input and
+fields have been validated.
 
 First launch gives each list the hand `👉`, requested Aptos family, Noto Color
 Emoji fallback, 96 logical-pixel font size, full opacity and zero rotation.

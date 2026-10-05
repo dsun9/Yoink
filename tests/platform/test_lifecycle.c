@@ -1,4 +1,8 @@
 #undef SDL_GL_CreateContext
+#undef SDL_GL_MakeCurrent
+#undef SDL_ShowMessageBox
+#undef pp_platform_file_dialog
+#undef pp_platform_poll_dialogs
 #undef pp_surface_present
 #undef pp_platform_displays
 #include "../../src/app/lifecycle.h"
@@ -13,6 +17,43 @@
 static bool fail_context;
 static unsigned long long presentations;
 static bool offscreen;
+static SDL_Window *failed_settings_window;
+static int recovery_choice=-1, recovery_boxes;
+static bool recovery_save_expected;
+static PPDialogCallback recovery_file_callback;
+static void *recovery_file_userdata;
+static const char *recovery_file_result;
+void pp_test_file_dialog(PPDialogKind kind, const char *suggested,
+                         PPDialogCallback callback, void *userdata) {
+  (void)suggested;
+  CHECK(kind==PP_DIALOG_SAVE_PROJECT && !recovery_file_callback);
+  recovery_file_callback=callback; recovery_file_userdata=userdata;
+}
+void pp_test_poll_dialogs(void) {
+  pp_platform_poll_dialogs();
+  if(recovery_file_callback) {
+    PPDialogCallback callback=recovery_file_callback;
+    recovery_file_callback=NULL;
+    callback(recovery_file_userdata,recovery_file_result,NULL);
+  }
+}
+bool pp_test_ShowMessageBox(const SDL_MessageBoxData *box, int *choice) {
+  CHECK(recovery_choice>=0);
+  CHECK(strstr(box->message,"Injected Settings context failure"));
+  CHECK(strstr(box->message,"AND pending editor drafts"));
+  CHECK(box->numbuttons == (recovery_save_expected ? 4 : 3));
+  recovery_boxes++;
+  *choice=recovery_choice;
+  if(*choice==1) failed_settings_window=NULL;
+  return true;
+}
+bool pp_test_GL_MakeCurrent(SDL_Window *window, SDL_GLContext context) {
+  if (failed_settings_window && window == failed_settings_window) {
+    SDL_SetError("Injected Settings context failure");
+    return false;
+  }
+  return SDL_GL_MakeCurrent(window, context);
+}
 bool pp_benchmark_displays(PPDisplay **out,size_t *count,PPError *error) {
   bool ok=pp_platform_displays(out,count,error);
   /* Keep the real display-query cost; translate only presentation geometry. */
@@ -51,6 +92,123 @@ static void test_shell_reconstruction(void) {
   puts("PASS owned tray icon delete + TaskbarCreated restores shell icon; Explorer untouched");
 }
 #endif
+static void test_failed_settings(void) {
+  for (int dirty=0; dirty<2; dirty++) {
+    PPError error={0}; PPLifecycle life={0};
+    CHECK(pp_lifecycle_start(&life, &(PPAppOptions){.preferences_directory=""}, &error));
+    CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+    life.settings->render_hidden=true;
+    pp_settings_draw(life.settings);
+    if (dirty)
+      CHECK(pp_app_command(life.app, &(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Unsaved recovery"}, &error));
+    PPSettings *retained=life.settings;
+    failed_settings_window=life.settings->backend->window;
+    pp_settings_draw(life.settings);
+    CHECK(life.settings->failed && strstr(life.settings->status,"Injected Settings"));
+    failed_settings_window=NULL;
+    CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+    CHECK(life.settings==retained && !life.settings->failed);
+    CHECK(pp_lifecycle_action(&life, PP_COMMAND_QUIT, &error));
+    CHECK(pp_app_ui(life.app)->transition_pending == (dirty!=0));
+    CHECK(pp_app_ui(life.app)->quit_requested == (dirty==0));
+    if(dirty) {
+      CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_CANCEL},&error));
+      CHECK(!pp_app_ui(life.app)->quit_requested && pp_app_dirty(life.app));
+    }
+    pp_lifecycle_stop(&life);
+  }
+  puts("PASS failed Settings retry retains instance; clean Quit and dirty Cancel reachable");
+}
+static void test_persistent_settings_failure(void) {
+  for(int dirty=0;dirty<2;dirty++) for(int invalid=0;invalid<2;invalid++) {
+    PPError error={0}; PPLifecycle life={0};
+    CHECK(pp_lifecycle_start(&life,&(PPAppOptions){.preferences_directory=""},&error));
+    CHECK(pp_lifecycle_action(&life,PP_COMMAND_SHOW_SETTINGS,&error));
+    PPSettings *retained=life.settings;
+    retained->render_hidden=true; pp_settings_draw(retained);
+    if(dirty) CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Keep unsaved"},&error));
+    if(invalid) {
+      strcpy(retained->editor.size,"0");
+      strcpy(retained->editor.appearance_error,"Size is invalid");
+    }
+    failed_settings_window=retained->backend->window;
+    pp_settings_draw(retained); CHECK(retained->failed);
+    recovery_save_expected=!invalid; recovery_choice=0; recovery_boxes=0;
+    CHECK(!pp_lifecycle_action(&life,PP_COMMAND_QUIT,&error));
+    CHECK(recovery_boxes==1 && life.settings==retained && retained->failed);
+    CHECK(!pp_app_ui(life.app)->quit_requested && pp_app_dirty(life.app)==(dirty!=0));
+    if(invalid) CHECK(!strcmp(retained->editor.size,"0") && pp_settings_invalid(retained));
+    recovery_choice=1;
+    CHECK(pp_lifecycle_action(&life,PP_COMMAND_SHOW_SETTINGS,&error));
+    CHECK(recovery_boxes==2 && !retained->failed);
+    CHECK(strstr(retained->status,"Earlier rendering failure"));
+    if(invalid) CHECK(!strcmp(retained->editor.size,"0") && pp_settings_invalid(retained));
+    /* Fail again with unconsumed valid text queued: Save must not bypass it. */
+    pp_ui_focus(retained->backend,"project-name");
+    pp_settings_draw(retained);
+    PPPlatformEvent text={.kind=PP_EVENT_TEXT,.window_id=pp_settings_window_id(retained),.codepoint='X'};
+    pp_settings_event(retained,&text);
+    CHECK(retained->backend->input_started);
+    failed_settings_window=retained->backend->window; pp_settings_draw(retained);
+    recovery_save_expected=false; recovery_choice=0;
+    CHECK(!pp_lifecycle_action(&life,PP_COMMAND_QUIT,&error));
+    CHECK(retained->backend->input_started && retained->backend->context.input.keyboard.text_len>0);
+    CHECK(!pp_app_ui(life.app)->quit_requested);
+    recovery_choice=2;
+    CHECK(pp_lifecycle_action(&life,PP_COMMAND_QUIT,&error));
+    CHECK(pp_app_ui(life.app)->quit_requested);
+    failed_settings_window=NULL; recovery_choice=-1;
+    pp_lifecycle_stop(&life);
+  }
+  puts("PASS persistent Settings failure: clean/dirty, invalid/queued drafts, Cancel/Retry retention and explicit discard Quit");
+}
+static void test_failed_settings_save(void) {
+  PPError error={0}; PPLifecycle life={0}; char path[256];
+  snprintf(path,sizeof(path),"recovery-save-%llu.pointy",(unsigned long long)SDL_GetPerformanceCounter());
+  CHECK(pp_lifecycle_start(&life,&(PPAppOptions){.preferences_directory=""},&error));
+  CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_SAVE_AS,.path=path},&error));
+  CHECK(pp_lifecycle_action(&life,PP_COMMAND_SHOW_SETTINGS,&error));
+  life.settings->render_hidden=true; pp_settings_draw(life.settings);
+  CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Saved by recovery"},&error));
+  failed_settings_window=life.settings->backend->window; pp_settings_draw(life.settings);
+  recovery_save_expected=true; recovery_choice=3;
+  CHECK(pp_lifecycle_action(&life,PP_COMMAND_QUIT,&error));
+  CHECK(pp_app_ui(life.app)->quit_requested && !pp_app_dirty(life.app));
+  PPProject *saved=NULL;
+  CHECK(pp_project_load(path,pp_app_assets(life.app),&saved,&error));
+  CHECK(!strcmp(pp_project_name(saved),"Saved by recovery")); pp_project_destroy(saved);
+  failed_settings_window=NULL; recovery_choice=-1; pp_lifecycle_stop(&life);
+  CHECK(SDL_RemovePath(path));
+  puts("PASS persistent Settings failure saves validated dirty project before Quit");
+}
+static void test_failed_settings_save_dialog(void) {
+  for(int cancel=0;cancel<2;cancel++) {
+    PPError error={0}; PPLifecycle life={0}; char path[256];
+    snprintf(path,sizeof(path),"recovery-dialog-%llu.pointy",(unsigned long long)SDL_GetPerformanceCounter());
+    CHECK(pp_lifecycle_start(&life,&(PPAppOptions){.preferences_directory=""},&error));
+    CHECK(pp_lifecycle_action(&life,PP_COMMAND_SHOW_SETTINGS,&error));
+    life.settings->render_hidden=true; pp_settings_draw(life.settings);
+    CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="New unsaved project"},&error));
+    failed_settings_window=life.settings->backend->window; pp_settings_draw(life.settings);
+    recovery_save_expected=true; recovery_choice=3; recovery_file_result=cancel ? NULL : path;
+    CHECK(!pp_lifecycle_action(&life,PP_COMMAND_QUIT,&error));
+    CHECK(life.settings->dialog_pending && recovery_file_callback);
+    CHECK(!pp_app_ui(life.app)->quit_requested);
+    /* Even the failed renderer must drain the deferred file-dialog result. */
+    pp_settings_draw(life.settings);
+    CHECK(!life.settings->dialog_pending && !recovery_file_callback);
+    CHECK(pp_app_ui(life.app)->quit_requested == !cancel);
+    CHECK(pp_app_dirty(life.app) == (cancel!=0));
+    CHECK(!pp_app_ui(life.app)->transition_pending);
+    if(!cancel) {
+      PPProject *saved=NULL; CHECK(pp_project_load(path,pp_app_assets(life.app),&saved,&error));
+      CHECK(!strcmp(pp_project_name(saved),"New unsaved project")); pp_project_destroy(saved);
+      CHECK(SDL_RemovePath(path));
+    }
+    failed_settings_window=NULL; recovery_choice=-1; pp_lifecycle_stop(&life);
+  }
+  puts("PASS failed Settings drains deferred Save As success/cancel without losing unsaved state");
+}
 static void test_lifecycle(void) {
   PPError error = {0}; PPLifecycle life = {0};
   CHECK(pp_lifecycle_start(&life, &(PPAppOptions){.preferences_directory=""}, &error));
@@ -168,5 +326,7 @@ static void benchmark(const char *mode) {
 }
 int main(int argc,char **argv) {
   if(argc==2 && !strcmp(argv[1],"--benchmark")) { benchmark("empty");benchmark("static");benchmark("gif");return 0; }
-  test_gl_failure(); test_lifecycle(); test_last_project(); return 0;
+  test_gl_failure(); test_failed_settings(); test_persistent_settings_failure();
+  test_failed_settings_save(); test_failed_settings_save_dialog();
+  test_lifecycle(); test_last_project(); return 0;
 }

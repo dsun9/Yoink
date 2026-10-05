@@ -34,6 +34,7 @@ struct PPSettings {
   char activation[32], rotation[32], resize[32], easing[32],
       interaction_error[512];
   char status[512];
+  char render_failure[512];
   uint64_t generation, revision;
   bool dialog_pending, save_for_transition, failed, remove_confirmation;
   bool render_hidden; /* Harness-only: exercise the actual renderer without
