@@ -1,4 +1,5 @@
 #include "settings_internal.h"
+#include <ctype.h>
 #include <errno.h>
 #include <math.h>
 #include <stdio.h>
@@ -160,7 +161,10 @@ static void commit(PPSettings *settings) {
     item.text_style.requested_family = editor->family;
     unsigned r, g, b;
     char extra;
-    if (strlen(editor->color) != 7 || editor->color[0] != '#' ||
+    bool hex_digits = strlen(editor->color) == 7;
+    for (size_t i = 1; hex_digits && i < 7; i++)
+      hex_digits = isxdigit((unsigned char)editor->color[i]) != 0;
+    if (!hex_digits || editor->color[0] != '#' ||
         sscanf(editor->color + 1, "%2x%2x%2x%c", &r, &g, &b, &extra) != 3) {
       snprintf(editor->appearance_error, sizeof(editor->appearance_error),
                "Text color: enter six hexadecimal digits, such as #203547.");

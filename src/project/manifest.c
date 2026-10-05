@@ -1,4 +1,5 @@
 #include "store_internal.h"
+#include "../media/fonts_internal.h"
 #include "pointy/sha256.h"
 #include <math.h>
 #include <stdlib.h>
@@ -98,14 +99,17 @@ static bool portable_text(PPAssets *assets, const PPItem *item, PPError *error) 
     if (diagnostics.missing_requested_families) {
         PPAsset *fallback = pp_asset_retain(assets, style->fallback_asset);
         PPFontInfo info;
-        bool default_hand =
+        /* Draw diagnostics omit empty .notdef bitmaps. Check shaped glyph
+         * indices too before permitting an absent primary family. */
+        bool covered_emoji =
             zero_id(style->primary_asset) && style->requested_family &&
-            !strcmp(style->requested_family, "Aptos") && !strcmp(item->text, "\xf0\x9f\x91\x89") &&
+            !strcmp(style->requested_family, "Aptos") &&
             fallback &&
             pp_font_inspect(pp_asset_source(fallback), style->fallback_face, &info, error) &&
-            !strcmp(info.family, "Noto Color Emoji");
+            !strcmp(info.family, "Noto Color Emoji") &&
+            pp_font_resolves_text(pp_asset_source(fallback), style->fallback_face, item->text, error);
         pp_asset_release(fallback);
-        if (!default_hand)
+        if (!covered_emoji)
             return pp_store_error(error, PP_ERROR_FORMAT, "Requested font family is unresolved");
     }
     return true;

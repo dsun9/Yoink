@@ -82,7 +82,8 @@ $stderr = Join-Path $root "build/$LogPrefix-desktop-stderr.log"
 $exitCode = 1
 try {
     $ctest = (Get-Command ctest).Source
-    $arguments = @('--preset', 'windows-dev', '-C', $Configuration, '-L', 'desktop', '--stop-on-failure', '--output-on-failure')
+    $preset = if ($Configuration -eq 'Release') { 'windows-release' } else { 'windows-dev' }
+    $arguments = @('--preset', $preset, '-C', $Configuration, '-L', 'desktop', '--stop-on-failure', '--output-on-failure')
     if ($TestRegex) { $arguments += @('-R', $TestRegex) }
     $exitCode = Invoke-PointyBoundedProcess $ctest $arguments $log $stderr
 } finally {

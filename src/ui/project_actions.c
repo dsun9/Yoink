@@ -77,15 +77,8 @@ static void selected_file(void *userdata, const char *path,
                "Imported into this project. Save to keep these changes.");
   }
 }
-void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
-                        bool add_image) {
-  if (settings->dialog_pending)
-    return;
-  settings->dialog_kind = kind;
-  settings->dialog_anchor = pp_app_ui(settings->app)->anchor;
-  settings->dialog_item =
-      add_image ? 0 : pp_app_ui(settings->app)->selected_item;
-  settings->dialog_generation = pp_app_generation(settings->app);
+static void dispatch_dialog(PPSettings *settings) {
+  PPDialogKind kind = settings->dialog_kind;
   settings->dialog_pending = true;
   pp_platform_dialog_parent(pp_settings_window_id(settings));
   const char *path = pp_app_path(settings->app);
@@ -94,6 +87,22 @@ void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
                           : kind == PP_DIALOG_SAVE_PROJECT ? "Untitled.pointy"
                                                            : NULL,
                           selected_file, settings);
+}
+void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
+                        bool add_image) {
+  if (settings->dialog_pending ||
+      (settings->drawing_fields && settings->pending_action != PP_PROJECT_ACTION_NONE))
+    return;
+  settings->dialog_kind = kind;
+  settings->dialog_anchor = pp_app_ui(settings->app)->anchor;
+  settings->dialog_item = add_image ? 0 : pp_app_ui(settings->app)->selected_item;
+  settings->dialog_generation = pp_app_generation(settings->app);
+  /* Capture the intended target, but leave fields enabled until the entire
+   * input batch has traversed the shared validation boundary. */
+  if (settings->drawing_fields)
+    settings->pending_action = PP_PROJECT_ACTION_DIALOG;
+  else
+    dispatch_dialog(settings);
 }
 void pp_project_request_action(PPSettings *settings, PPProjectAction action) {
   /* A frame accepts one project action, just as an open modal or chooser does.
@@ -121,6 +130,9 @@ void pp_project_apply_action(PPSettings *settings) {
     return;
   }
   switch (action) {
+  case PP_PROJECT_ACTION_DIALOG:
+    dispatch_dialog(settings);
+    break;
   case PP_PROJECT_ACTION_NEW:
     pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_NEW});
     break;

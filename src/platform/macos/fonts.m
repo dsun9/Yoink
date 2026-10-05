@@ -2,7 +2,6 @@
 #import <CoreText/CoreText.h>
 #include <stdlib.h>
 #include <string.h>
-void pp_blob_destroy(PPBlob *blob) {if(blob){free(blob->data);*blob=(PPBlob){0};}}
 bool pp_platform_find_font(const char *family,PPBlob *out,PPError *error) {
     if(out)*out=(PPBlob){0};
     if(!family||!out)return pp_mac_error(error,PP_ERROR_ARGUMENT,"Missing font family or output");

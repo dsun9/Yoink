@@ -36,11 +36,21 @@ bool pp_settings_create_scaled(PPSettings **out, PPApp *app, float scale,
                                PPError *error) {
   if (out)
     *out = NULL;
-  if (!out || !app)
+  if (!out || !app) {
+    if (error) {
+      error->code = PP_ERROR_ARGUMENT;
+      snprintf(error->message, sizeof(error->message), "Settings requires an app and output pointer");
+    }
     return false;
+  }
   PPSettings *settings = calloc(1, sizeof(*settings));
-  if (!settings)
+  if (!settings) {
+    if (error) {
+      error->code = PP_ERROR_MEMORY;
+      snprintf(error->message, sizeof(error->message), "Cannot allocate Settings");
+    }
     return false;
+  }
   settings->app = app;
   PPUIWindowOptions options = {"PointyPointer settings",
                                pp_app_ui(app)->geometry, scale, true};

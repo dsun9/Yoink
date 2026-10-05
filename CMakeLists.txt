@@ -16,7 +16,7 @@ add_library(pointy_assets STATIC src/core/sha256.c src/media/assets.c src/media/
 target_sources(pointy_assets PRIVATE src/media/fonts.c src/media/text.c src/media/text_raster.c)
 target_include_directories(pointy_assets PUBLIC include)
 target_link_libraries(pointy_assets PRIVATE SDL3_image::SDL3_image-static SDL3::SDL3-static plutosvg::plutosvg expat::expat)
-target_link_libraries(pointy_assets PRIVATE SDL3_ttf::SDL3_ttf-static Freetype::Freetype)
+target_link_libraries(pointy_assets PRIVATE SDL3_ttf::SDL3_ttf-static Freetype::Freetype harfbuzz::harfbuzz)
 if(NOT MSVC)
   target_link_libraries(pointy_assets PRIVATE m)
 endif()
@@ -60,7 +60,7 @@ elseif(APPLE)
     src/platform/macos/files.m src/platform/macos/dialogs.m src/platform/macos/tray.m)
   target_include_directories(pointy_platform PUBLIC include)
   target_compile_options(pointy_platform PRIVATE -fno-objc-arc -fblocks)
-  target_link_libraries(pointy_platform PRIVATE SDL3::SDL3-static
+  target_link_libraries(pointy_platform PRIVATE pointy_assets SDL3::SDL3-static
     "-framework Cocoa" "-framework CoreGraphics" "-framework CoreText")
   target_link_libraries(pointy_model PRIVATE pointy_platform)
   target_link_libraries(pointy_store PRIVATE pointy_platform)

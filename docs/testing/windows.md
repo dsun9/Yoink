@@ -23,8 +23,9 @@ The wrapper has a 180-second outer timeout and kills only its owned test tree.
 Focused diagnostics can select `-TestRegex '^sprite_flow$'` and a distinct
 `-LogPrefix`; preserve original failed-run evidence instead of overwriting logs.
 No test restarts or terminates the user's Explorer process.
+`-Configuration Release` selects `windows-release`; Debug selects `windows-dev`.
 
-## Current evidence
+## Task 11 evidence before the final fix wave
 
 - Final amended non-desktop Debug: **22/22**, 54.07 s, exit 0.
 - Final amended non-desktop Release: **22/22**, 30.67 s, exit 0. Test targets explicitly
@@ -78,6 +79,48 @@ Its generic posted thread `WM_QUIT` was consumed by SDL's message pump; the
 successful check invokes the actual owned tray Quit callback using the pinned
 SDL fresh-process menu ID. Production code uses registered entry callbacks and
 does not assume that ID. Failed harness runs terminated only their owned process.
+
+## Final consolidated fix evidence
+
+The final wave corrects import/replace chooser ordering, missing-Aptos fallback
+portability, strict six-digit color validation, Settings construction diagnostics
+and the Release acceptance preset. It also removes the macOS duplicate shared
+blob-destroy symbol; Apple compile/link/runtime remain NOT RUN.
+
+Fresh all-target Debug and Release builds pass. Full non-desktop suites pass
+Debug **22/22, 82.46 s**, Release **22/22, 46.00 s**, exit 0. Original RED output
+shows a queued size edit lost when Import image opens and a two-hand Noto-only
+project rejected as an unresolved family. The actual hidden Settings/GL/Nuklear
+fixture now covers text/size edits followed by Import image, Import font and
+Replace image, invalid-draft blocking, canceled chooser retention, correct
+targets, changed replacement content and preserved appearance. Only chooser
+callbacks are controlled; these batched cases are not native chooser interaction.
+Debug and Release hidden runs also preserve Save/New/close/selection/add/remove,
+modal/focus, popup and density coverage. Signed hex color drafts remain visible
+and blocked; mixed-case six-digit colors apply. Invalid Settings construction
+supplies an argument error; allocation failure supplies a memory error.
+
+Storage tests save/reopen multiple hands, another emoji, multiline emoji,
+covered ZWJ and variation-selector sequences without a primary font. A fresh
+asset store reproduces the source raster bytes and font notices. Mixed Latin
+plus emoji, unassigned glyphs and another absent family reject saving and
+preserve the original package. The fallback coverage check includes shaped
+glyph indices because an empty .notdef bitmap can be absent from draw-operation
+diagnostics. Existing restricted-font/collection and archive rejection tests pass.
+
+One focused native **Release Settings 1/1** passed in **19.61 s** (CTest 19.70 s)
+through the corrected `windows-release` wrapper. Inner and outer input/cursor/
+foreground restoration succeeded, and no owned Settings/receiver process remained.
+The prior six-test Debug desktop batch remains historical evidence; this wave
+does not claim a fresh six-test run. Native recovery-dialog interaction, physical
+second-display/mixed-DPI/disconnect/fullscreen checks, Mac execution and triggered
+CI remain unavailable or unexecuted as described elsewhere.
+
+Original `build/final-fix-*.log` files preserve RED, intermediate failed coverage,
+GREEN, build, full-suite and focused native evidence. Configure still reports
+the upstream miniz deprecation, and Release test compilation reports intentional
+`/UNDEBUG` override warnings. Historical HarfBuzz C4312 output remains documented
+in earlier logs; incremental final builds do not erase that warning history.
 
 ## Measured application loop
 

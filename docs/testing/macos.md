@@ -6,6 +6,11 @@ The Windows regression results below do not establish Mac parity. In particular,
 tiny nonzero alpha, immediate first-click selection, changing-frame hit selection,
 background capture/wheel delivery, Retina and Spaces remain acceptance gates.
 
+The final source correction removes the duplicate macOS `pp_blob_destroy`
+definition and links the Apple platform target to the shared `pointy_assets`
+implementation. This resolves the source-level duplicate symbol; an Apple
+configure, Objective-C compile and link remain **NOT RUN** here.
+
 ## Build and automated acceptance on a Mac
 
 Use macOS 11 or newer, Xcode command-line tools, CMake 3.24+ and Ninja. Keep the

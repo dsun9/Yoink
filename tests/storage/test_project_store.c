@@ -285,10 +285,37 @@ static void test_missing_aptos_default_and_unresolved_text(void) {
     CHECK(
         strstr(pp_project_notice(loaded, item.text_style.fallback_asset), "SIL OPEN FONT LICENSE"));
     uint8_t hash[32];
+    const char *covered[] = {"\xf0\x9f\x91\x89\xf0\x9f\x91\x89",
+                            "\xf0\x9f\x98\x80", "\xf0\x9f\x91\x89\n\xf0\x9f\x98\x80",
+                            "\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb",
+                            "\xf0\x9f\x91\x89\xef\xb8\x8f"};
+    for (size_t i = 0; i < sizeof(covered) / sizeof(covered[0]); i++) {
+        item.text = covered[i];
+        CHECK(pp_project_edit_item(project, id, &item, &error));
+        PPFrame frame = {0}; PPTextDiagnostics diagnostics;
+        CHECK(pp_text_render(assets, item.text, &item.text_style, 1, &frame, &diagnostics, &error));
+        CHECK(diagnostics.missing_requested_families && !diagnostics.missing_glyphs);
+        pp_frame_destroy(&frame);
+        CHECK(pp_project_save(project, package, &error));
+        pp_project_destroy(loaded); pp_assets_destroy(fresh);
+        CHECK(pp_assets_create(&fresh, &error));
+        CHECK(pp_project_load(package, fresh, &loaded, &error));
+        compare_projects(project, loaded);
+        CHECK(strstr(pp_project_notice(loaded, item.text_style.fallback_asset), "SIL OPEN FONT LICENSE"));
+    }
     digest_file(package, hash);
     /* Noto cannot cover A; rendering .notdef is allowed by the editor but must
        never turn an unresolved family/glyph into a portable saved project. */
     item.text = "A\xf0\x9f\x91\x89";
+    CHECK(pp_project_edit_item(project, id, &item, &error));
+    CHECK(!pp_project_save(project, package, &error));
+    assert_reopens(hash);
+    item.text = "\xf0\x9f\x91\x89\xf4\x8f\xbf\xbf";
+    CHECK(pp_project_edit_item(project, id, &item, &error));
+    CHECK(!pp_project_save(project, package, &error));
+    assert_reopens(hash);
+    item.text = "\xf0\x9f\x91\x89";
+    item.text_style.requested_family = "Absent Other Family";
     CHECK(pp_project_edit_item(project, id, &item, &error));
     CHECK(!pp_project_save(project, package, &error));
     assert_reopens(hash);

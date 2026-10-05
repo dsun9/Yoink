@@ -3,6 +3,8 @@
 #include "pointy/platform.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include <hb.h>
+#include <hb-ot.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +14,44 @@ void pp_blob_destroy(PPBlob *blob) {
     if (!blob) return;
     free(blob->data);
     memset(blob, 0, sizeof(*blob));
+}
+
+bool pp_font_resolves_text(PPBytes bytes, int face_index, const char *utf8, PPError *error) {
+    if (!bytes.data || !bytes.size || bytes.size > UINT_MAX || face_index < 0 || !utf8)
+        return pp_media_error(error, PP_ERROR_ARGUMENT, "Invalid font coverage input");
+    hb_blob_t *blob = hb_blob_create((const char *)bytes.data, (unsigned)bytes.size,
+                                    HB_MEMORY_MODE_READONLY, NULL, NULL);
+    hb_face_t *face = hb_face_create(blob, (unsigned)face_index);
+    hb_font_t *font = hb_font_create(face);
+    hb_ot_font_set_funcs(font);
+    hb_buffer_t *buffer = hb_buffer_create();
+    bool ok = hb_blob_get_length(blob) != 0 && hb_face_get_glyph_count(face) != 0 &&
+              font != hb_font_get_empty() && hb_buffer_allocation_successful(buffer);
+    /* Match layout boundaries; shape whole runs so ZWJ/variation-selector
+     * sequences resolve as clusters rather than requiring standalone glyphs. */
+    for (const char *run = utf8; ok && *run;) {
+        size_t length = strcspn(run, "\r\n\t");
+        if (length > INT_MAX) { ok = false; break; }
+        if (length) {
+            hb_buffer_clear_contents(buffer);
+            hb_buffer_set_flags(buffer, HB_BUFFER_FLAG_REMOVE_DEFAULT_IGNORABLES);
+            hb_buffer_add_utf8(buffer, run, (int)length, 0, (int)length);
+            hb_buffer_guess_segment_properties(buffer);
+            hb_shape(font, buffer, NULL, 0);
+            unsigned count;
+            const hb_glyph_info_t *glyphs = hb_buffer_get_glyph_infos(buffer, &count);
+            ok = hb_buffer_allocation_successful(buffer);
+            for (unsigned i = 0; ok && i < count; i++) ok = glyphs[i].codepoint != 0;
+        }
+        run += length;
+        if (*run) run++;
+    }
+    hb_buffer_destroy(buffer);
+    hb_font_destroy(font);
+    hb_face_destroy(face);
+    hb_blob_destroy(blob);
+    return ok || pp_media_error(error, PP_ERROR_FORMAT,
+                               "Text contains unresolved glyphs in the embedded fallback");
 }
 
 void pp_font_embedding_flags(uint16_t flags, PPFontInfo *info) {

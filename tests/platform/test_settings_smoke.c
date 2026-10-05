@@ -1,3 +1,4 @@
+#undef pp_platform_file_dialog
 #include "../../src/platform/windows/windows_internal.h"
 #include "../../src/ui/settings_internal.h"
 #include "../test.h"
@@ -20,6 +21,27 @@ static bool focus_diagnostic;
 static unsigned sprite_presses;
 static unsigned normalized_down_keys;
 static char test_directory[MAX_PATH], package[MAX_PATH], preferences[MAX_PATH];
+static bool controlled_dialog;
+static PPDialogCallback controlled_callback;
+static void *controlled_userdata;
+static unsigned controlled_dispatches;
+void pp_test_file_dialog(PPDialogKind kind, const char *suggested,
+                         PPDialogCallback callback, void *userdata) {
+  if (!controlled_dialog) {
+    pp_platform_file_dialog(kind, suggested, callback, userdata);
+    return;
+  }
+  CHECK(!controlled_callback);
+  controlled_dispatches++;
+  controlled_callback = callback;
+  controlled_userdata = userdata;
+}
+static void finish_controlled_dialog(const char *path) {
+  CHECK(controlled_callback);
+  PPDialogCallback callback = controlled_callback;
+  controlled_callback = NULL;
+  callback(controlled_userdata, path, NULL);
+}
 static bool restore_foreground(const char *stage) {
   HWND before = GetForegroundWindow();
   DWORD target_process = 0, current_process = 0;
@@ -734,7 +756,138 @@ static void hidden_cancel_focus(void) {
   pp_app_destroy(app);
   app = NULL;
 }
+static void hidden_batched_imports(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t text_id = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_IMAGE,
+      .anchor = anchor, .path = PP_MEDIA_FIXTURES "/alpha.png"}, &error));
+  uint64_t image_id = pp_app_ui(app)->selected_item;
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  controlled_dialog = true;
+  const char *actions[] = {"add-image", "import-font", "replace-image"};
+  for (int action = 0; action < 3; action++) {
+    /* Add-image also covers the text field below the selection column. */
+    for (int field = 0; field < (action == 0 ? 2 : 1); field++) {
+      for (int invalid = 0; invalid < 2; invalid++) {
+        uint64_t id = action == 2 ? image_id : text_id;
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM,
+                                                .item_id = id}, &error));
+        PPItem baseline = *pp_project_item(pp_app_project(app), id);
+        if (action == 2) {
+          baseline.image_longest_dip = 64;
+          baseline.angle_deg = 23;
+          baseline.opacity = .65;
+        }
+        else { baseline.text = "Before"; baseline.text_style.font_size_dip = 64; }
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                           .item_id = id, .item = &baseline}, &error));
+        pp_settings_revert(settings);
+        pump(30);
+        bool text_field = action == 0 && field == 1;
+        pp_ui_focus(settings->backend, text_field ? "item-text" : "item-size");
+        pump(30);
+        hidden_key(PP_KEY_A, PP_MOD_CONTROL);
+        pp_settings_draw(settings);
+        unsigned before = controlled_dispatches;
+        size_t count = pp_project_anchor(pp_app_project(app), anchor)->count;
+        fprintf(stderr, "Controlled batched %s %s + %s\n",
+                invalid ? "invalid" : "valid", text_field ? "text" : "size", actions[action]);
+        hidden_text(text_field ? (invalid ? " " : "After") : (invalid ? "0" : "120"));
+        hidden_click(actions[action]);
+        pp_settings_draw(settings);
+        const PPItem *edited = pp_project_item(pp_app_project(app), id);
+        CHECK(!settings->failed && pp_settings_invalid(settings) == (invalid != 0));
+        CHECK(controlled_dispatches == before + (invalid ? 0 : 1));
+        CHECK(settings->dialog_pending == !invalid);
+        if (text_field) {
+          CHECK(!strcmp(edited->text, invalid ? "Before" : "After"));
+          CHECK(!strcmp(settings->editor.text, invalid ? " " : "After"));
+        } else {
+          CHECK((action == 2 ? edited->image_longest_dip : edited->text_style.font_size_dip) ==
+                (invalid ? 64 : 120));
+          CHECK(!strcmp(settings->editor.size, invalid ? "0" : "120"));
+        }
+        CHECK(pp_app_ui(app)->anchor == anchor && pp_app_ui(app)->selected_item == id);
+        if (!invalid) {
+          CHECK(settings->dialog_anchor == anchor && settings->dialog_item == (action == 0 ? 0 : id));
+          /* Cancellation retains the committed edit and the original binding. */
+          finish_controlled_dialog(NULL);
+          pp_settings_draw(settings);
+          CHECK(!settings->dialog_pending && !pp_settings_invalid(settings));
+          CHECK(pp_app_ui(app)->selected_item == id);
+          /* Dispatch once more and exercise the captured add/replacement target. */
+          hidden_click(actions[action]);
+          pp_settings_draw(settings);
+          finish_controlled_dialog(action == 1 ? PP_FONT_FIXTURES "/PointyFixture.ttc"
+              : action == 2 ? PP_MEDIA_FIXTURES "/changing-alpha.gif"
+                            : PP_MEDIA_FIXTURES "/alpha.png");
+          pp_settings_draw(settings);
+          CHECK(pp_project_anchor(pp_app_project(app), anchor)->count == count + (action == 0 ? 1 : 0));
+          if (action == 0) CHECK(pp_app_ui(app)->selected_item != id);
+          else CHECK(pp_app_ui(app)->selected_item == id);
+          const PPItem *imported = pp_project_item(pp_app_project(app), id);
+          if (action == 1) {
+            PPAsset *font = pp_asset_retain(pp_app_assets(app), imported->text_style.primary_asset);
+            PPFontInfo info;
+            CHECK(font && pp_font_inspect(pp_asset_source(font), imported->text_style.primary_face,
+                                          &info, &error));
+            CHECK(info.face_count == 2 && !strcmp(imported->text_style.requested_family, info.family));
+            pp_asset_release(font);
+          }
+          if (action == 2) {
+            PPAsset *image = pp_asset_retain(pp_app_assets(app), imported->image_asset);
+            CHECK(image && pp_asset_kind(image) == PP_ASSET_GIF);
+            CHECK(memcmp(&baseline.image_asset, &imported->image_asset, sizeof(PPAssetId)));
+            CHECK(imported->image_longest_dip == 120 && imported->angle_deg == 23 && imported->opacity == .65);
+            pp_asset_release(image);
+          }
+        }
+        CHECK(!IsWindowVisible(window()) && GetForegroundWindow() != window());
+      }
+    }
+  }
+  controlled_dialog = false;
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS real hidden GL/Nuklear batched import intents, validation, cancellation and targets (controlled chooser callback).");
+}
+static void hidden_color_validation(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  pump(30);
+  uint64_t id = pp_app_ui(app)->selected_item;
+  uint8_t before[4];
+  memcpy(before, pp_project_item(pp_app_project(app), id)->text_style.color, 4);
+  pp_ui_focus(settings->backend, "text-color"); pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("#-1FFFF"); pp_settings_draw(settings);
+  CHECK(settings->editor.appearance_error[0]);
+  CHECK(!memcmp(before, pp_project_item(pp_app_project(app), id)->text_style.color, 4));
+  CHECK(!strcmp(settings->editor.color, "#-1FFFF"));
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("#aB19Ef"); pp_settings_draw(settings);
+  CHECK(!pp_settings_invalid(settings));
+  const uint8_t *color = pp_project_item(pp_app_project(app), id)->text_style.color;
+  CHECK(color[0] == 0xab && color[1] == 0x19 && color[2] == 0xef);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS signed hex color rejected with retained draft; mixed-case hex applies.");
+}
 static void render_only(void) {
+  hidden_batched_imports();
+  hidden_color_validation();
+  PPSettings *invalid_settings = (PPSettings *)(uintptr_t)1;
+  PPError argument_error = {0};
+  CHECK(!pp_settings_create(&invalid_settings, NULL, &argument_error));
+  CHECK(!invalid_settings && argument_error.code == PP_ERROR_ARGUMENT && argument_error.message[0]);
+  argument_error = (PPError){0};
+  CHECK(!pp_settings_create(NULL, NULL, &argument_error));
+  CHECK(argument_error.code == PP_ERROR_ARGUMENT && argument_error.message[0]);
   hidden_cancel_focus();
   hidden_retained_editor_actions();
   hidden_batched_project_actions();

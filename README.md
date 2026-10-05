@@ -49,7 +49,9 @@ Settings provides eight shared ordered lists, default selection, enable/disable,
 text/emoji appearance, permitted font import, and PNG/GIF/SVG import. Ctrl+N,
 Ctrl+O, Ctrl+S and Ctrl+Shift+S select New, Open, Save and Save As. Invalid drafts
 must be corrected or reverted before project transitions; hiding Settings
-retains them. Dialog results are applied on the serialized main thread.
+retains them. Import and replacement choosers open only after queued edits have
+been consumed and validated; cancellation preserves those edits. Dialog results
+are applied on the serialized main thread.
 
 A `.pointy` project embeds owned source bytes, full permitted font files and
 notices. It does not depend on the original imported paths. The Unicode project
@@ -72,7 +74,9 @@ An import accepts at most 256 MiB of source bytes; portable packages are stricte
 64 MiB per source, 512 MiB total declared/extracted data, 2 MiB manifest, and
 4096 ZIP entries/items. Project names are 1–255 UTF-8 bytes. Font embedding must
 be installable/editable for every face; unavailable families or missing glyphs
-can block portable saving. See [project format](docs/project-format.md) for the
+can block portable saving. When Aptos is absent, text fully covered by embedded
+permitted Noto Color Emoji remains portable, including multiple or multiline
+emoji. See [project format](docs/project-format.md) for the
 complete schema and validation rules.
 
 ## Build and check
