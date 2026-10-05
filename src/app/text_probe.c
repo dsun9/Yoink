@@ -3,10 +3,11 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "../media/resources.h"
 
 static bool import_file(PPAssets *assets, const char *path, PPAssetId *id, PPError *error) {
     size_t size = 0;
-    void *data = SDL_LoadFile(path, &size);
+    void *data = pp_resource_load(path, &size);
     if (!data) {
         snprintf(error->message, sizeof(error->message), "%s", SDL_GetError());
         return false;
@@ -30,7 +31,7 @@ int pp_text_probe(unsigned duration_ms) {
     style.color[3] = 255;
     int result = 1;
     if (!pp_assets_create(&assets, &error) ||
-        !import_file(assets, PP_RESOURCES "/fonts/NotoColorEmoji.ttf", &style.fallback_asset, &error)) goto done;
+        !import_file(assets, "fonts/NotoColorEmoji.ttf", &style.fallback_asset, &error)) goto done;
     if (pp_platform_find_font("Aptos", &aptos, NULL)) {
         if (!pp_asset_import(assets, (PPBytes){aptos.data, aptos.size}, PP_ASSET_FONT,
                 &style.primary_asset, &error)) goto done;

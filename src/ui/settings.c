@@ -312,6 +312,14 @@ static void interaction(PPSettings *settings) {
   }
   pp_ui_error(ui, settings->interaction_error);
 }
+bool pp_settings_can_transition(PPSettings *settings) {
+  if (!settings) return true;
+  if (settings->dialog_pending || settings->failed || pp_settings_invalid(settings)) {
+    snprintf(settings->status,sizeof(settings->status),"Correct or revert the fields, and close any file chooser, before continuing.");
+    return false;
+  }
+  return true;
+}
 void pp_settings_draw(PPSettings *settings) {
   if (!settings || settings->failed)
     return;

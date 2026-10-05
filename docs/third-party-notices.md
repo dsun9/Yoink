@@ -16,6 +16,8 @@ Copyright BongoCat contributors. Licensed under GNU Affero General Public
 License version 3 or later; the full license is in the repository root
 `LICENSE`. Adapted files are `src/ui/backend.c`, `events.c`,
 `nuklear_config.h`, `settings.c`, `item_editor.c`, and `project_actions.c`.
+The OpenGL loader/shader setup in `src/render/gl_api.c` also adapts BongoCat
+`src/render/gl_api.c`, under the same AGPL-3.0-or-later terms.
 The adaptation removes global context lookup, uses one backend per window,
 and replaces BongoCat-specific settings with PointyPointer commands.
 The reference checkout is not a build dependency.
@@ -65,6 +67,7 @@ assembly must retain those license texts along with this document:
 | SDL3, SDL_image, SDL_ttf | `LICENSE.txt` (zlib) |
 | FreeType | `docs/FTL.TXT` and `docs/GPLv2.TXT` (dual license; FTL option) |
 | HarfBuzz | `COPYING` (MIT-style notices) |
+| HarfBuzz Universal Shaping Engine data | `src/ms-use/COPYING` (Microsoft MIT) |
 | PlutoSVG, PlutoVG | `LICENSE` (MIT) |
 | libpng | `LICENSE` (libpng license) |
 | zlib | `LICENSE` (zlib license) |
@@ -75,3 +78,40 @@ assembly must retain those license texts along with this document:
 Imported user media and fonts retain their own licenses. Font import checks
 the embedding permissions of every face in a collection. It preserves full
 font bytes, including internal license metadata, rather than subsetting.
+
+## Distribution and altered dependency sources
+
+The Release distribution includes the full license texts in `licenses/`, the
+application AGPL in `LICENSE`, and Noto's complete OFL alongside its font in
+`resources/licenses/NotoEmoji-OFL.txt`. It ships Noto Color Emoji v2.051 and
+does not redistribute Aptos, Segoe UI, or any other installed proprietary font.
+The application icon is original geometric artwork authored for PointyPointer.
+
+This software uses FreeType under its FreeType License. Portions of this
+software are copyright © The FreeType Project (www.freetype.org). All rights
+reserved. HarfBuzz and its Microsoft shaping data retain both upstream notices.
+
+PointyPointer builds explicitly altered, hash-checked copies of SDL_image's
+GIF decoder and SDL_ttf's shaping source. `cmake/PatchSDLImage.cmake` changes
+disposal-3 snapshots/restores to copy transparent pixels exactly.
+`cmake/PatchSDLTTF.cmake` preserves complete fallback clusters, including default
+ignorables and the final cluster boundary. Upstream source trees are untouched;
+the generated files preserve their original notices and mark our changes.
+
+The SVG numeric validator in `src/media/svg_validate.c` adapts PlutoSVG's
+`parse_float`; its complete MIT permission/copyright remains in that source
+and the distribution's `licenses/PlutoSVG.txt`.
+
+SDL_image's GIF decoder additionally incorporates XPaint code with this notice:
+
+Copyright 1990, 1991, 1993 David Koblas. Copyright 1996 Torsten Martinsen.
+Permission to use, copy, modify, and distribute this software and its
+documentation for any purpose and without fee is hereby granted, provided
+that the above copyright notice appear in all copies and that both that
+copyright notice and this permission notice appear in supporting documentation.
+This software is provided "as is" without express or implied warranty.
+
+Binary redistribution must accompany the complete corresponding PointyPointer
+source, including build scripts and pinned dependency/patch information, under
+the application AGPL terms. This local unsigned ZIP is a build artifact; no
+public distribution, signing, notarization, or source offer has been published.

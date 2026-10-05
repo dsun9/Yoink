@@ -5,7 +5,12 @@
 #include "pointy/sha256.h"
 #include <miniz.h>
 #include <yyjson.h>
+#include <SDL3/SDL.h>
+#ifdef _WIN32
 #include <windows.h>
+#else
+#define MAX_PATH 4096
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -19,22 +24,20 @@ static PPError error;
     } while (0)
 static char directory[MAX_PATH], package[MAX_PATH];
 static void begin_test(void) {
-    snprintf(directory, sizeof(directory), "pointy-storage-%lu-%llu", GetCurrentProcessId(),
-             GetTickCount64());
-    CHECK(CreateDirectoryA(directory, NULL));
+    snprintf(directory, sizeof(directory), "pointy-storage-%llu", (unsigned long long)SDL_GetPerformanceCounter());
+    CHECK(SDL_CreateDirectory(directory));
     snprintf(package, sizeof(package), "%s/\xe6\x89\x8b-\xc3\xa9.pointy", directory);
 }
 static void end_test(void) {
     CHECK(pp_platform_remove_file(package, &error));
-    CHECK(RemoveDirectoryA(directory));
+    CHECK(SDL_RemovePath(directory));
 }
 static PPBlob read_bytes(const char *path) {
     FILE *f = pp_platform_open_file(path, "rb", &error);
     CHECK(f);
-    CHECK(!_fseeki64(f, 0, SEEK_END));
-    __int64 n = _ftelli64(f);
-    CHECK(n >= 0);
-    rewind(f);
+    uint64_t n;
+    CHECK(pp_platform_file_size(f, &n));
+    CHECK(pp_platform_file_seek(f, 0));
     PPBlob b = {malloc((size_t)n + 1), (size_t)n};
     CHECK(b.data);
     CHECK(fread(b.data, 1, b.size, f) == b.size);

@@ -54,10 +54,47 @@ static void test_coalesced_click(void) {
   nk_free(&ui.context);
   free(ui.controls);
 }
+static void test_clipped_control_focus(void) {
+  struct nk_user_font font = {.height = 16, .width = test_width};
+  PPUIBackend ui = {.scale = 1, .window_scale = 1};
+  CHECK(nk_init_default(&ui.context, &font));
+  nk_input_begin(&ui.context);
+  nk_input_end(&ui.context);
+  CHECK(!draw_click_button(&ui));
+  PPRect target;
+  CHECK(pp_ui_control_rect(&ui, "target", &target));
+  PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE,
+                           .window_point = {target.x + target.w / 2,
+                                            target.y + target.h / 2},
+                           .button = PP_BUTTON_LEFT};
+  pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_DOWN;
+  pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_UP;
+  pp_ui_backend_event(&ui, &event);
+  nk_input_end(&ui.context);
+  ui.input_started = false;
+  pp_ui_focus(&ui, "new");
+  CHECK(nk_begin(&ui.context, "click-test", nk_rect(0, 0, 300, 200),
+                 NK_WINDOW_NO_SCROLLBAR));
+  nk_layout_row_dynamic(&ui.context, 32, 1);
+  /* A scrolled group can lay out a control behind the project toolbar. Its
+   * full bounds still contain the click, but its panel clips that area out. */
+  ui.context.current->layout->clip = nk_rect(0, 100, 300, 100);
+  CHECK(!pp_ui_button(&ui, "target", "Clipped anchor", true));
+  CHECK(pp_ui_focused(&ui, "new"));
+  pp_ui_modal(&ui, true);
+  pp_ui_modal(&ui, false);
+  CHECK(pp_ui_focused(&ui, "new"));
+  nk_end(&ui.context);
+  nk_free(&ui.context);
+  free(ui.controls);
+}
 
 int main(void) {
   CHECK(SDL_InitSubSystem(SDL_INIT_EVENTS));
   test_coalesced_click();
+  test_clipped_control_focus();
   SDL_Event source = {0};
   source.type = SDL_EVENT_TEXT_INPUT;
   source.text.windowID = 42;

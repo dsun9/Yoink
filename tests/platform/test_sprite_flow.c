@@ -542,6 +542,51 @@ static POINT outside_receiver_point(void) {
   CHECK(false);
   return (POINT){0};
 }
+static void trace_hole_target(const char *stage) {
+  HWND hit=WindowFromPoint((POINT){500,380}); DWORD pid=0;
+  DWORD thread=GetWindowThreadProcessId(hit,&pid);
+  GUITHREADINFO gui={sizeof(gui)}; GetGUIThreadInfo(thread,&gui);
+  wchar_t type[128]={0},image[MAX_PATH]={0}; GetClassNameW(hit,type,128);
+  HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid);
+  if(process) { DWORD size=MAX_PATH; QueryFullProcessImageNameW(process,0,image,&size); CloseHandle(process); }
+  printf("HOLE TARGET %s hwnd=%p class=%ls pid=%lu tid=%lu process=%ls owner=%p root=%p menu-owner=%p gui-flags=%lu foreground=%p receiver=%p receiver-pid=%lu\n",
+    stage,(void *)hit,type,pid,thread,image,(void *)GetWindow(hit,GW_OWNER),(void *)GetAncestor(hit,GA_ROOTOWNER),(void *)gui.hwndMenuOwner,gui.flags,(void *)GetForegroundWindow(),(void *)receiver->window,child.dwProcessId);
+  fflush(stdout);
+}
+static BOOL CALLBACK cancel_transient_menu(HWND window,LPARAM context) {
+  unsigned *cancelled=(unsigned *)context; wchar_t type[128]={0};
+  GetClassNameW(window,type,128);
+  if(wcscmp(type,L"#32768")) return TRUE;
+  DWORD pid=0,thread=GetWindowThreadProcessId(window,&pid);
+  GUITHREADINFO gui={sizeof(gui)};
+  if(!GetGUIThreadInfo(thread,&gui) || !(gui.flags&GUI_INMENUMODE) || !gui.hwndMenuOwner) return TRUE;
+  CHECK(*cancelled<8); (*cancelled)++;
+  printf("PREFLIGHT cancel transient native menu hwnd=%p pid=%lu owner=%p flags=%lu\n",(void *)window,pid,(void *)gui.hwndMenuOwner,gui.flags);
+  fflush(stdout); DWORD_PTR response=0;
+  CHECK(SendMessageTimeoutW(gui.hwndMenuOwner,WM_CANCELMODE,0,0,SMTO_ABORTIFHUNG,1000,&response));
+  return TRUE;
+}
+static void prepare_receiver_target(void) {
+  /* A shell menu may retain modal state while hidden behind foreground UI.
+   * Inspect only native menu windows and cancel their actual active owner. */
+  unsigned cancelled=0; CHECK(EnumWindows(cancel_transient_menu,(LPARAM)&cancelled));
+  POINT point={500,380}; HWND hit=WindowFromPoint(point);
+  wchar_t type[128]={0}; GetClassNameW(hit,type,128);
+  if(!wcscmp(type,L"#32768")) {
+    trace_hole_target("preflight-obstructing-menu");
+    DWORD thread=GetWindowThreadProcessId(hit,NULL);
+    GUITHREADINFO gui={sizeof(gui)}; CHECK(GetGUIThreadInfo(thread,&gui));
+    CHECK(gui.hwndMenuOwner && (gui.flags&GUI_INMENUMODE));
+    /* Cancel only the observed transient menu. Do not close its owner or
+     * terminate a foreign process. The receiver must then own this point. */
+    DWORD_PTR response=0;
+    CHECK(SendMessageTimeoutW(gui.hwndMenuOwner,WM_CANCELMODE,0,0,SMTO_ABORTIFHUNG,1000,&response));
+    ULONGLONG end=GetTickCount64()+500;
+    while(WindowFromPoint(point)!=(HWND)receiver->window && GetTickCount64()<end) Sleep(10);
+    trace_hole_target("preflight-menu-cancelled");
+  }
+  CHECK(WindowFromPoint(point)==(HWND)receiver->window);
+}
 static void test_desktop_flow(void) {
   PPError error = {0};
   CHECK(pp_app_create(&flow_app, &(PPAppOptions){.preferences_directory = ""},
@@ -555,6 +600,7 @@ static void test_desktop_flow(void) {
   CHECK(pp_runtime_create(&flow, flow_app, &error));
   pump(50);
   uint64_t hand = pull(320, 260);
+  trace_hole_target("after-hand-pull");
   PPSurface *hand_surface = native_sprite(hand);
   size_t yellow = 0;
   for (int y = 0; y < hand_surface->height; y++)
@@ -579,15 +625,35 @@ static void test_desktop_flow(void) {
                                     .anchor = PP_ANCHOR_TOP_LEFT,
                                     .item_id = ring},
                        &error));
-  uint64_t a = pull(500, 300), b = pull(820, 300);
+  uint64_t a = pull(500, 300);
+  trace_hole_target("after-first-ring-pull");
+  uint64_t b = pull(820, 300);
+  trace_hole_target("after-second-ring-pull");
   arrange(a, 500, 380);
   arrange(b, 800, 380);
   CHECK(pp_item_snapshot_item(
             pp_scene_get(pp_app_scene(flow_app), hand)->snapshot)
             ->kind == PP_ITEM_TEXT);
   LONG clicks = receiver->clicks, wheels = receiver->wheels;
+  trace_hole_target("before-hole-input");
+  CHECK(WindowFromPoint((POINT){500,380})==(HWND)receiver->window);
   click(500, 380);
+  LONG clicks_after_hole=receiver->clicks;
   mouse(MOUSEEVENTF_WHEEL, WHEEL_DELTA);
+  if(receiver->clicks != clicks+1 || receiver->wheels != wheels+1) {
+    POINT actual; GetCursorPos(&actual); RECT client,screen;
+    GetClientRect((HWND)receiver->window,&client); GetWindowRect((HWND)receiver->window,&screen);
+    HWND hit=WindowFromPoint(actual); wchar_t hit_class[128]={0}; GetClassNameW(hit,hit_class,128);
+    PPSurface *surface=native_sprite(a);
+    int px=500-surface->origin.x,py=380-surface->origin.y;
+    int alpha=px>=0 && py>=0 && px<surface->width && py<surface->height ? surface->bits[((size_t)py*surface->width+px)*4+3] : -1;
+    DWORD_PTR response=0;
+    LRESULT responsive=SendMessageTimeoutW((HWND)receiver->window,WM_NULL,0,0,SMTO_ABORTIFHUNG,1000,&response);
+    printf("FAIL passthrough expected-clicks=%ld actual-clicks=%ld expected-wheels=%ld actual-wheels=%ld cursor=%ld,%ld hit=%p class=%ls receiver=%p foreground=%p receiver-rect=%ld,%ld,%ld,%ld client=%ld,%ld ring-alpha=%d owner=%p\n",
+      clicks+1,receiver->clicks,wheels+1,receiver->wheels,actual.x,actual.y,(void *)hit,hit_class,(void *)receiver->window,(void *)GetForegroundWindow(),screen.left,screen.top,screen.right,screen.bottom,client.right,client.bottom,alpha,(void *)pp_windows_input_owner());
+    printf("Receiver acknowledgement=%s clicks-immediately-after-hole=%ld\n",responsive?"responsive":"FAILED",clicks_after_hole);
+    fflush(stdout);
+  }
   CHECK(receiver->clicks == clicks + 1 && receiver->wheels == wheels + 1);
   POINT point = opaque_point(a);
   move(point.x, point.y);
@@ -819,6 +885,7 @@ static void desktop_main(const char *receiver_path) {
   CHECK(SetWindowPos((HWND)receiver->window, NULL, -8, -32, 1450, 1050,
                      SWP_NOZORDER));
   CHECK(SetForegroundWindow((HWND)receiver->window));
+  prepare_receiver_target();
   test_desktop_flow();
   cleanup();
   puts("PASS sprite_flow desktop integration");

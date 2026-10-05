@@ -560,7 +560,14 @@ static bool control(PPUIBackend *ui, const char *id, const char *label,
         .id = hash, .bounds = *bounds, .enabled = enabled, .edit = edit};
     snprintf(record->label, sizeof(record->label), "%s", label);
   }
-  if (enabled && nk_input_is_mouse_hovering_rect(&ui->context.input, *bounds)) {
+  /* Scrolled controls retain full layout bounds even behind the toolbar.
+   * Match Nuklear's active-panel eligibility and require the pointer itself
+   * inside the clip, so a hidden control cannot steal a modal's origin focus. */
+  if (enabled &&
+      !(ui->context.current->layout->flags & NK_WINDOW_NO_INPUT) &&
+      nk_widget_is_hovered(&ui->context) &&
+      nk_input_is_mouse_hovering_rect(&ui->context.input,
+                                     ui->context.current->layout->clip)) {
     ui->pointer_target = !edit;
     ui->text_target = edit;
     if (nk_input_is_mouse_pressed(&ui->context.input, NK_BUTTON_LEFT) ||

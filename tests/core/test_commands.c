@@ -4,7 +4,6 @@
 #include "pointy/project_store.h"
 #include <SDL3/SDL.h>
 #include <string.h>
-#include <windows.h>
 
 static PPError error;
 static void run(PPApp *app, PPCommand command) {
@@ -174,9 +173,9 @@ static void test_project_commands(void) {
 }
 static void test_preferences_and_imports(void) {
   char directory[260], path[300], preferences[300];
-  snprintf(directory, sizeof(directory), "commands-private-%lu-%llu",
-           GetCurrentProcessId(), GetTickCount64());
-  CHECK(CreateDirectoryA(directory, NULL));
+  snprintf(directory, sizeof(directory), "commands-private-%llu",
+           (unsigned long long)SDL_GetPerformanceCounter());
+  CHECK(SDL_CreateDirectory(directory));
   snprintf(path, sizeof(path), "%s/project.pointy", directory);
   snprintf(preferences, sizeof(preferences), "%s/preferences.json", directory);
   PPAppOptions options = {directory, true};
@@ -236,7 +235,7 @@ static void test_preferences_and_imports(void) {
   CHECK(strstr(data,
                "project.pointy")); /* Missing remembered path is retained. */
   CHECK(pp_platform_remove_file(preferences, &error));
-  CHECK(RemoveDirectoryA(directory));
+  CHECK(SDL_RemovePath(directory));
 }
 int main(void) {
   test_project_commands();

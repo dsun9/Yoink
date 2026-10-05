@@ -1,0 +1,40 @@
+name: build
+on:
+  push:
+  pull_request:
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset windows-release
+      - name: Build
+        run: cmake --build --preset windows-release --parallel
+      - name: Headless core, media and storage
+        run: ctest --preset windows-release -L headless --output-on-failure
+      - name: Package unsigned Release ZIP
+        working-directory: build/windows-release
+        run: cpack -C Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PointyPointer-Windows
+          path: build/windows-release/PointyPointer-*.zip
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset macos-dev -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build --preset macos-dev --parallel
+      - name: Headless core, media and storage
+        run: ctest --preset macos-dev -L headless --output-on-failure
+      - name: Package unsigned application bundle
+        working-directory: build/macos-dev
+        run: cpack -C Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PointyPointer-macOS-unsigned
+          path: build/macos-dev/PointyPointer-*.zip
+# Hosted CI intentionally excludes native input routing and physical display gates.

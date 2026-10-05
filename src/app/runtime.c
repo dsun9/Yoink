@@ -3,6 +3,26 @@
 #include "runtime_internal.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
+
+PPSchedule pp_runtime_schedule(const PPRuntime *r, double now) {
+  PPSchedule s={now+1.0/60,HUGE_VAL,HUGE_VAL,HUGE_VAL,HUGE_VAL,HUGE_VAL};
+  if (!r || r->failed || !r->presenter) return s;
+  PPAnchorPresenter *p=r->presenter;
+  for (size_t i=0;i<p->instance_count;i++) {
+    const PPSprite *v=p->instances+i;
+    s.gif=fmin(s.gif,v->next_frame);
+    if(v->rotating) s.easing=fmin(s.easing,pp_schedule_tick(now,v->rotate_start+p->gestures.easing_seconds));
+    if(v->resizing) s.easing=fmin(s.easing,pp_schedule_tick(now,v->resize_start+p->gestures.easing_seconds));
+  }
+  for (size_t i=0;i<p->anchor_count;i++) {
+    if(p->anchors[i].shown) s.gif=fmin(s.gif,p->anchors[i].next_frame);
+    const PPAnchorReveal *reveal=p->runtime.entries+i;
+    if(reveal->leaving) s.fade=fmin(s.fade,pp_schedule_tick(now,reveal->leave_time+p->gestures.easing_seconds));
+  }
+  if(r->drawer) s.ui=now+1.0/60;
+  return s;
+}
 
 static void failure(PPRuntime *r) {
   r->failed = true;

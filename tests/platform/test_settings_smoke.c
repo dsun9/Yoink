@@ -16,6 +16,7 @@ static HWND original_foreground;
 static bool desktop_run;
 static bool dialog_diagnostic;
 static bool manual_font;
+static bool focus_diagnostic;
 static unsigned sprite_presses;
 static unsigned normalized_down_keys;
 static char test_directory[MAX_PATH], package[MAX_PATH], preferences[MAX_PATH];
@@ -97,6 +98,9 @@ static void pump(unsigned duration) {
   do {
     PPPlatformEvent event;
     while (pp_ui_poll(&event)) {
+      if (focus_diagnostic && event.window_id == pp_settings_window_id(settings))
+        fprintf(stderr, "Focus event kind=%d key=%d point=%.1f,%.1f\n",
+                event.kind, event.key, event.window_point.x, event.window_point.y);
       if (event.kind == PP_EVENT_KEY_DOWN && event.key == PP_KEY_DOWN)
         normalized_down_keys++;
       pp_settings_event(settings, &event);
@@ -105,6 +109,26 @@ static void pump(unsigned duration) {
       if (event.kind == PP_EVENT_BUTTON_DOWN && event.surface == overlap)
         sprite_presses++;
     pp_settings_draw(settings);
+    if (focus_diagnostic) {
+      static uint64_t last_focus, last_restore;
+      static int last_modal = -1, last_transition = -1;
+      PPUIBackend *ui = settings->backend;
+      bool transition = pp_app_ui(app)->transition_pending;
+      if (last_focus != ui->focus_id || last_restore != ui->restore_focus ||
+          last_modal != ui->last_modal || last_transition != transition) {
+        fprintf(stderr, "Focus frame focus=%llu restore=%llu modal=%d transition=%d new=%d cancel=%d mouse=%.1f,%.1f\n",
+                (unsigned long long)ui->focus_id, (unsigned long long)ui->restore_focus,
+                ui->last_modal, transition, pp_ui_focused(ui, "new"),
+                pp_ui_focused(ui, "cancel-transition"),
+                ui->context.input.mouse.pos.x, ui->context.input.mouse.pos.y);
+        for (size_t i=0;i<ui->control_count;i++)
+          if (ui->controls[i].id == ui->focus_id || ui->controls[i].id == ui->restore_focus)
+            fprintf(stderr, "Focus registry id=%llu label=%s\n",
+                    (unsigned long long)ui->controls[i].id, ui->controls[i].label);
+      }
+      last_focus=ui->focus_id; last_restore=ui->restore_focus;
+      last_modal=ui->last_modal; last_transition=transition;
+    }
     CHECK(!settings->failed);
     SDL_Delay(2);
   } while (GetTickCount64() < until);
@@ -189,6 +213,15 @@ static void focus_control(const char *id) {
   }
   fprintf(stderr, "Keyboard focus could not reach %s\n", id);
   CHECK(false);
+}
+static void wait_restored_focus(const char *id) {
+  /* Escape resolves the command near the end of its draw. pp_ui_modal restores
+   * the origin at the next frame boundary; a fixed 25 ms can contain only the
+   * first frame on a busy desktop. Wait for that state without injecting Tab. */
+  ULONGLONG deadline = GetTickCount64() + 1000;
+  while (!pp_ui_focused(settings->backend, id) && GetTickCount64() < deadline)
+    pump(1);
+  CHECK(pp_ui_focused(settings->backend, id));
 }
 static POINT control_center(const char *id) {
   PPRect bounds;
@@ -655,7 +688,54 @@ static void hidden_batched_project_actions(void) {
   package[0] = test_directory[0] = 0;
   puts("PASS hidden batched text/invalid draft + Save/New through shortcuts and buttons.");
 }
+static void hidden_cancel_focus(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+                                         .name = "Unsaved presentation"}, &error));
+  create_settings(1, true);
+  pp_ui_focus(settings->backend, "new");
+  PPRect new_bounds, enabled_bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "new", &new_bounds));
+  CHECK(pp_ui_control_rect(settings->backend, "anchor-enabled", &enabled_bounds));
+  /* The public group-scroll API addresses the current window. The fixture
+   * selects the existing retained window between frames, then restores it. */
+  settings->backend->context.current =
+      nk_window_find(&settings->backend->context, "PointyPointer");
+  CHECK(settings->backend->context.current);
+  nk_group_set_scroll(&settings->backend->context, "settings-content", 0,
+                      (nk_uint)(enabled_bounds.y - new_bounds.y));
+  settings->backend->context.current = NULL;
+  pp_settings_draw(settings);
+  hidden_click("new");
+  pp_settings_draw(settings);
+  CHECK(pp_app_ui(app)->transition_pending);
+  CHECK(pp_ui_focused(settings->backend, "cancel-transition"));
+  hidden_key(PP_KEY_ESCAPE, 0);
+  pp_settings_draw(settings);
+  CHECK(!pp_app_ui(app)->transition_pending && pp_app_dirty(app));
+  fprintf(stderr, "Cancel frame: new=%d cancel=%d modal=%d focus=%llu restore=%llu\n",
+          pp_ui_focused(settings->backend, "new"),
+          pp_ui_focused(settings->backend, "cancel-transition"),
+          settings->backend->last_modal,
+          (unsigned long long)settings->backend->focus_id,
+          (unsigned long long)settings->backend->restore_focus);
+  pp_settings_draw(settings);
+  fprintf(stderr, "Next frame: new=%d cancel=%d modal=%d focus=%llu restore=%llu\n",
+          pp_ui_focused(settings->backend, "new"),
+          pp_ui_focused(settings->backend, "cancel-transition"),
+          settings->backend->last_modal,
+          (unsigned long long)settings->backend->focus_id,
+          (unsigned long long)settings->backend->restore_focus);
+  CHECK(pp_ui_focused(settings->backend, "new"));
+  CHECK(!IsWindowVisible(window()) && GetForegroundWindow() != window());
+  pp_settings_destroy(settings);
+  settings = NULL;
+  pp_app_destroy(app);
+  app = NULL;
+}
 static void render_only(void) {
+  hidden_cancel_focus();
   hidden_retained_editor_actions();
   hidden_batched_project_actions();
   INPUT arrow[2];
@@ -843,12 +923,14 @@ static void desktop_smoke(void) {
   CHECK(pp_app_generation(app) == generation + 1 && !pp_app_dirty(app));
   capture("task8-settings-100");
   replace_field("project-name", L"Unsaved presentation");
+  focus_diagnostic = true;
   click_control("new");
   CHECK(pp_app_ui(app)->transition_pending);
   CHECK(pp_ui_focused(settings->backend, "cancel-transition"));
   key(VK_ESCAPE);
   CHECK(!pp_app_ui(app)->transition_pending && pp_app_dirty(app));
-  CHECK(pp_ui_focused(settings->backend, "new"));
+  wait_restored_focus("new");
+  focus_diagnostic = false;
   SDL_SetWindowSize(settings->backend->window, 700, 600);
   pump(50);
   capture("task8-settings-narrow");

@@ -3,9 +3,19 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <string.h>
+#include "resources.h"
 
-/* Development resource discovery; the packaging task supplies a relocatable
- * bundled path here. Local font lookup stays behind this media/platform edge. */
+void *pp_resource_load(const char *relative, size_t *size) {
+    const char *base=SDL_GetBasePath();
+    if(!base) return NULL;
+    char *path=NULL;
+    if(SDL_asprintf(&path,"%sresources/%s",base,relative)<0) return NULL;
+    void *data=SDL_LoadFile(path,size);
+    SDL_free(path);
+    return data;
+}
+
+/* Local font lookup remains separate from redistributable bundled resources. */
 bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error) {
     if (!assets || !out) {
         if (error) {
@@ -19,7 +29,7 @@ bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error) {
     style.font_size_dip = 96.0;
     style.color[3] = 255;
     size_t length = 0;
-    void *data = SDL_LoadFile(PP_RESOURCES "/fonts/NotoColorEmoji.ttf", &length);
+    void *data = pp_resource_load("fonts/NotoColorEmoji.ttf", &length);
     if (!data) {
         if (error) {
             error->code = PP_ERROR_PLATFORM;

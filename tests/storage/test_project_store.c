@@ -74,7 +74,7 @@ static void test_portable_round_trip(void) {
     char owned[MAX_PATH], moved[MAX_PATH], source_path[MAX_PATH];
     snprintf(owned, sizeof(owned), "%s/sources", directory);
     snprintf(moved, sizeof(moved), "%s/moved", directory);
-    CHECK(CreateDirectoryA(owned, NULL));
+    CHECK(SDL_CreateDirectory(owned));
     snprintf(source_path, sizeof(source_path), "%s/font.ttc", owned);
     write_bytes(source_path, font.data, font.size);
     pp_blob_destroy(&font);
@@ -121,7 +121,7 @@ static void test_portable_round_trip(void) {
     }
     CHECK(pp_project_set_enabled(project, PP_ANCHOR_TOP_LEFT, false, &error));
     CHECK(pp_project_save(project, package, &error));
-    CHECK(MoveFileA(owned, moved));
+    CHECK(SDL_RenamePath(owned, moved));
     CHECK(pp_assets_create(&fresh, &error));
     CHECK(pp_project_load(package, fresh, &loaded, &error));
     compare_projects(project, loaded);
@@ -209,12 +209,16 @@ static void test_portable_round_trip(void) {
         assert_reopens(hash);
         CHECK(pp_project_revision(project) == revision);
     }
+#ifdef _WIN32
+    /* Windows denies replacement of a read-only destination. POSIX rename
+     * permission is controlled by its directory, not the destination mode. */
     wchar_t wide[MAX_PATH];
     CHECK(MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, package, -1, wide, MAX_PATH));
     CHECK(SetFileAttributesW(wide, FILE_ATTRIBUTE_READONLY));
     CHECK(!pp_project_save(project, package, &error));
     assert_reopens(hash);
     CHECK(SetFileAttributesW(wide, FILE_ATTRIBUTE_NORMAL));
+#endif
     char sentinel[MAX_PATH];
     snprintf(sentinel, sizeof(sentinel), "%s/sentinel.tmp", directory);
     write_bytes(sentinel, "keep", 4);
@@ -234,7 +238,7 @@ static void test_portable_round_trip(void) {
         snprintf(source_path, sizeof(source_path), "%s/%s", moved, filenames[i]);
         CHECK(pp_platform_remove_file(source_path, &error));
     }
-    CHECK(RemoveDirectoryA(moved));
+    CHECK(SDL_RemovePath(moved));
 }
 static void test_missing_aptos_default_and_unresolved_text(void);
 static void test_candidate_pressure_and_notice_isolation(void);

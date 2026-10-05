@@ -20,9 +20,12 @@ ctest --preset macos-dev -R '^macos_surface$' -V --output-on-failure
 
 All four commands are **NOT RUN** on the implementation host (Windows, no Apple
 SDK/runtime). Core/media tests are registered on Apple, including the portable
-presenter, runtime and UI-coordinate tests. The existing Windows-only storage
-and command test fixtures are not registered on Apple; this is an explicit
-coverage gap, not a storage pass. macOS file replacement and dialog behavior
+presenter, runtime and UI-coordinate tests. Task 11 ports storage and command
+fixtures to portable SDL/native file APIs and registers them on Apple; actual
+Mac execution remains NOT RUN. The Windows read-only-destination replacement
+assertion remains Windows-only because POSIX rename permission follows the
+directory. Portable write/flush/replace failure injection and source-file
+independence remain registered. macOS file replacement and dialog behavior
 also need the manual acceptance below.
 
 The native test uses the executable itself in a separate `--receiver` process.
@@ -102,8 +105,8 @@ without stealing focus after an outside click. Confirm local Aptos discovery
 when Office provides it and the bundled Noto fallback when Aptos is absent.
 Save/reopen a project with Unicode paths, overwrite an existing file, and try an
 unwritable destination; the old file and dirty state must survive rejection.
-Exercise tray Settings and Quit after Task 11 connects the portable lifecycle.
-The Task 10 tray hook is present but the application does not yet call it.
+Task 11 connects tray Settings/Quit through queued lifecycle actions. Exercise
+both on a Mac, including an invalid hidden draft and dirty Quit Cancel.
 
 ## Mechanism and evidence limits
 
@@ -152,3 +155,28 @@ transition must rebuild drawer resources while preserving focus. Both first
 failed and then passed in Debug, with Release covering verification recorded in
 the task report. Native input/activation code did not change after the batch;
 on Windows drawable and desktop scales remain equal.
+
+## Task 11 bundle and CI handoff
+
+The application bundle stages the icon, bundled Noto font/OFL and complete
+third-party notices under `Contents/Resources`. SDL_GetBasePath on bundled Cocoa
+applications returns that directory; fixed resource names resolve through its
+`resources/` child. Headless tests are explicitly labeled `headless`; CI invokes
+`ctest --preset macos-dev -L headless --output-on-failure`. This covers registered
+core, media, command and storage tests without implying native pointer routing.
+The lifecycle, native surface, hidden GL/UI and physical display gates require
+the relevant interactive Mac environment and are not selected by that CI label.
+
+On a Mac with the real SDK, configure/build first, run headless tests, then run
+the existing bounded native receiver harness. Build the unsigned bundle ZIP
+with `cpack --config build/macos-dev/CPackConfig.cmake -C Debug`; extract it to a
+different directory and launch `PointyPointer.app/Contents/MacOS/PointyPointer
+--smoke-test` from another working directory. Then launch the bundle normally
+and verify accessory/tray-only startup, retained Settings drafts, dirty Quit,
+private font discovery and file dialogs. Signing/notarization is not included.
+
+All Apple configure/compile/link/bundle execution, physical Retina/Spaces,
+tiny-alpha first-click and changing-frame selection, background drag capture and
+capture-wheel behavior remain **NOT RUN** on the Windows implementation host.
+The source/CI configuration is best effort; no hosted CI run was triggered here.
+Task 10 candidate-routing risks remain functional acceptance gates.

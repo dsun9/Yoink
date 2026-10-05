@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <SDL3/SDL.h>
+#include "../media/resources.h"
 
 typedef struct PPNotice { PPAssetId id; char *text; struct PPNotice *next; } PPNotice;
 
@@ -67,7 +68,7 @@ bool pp_project_default(PPAssets *assets, PPProject **out, PPError *error) {
     item.text = "\xf0\x9f\x91\x89";
     item.opacity = 1;
     if (!pp_text_default_style(assets, &item.text_style, error)) goto failed;
-    char *notice = SDL_LoadFile(PP_RESOURCES "/licenses/NotoEmoji-OFL.txt", NULL);
+    char *notice = pp_resource_load("licenses/NotoEmoji-OFL.txt", NULL);
     if (!notice) { project_error(error, PP_ERROR_PLATFORM, "Cannot load bundled Noto font notice"); goto failed; }
     bool notice_ok = pp_project_set_notice(project, item.text_style.fallback_asset, notice, error);
     SDL_free(notice);

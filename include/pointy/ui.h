@@ -27,6 +27,8 @@ bool pp_ui_poll(PPPlatformEvent *event);
 bool pp_settings_create(PPSettings **out, PPApp *app, PPError *error);
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event);
 void pp_settings_draw(PPSettings *settings);
+/* Called after the event batch has been drawn/validated. Hidden drafts count. */
+bool pp_settings_can_transition(PPSettings *settings);
 void pp_settings_destroy(PPSettings *settings);
 uint32_t pp_settings_window_id(const PPSettings *settings);
 #endif
