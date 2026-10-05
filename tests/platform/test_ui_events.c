@@ -31,7 +31,7 @@ static bool draw_click_button(PPUIBackend *ui) {
 }
 static void test_coalesced_click(void) {
   struct nk_user_font font = {.height = 16, .width = test_width};
-  PPUIBackend ui = {.scale = 1};
+  PPUIBackend ui = {.scale = 2, .window_scale = 1};
   CHECK(nk_init_default(&ui.context, &font));
   nk_input_begin(&ui.context);
   nk_input_end(&ui.context);
@@ -43,6 +43,7 @@ static void test_coalesced_click(void) {
       .window_point = {target.x + target.w / 2, target.y + target.h / 2},
       .button = PP_BUTTON_LEFT};
   pp_ui_backend_event(&ui, &event);
+  CHECK(ui.context.input.mouse.pos.x == (int)event.window_point.x);
   event.kind = PP_EVENT_BUTTON_DOWN;
   pp_ui_backend_event(&ui, &event);
   event.kind = PP_EVENT_BUTTON_UP;
@@ -83,7 +84,7 @@ int main(void) {
   CHECK(SDL_PushEvent(&source));
   CHECK(next_event(&event) && event.key == PP_KEY_TAB &&
         event.modifiers == PP_MOD_SHIFT && event.kind == PP_EVENT_KEY_DOWN);
-  PPUIBackend ui = {.scale = 1};
+  PPUIBackend ui = {.scale = 1, .window_scale = 1};
   CHECK(nk_init_default(&ui.context, NULL));
   pp_ui_backend_event(
       &ui, &(PPPlatformEvent){.kind = PP_EVENT_COMPOSITION, .composing = true});

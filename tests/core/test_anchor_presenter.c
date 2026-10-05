@@ -4,12 +4,15 @@
 #include "../test.h"
 #include "../project_fixture.h"
 #include "../../src/core/geometry_internal.h"
+#include "../../src/app/presenter_internal.h"
 #include <math.h>
-struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width;uint8_t red,blue;};
+struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;};
 static PPSurface *surfaces;
 static int source_width;
+static size_t native_planes = 4;
+size_t pp_surface_raster_bytes(int width,int height) {return (size_t)width*height*native_planes;}
 bool pp_surface_create(PPSurface **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));CHECK(*out);(*out)->next=surfaces;surfaces=*out;return true;}
-bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect bounds,PPError *error) {(void)error;CHECK(bounds.w==frame->width);s->bounds=bounds;s->shown=true;s->source_width=source_width;s->red=frame->pixels[0];s->blue=frame->pixels[2];return true;}
+bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect bounds,PPError *error) {(void)error;s->raster_width=frame->width;s->bounds=bounds;s->shown=true;s->source_width=source_width;s->red=frame->pixels[0];s->blue=frame->pixels[2];return true;}
 void pp_surface_destroy(PPSurface *s) {if(!s) return;PPSurface **link=&surfaces;while(*link!=s) link=&(*link)->next;*link=s->next;free(s);}
 void pp_surface_hide(PPSurface *s) {s->shown=false;}
 void pp_surface_set_instance_id(PPSurface *s,uint64_t id) {s->id=id;}
@@ -116,7 +119,35 @@ static void test_unavailable_source_finishes_pull(void) {
         }
     }
 }
+static void test_native_retention_contract(void) {
+    /* A backend retaining two four-byte planes must be charged for both.
+     * Replacing a Retina raster releases the old charge only after commit. */
+    PPAssets *assets = NULL;
+    PPError error = {0};
+    CHECK(pp_assets_create(&assets, &error));
+    PPAnchorPresenter presenter = {.assets = assets, .renderer = (PPRenderer *)1};
+    PPSurface *surface = NULL;
+    CHECK(pp_surface_create(&surface, &error));
+    uint8_t pixels[16] = {255, 0, 0, 255}, alpha[4] = {255};
+    PPFrame source = {pixels, alpha, 2, 2, 8};
+    PPDisplay display = {1, {0, 0, 1000, 1000}, 1, 2};
+    PPPose pose = {{200, 200}, 64, 0, 1};
+    size_t retained = 0;
+    native_planes = 8;
+    CHECK(pp_present(&presenter, surface, &source, pose, &display, &retained, &error));
+    CHECK(surface->bounds.w == 64 && surface->raster_width == 128);
+    CHECK(retained == 131072 && pp_assets_external_raster_bytes(assets) == 131072);
+    pose.longest_dip = 32;
+    CHECK(pp_present(&presenter, surface, &source, pose, &display, &retained, &error));
+    CHECK(retained == 32768 && pp_assets_external_raster_bytes(assets) == 32768);
+    pp_assets_release_raster(assets, retained);
+    pp_surface_destroy(surface);
+    CHECK(pp_assets_external_raster_bytes(assets) == 0);
+    pp_assets_destroy(assets);
+    native_planes = 4;
+}
 int main(void) {
+    test_native_retention_contract();
     test_unavailable_source_finishes_pull();
     PPDisplay d[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
@@ -142,6 +173,7 @@ int main(void) {
     d[1].drawable_pixels_per_dip=2;
     update(p,d,10,200,1.08);
     CHECK(sprite->source_width==192 && sprite->bounds.w==96);
+    CHECK(sprite->raster_width==192); /* Retina must survive the final transform. */
     PPItem replacement=*pp_project_target(project,PP_ANCHOR_TOP_RIGHT);
     const char *blue="<svg width='200' height='100'><rect width='200' height='100' fill='blue'/></svg>";
     CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)blue,strlen(blue)},PP_ASSET_SVG,&replacement.image_asset,&error));

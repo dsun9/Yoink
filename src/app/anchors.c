@@ -300,7 +300,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
           settings->activation_dip,
           0,
           r->opacity};
-      if (!pp_present(p, a->target, &p->target_source, pose, scale,
+      if (!pp_present(p, a->target, &p->target_source, pose, &a->display,
                       &a->target_bytes, error)) {
         if (!failed_anchor(p, a, revision, scale, error))
           goto failed;

@@ -65,8 +65,8 @@ static void geometry(PPSettings *settings) {
   SDL_GetWindowPosition(settings->backend->window, &x, &y);
   SDL_GetWindowSize(settings->backend->window, &width, &height);
   PPCommand command = {.kind = PP_COMMAND_SET_GEOMETRY,
-                       .geometry = {x, y, width / settings->backend->scale,
-                                    height / settings->backend->scale}};
+                       .geometry = {x, y, width / settings->backend->window_scale,
+                                    height / settings->backend->window_scale}};
   pp_settings_command(settings, command);
 }
 void pp_settings_close(PPSettings *settings) {

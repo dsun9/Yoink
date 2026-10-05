@@ -137,15 +137,18 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
   if (!ui->gl_context || !SDL_GL_MakeCurrent(ui->window, ui->gl_context) ||
       !pp_gl_load(&ui->gl, error))
     goto failed;
-  ui->scale = options->scale > 0 ? options->scale
-                                 : SDL_GetWindowDisplayScale(ui->window);
-  if (ui->scale <= 0)
-    ui->scale = 1;
-  SDL_SetWindowSize(ui->window, (int)(options->geometry.w * ui->scale),
-                    (int)(options->geometry.h * ui->scale));
+  SDL_SetWindowPosition(ui->window, (int)options->geometry.x, (int)options->geometry.y);
+  float density = SDL_GetWindowPixelDensity(ui->window);
+  if (density <= 0) density = 1;
+  ui->window_scale = options->scale > 0 ? options->scale
+                                 : SDL_GetWindowDisplayScale(ui->window) / density;
+  if (ui->window_scale <= 0) ui->window_scale = 1;
+  ui->scale = ui->window_scale * density;
+  SDL_SetWindowSize(ui->window, (int)(options->geometry.w * ui->window_scale),
+                    (int)(options->geometry.h * ui->window_scale));
   if (!options->compact)
-    SDL_SetWindowMinimumSize(ui->window, (int)(640 * ui->scale),
-                             (int)(480 * ui->scale));
+    SDL_SetWindowMinimumSize(ui->window, (int)(640 * ui->window_scale),
+                             (int)(480 * ui->window_scale));
   SDL_SetWindowPosition(ui->window, (int)options->geometry.x,
                         (int)options->geometry.y);
   SDL_GL_SetSwapInterval(1);
@@ -313,8 +316,8 @@ void pp_ui_backend_event(PPUIBackend *ui, const PPPlatformEvent *event) {
     nk_input_begin(&ui->context);
     ui->input_started = true;
   }
-  int x = (int)(event->window_point.x / ui->scale),
-      y = (int)(event->window_point.y / ui->scale);
+  int x = (int)(event->window_point.x / ui->window_scale),
+      y = (int)(event->window_point.y / ui->window_scale);
   switch (event->kind) {
   case PP_EVENT_POINTER_MOVE:
     nk_input_motion(&ui->context, x, y);
@@ -375,8 +378,8 @@ bool pp_ui_begin(PPUIBackend *ui, PPError *error) {
   ui->input_started = false;
   int width, height;
   SDL_GetWindowSize(ui->window, &width, &height);
-  ui->width = width / ui->scale;
-  ui->height = height / ui->scale;
+  ui->width = width / ui->window_scale;
+  ui->height = height / ui->window_scale;
   if (ui->tab_direction && ui->control_count) {
     int current = ui->tab_direction > 0 ? -1 : 0;
     for (size_t i = 0; i < ui->control_count; i++)
@@ -609,8 +612,8 @@ bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
     nk_widget_disable_end(&ui->context);
   focus_outline(ui, bounds, focused);
   if (focused) {
-    SDL_Rect area = {(int)(bounds.x * ui->scale), (int)(bounds.y * ui->scale),
-                     (int)(bounds.w * ui->scale), (int)(bounds.h * ui->scale)};
+    SDL_Rect area = {(int)(bounds.x * ui->window_scale), (int)(bounds.y * ui->window_scale),
+                     (int)(bounds.w * ui->window_scale), (int)(bounds.h * ui->window_scale)};
     SDL_SetTextInputArea(ui->window, &area, 0);
   }
   return enabled && !ui->composing && before != control_id(value);

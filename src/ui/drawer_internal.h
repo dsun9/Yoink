@@ -12,7 +12,7 @@ struct PPDrawer {
   unsigned
       textures[8]; /* Only visible rows; GPU textures, no retained CPU copy. */
   PPRect bounds;
-  float scale;
+  float scale, raster_scale;
   bool dismissed, restore_focus, render_hidden;
   char diagnostic[512];
 };

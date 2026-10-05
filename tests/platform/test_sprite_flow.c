@@ -69,6 +69,17 @@ static void hidden_drawer(void) {
   CHECK(pp_ui_control_rect(drawer->backend, "drawer-close", &close));
   CHECK(close.y >= 0 && close.y + close.h <= drawer->backend->height);
   pp_ui_focus(drawer->backend, control);
+  /* A density-only transition leaves native control bounds unchanged but
+   * invalidates atlas/thumbnail resources and preserves the focused item. */
+  uint64_t saved_focus = drawer->backend->focus_id;
+  display.drawable_pixels_per_dip = 2;
+  pp_drawer_layout(drawer, &display, 1);
+  CHECK(!drawer->backend && drawer->focus_id == saved_focus);
+  CHECK(!drawer->dismissed && drawer->bounds.w == 340);
+  display.drawable_pixels_per_dip = 1;
+  pp_drawer_layout(drawer, &display, 1);
+  CHECK(pp_drawer_draw(drawer, 1.2, &error));
+  CHECK(drawer->backend->focus_id == saved_focus);
   pp_drawer_event(
       drawer,
       &(PPPlatformEvent){.kind = PP_EVENT_KEY_DOWN,

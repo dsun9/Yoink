@@ -30,7 +30,7 @@ bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error) {
     bool ok = pp_asset_import(assets, (PPBytes){data, length}, PP_ASSET_FONT, &style.fallback_asset, error);
     SDL_free(data);
     if (!ok) return false;
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__APPLE__)
     PPBlob local = {0};
     if (pp_platform_find_font("Aptos", &local, NULL)) {
         /* Preserve the actual matching collection face, not just its bytes. */

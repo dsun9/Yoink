@@ -12,7 +12,9 @@ static const PPDisplay *display_by_id(const PPDisplay *d, size_t count,
   return NULL;
 }
 bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
-                PPPose pose, double scale, size_t *retained, PPError *error) {
+                PPPose pose, const PPDisplay *display, size_t *retained, PPError *error) {
+  double scale = display->drawable_pixels_per_dip;
+  double desktop_per_pixel = display->desktop_units_per_dip / scale;
   int width, height;
   if (!pp_geometry_extent(source, pose.longest_dip, pose.angle_deg, scale,
                           &width, &height) ||
@@ -31,17 +33,15 @@ bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
   bool ok =
       pp_renderer_transform(p->renderer, source, pose.longest_dip,
                             pose.angle_deg, pose.opacity, scale, &frame, error);
-  /* Windows surfaces retain one four-byte DIB plane, no separate coverage
-   * plane. Charge old + candidate until presentation commits. The temporary
-   * transform is separately charged RGBA + coverage and released below. */
-  size_t native_bytes = (size_t)width * height * 4;
+  /* Old + candidate copies overlap until native presentation commits. */
+  size_t native_bytes = pp_surface_raster_bytes(width, height);
   bool reserved =
       ok && pp_assets_reserve_raster(p->assets, native_bytes, error);
   if (reserved) {
     ok = pp_surface_present(surface, &frame,
-                            (PPRect){round(pose.center.x - frame.width * .5),
-                                     round(pose.center.y - frame.height * .5),
-                                     frame.width, frame.height},
+                            (PPRect){round(pose.center.x - frame.width * desktop_per_pixel * .5),
+                                     round(pose.center.y - frame.height * desktop_per_pixel * .5),
+                                     frame.width * desktop_per_pixel, frame.height * desktop_per_pixel},
                             error);
     if (ok) {
       pp_assets_release_raster(p->assets, *retained);
@@ -66,7 +66,7 @@ bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
   const PPFrame *source = NULL;
   if (!pp_item_snapshot_frame(snapshot, elapsed, scale, &source, next, error))
     return false;
-  return pp_present(p, surface, source, pose, display->desktop_units_per_dip,
+  return pp_present(p, surface, source, pose, display,
                     bytes, error);
 }
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id) {

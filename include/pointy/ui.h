@@ -7,7 +7,8 @@ typedef struct PPUIBackend PPUIBackend;
 typedef struct PPUIWindowOptions {
   const char *title;
   PPRect geometry;
-  float scale; /* 0 follows the display. Nonzero is a controlled UI scale. */
+  float scale; /* Window units per logical DIP; 0 follows the display.
+                * Drawable density is applied separately by the backend. */
   bool resizable;
   bool compact; /* Drawer: borderless and no settings minimum geometry. */
 } PPUIWindowOptions;

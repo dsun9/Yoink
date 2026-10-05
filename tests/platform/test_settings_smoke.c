@@ -670,6 +670,14 @@ static void render_only(void) {
   PPAppOptions options = {"", false};
   CHECK(pp_app_create(&app, &options, &error));
   create_settings(1, true);
+  /* Retina raster density must not halve saved logical window geometry. */
+  SDL_SetWindowSize(settings->backend->window, 1000, 700);
+  settings->backend->scale = 2;
+  pp_settings_close(settings);
+  CHECK(pp_app_ui(app)->geometry.w == 1000 && pp_app_ui(app)->geometry.h == 700);
+  settings->backend->scale = 1;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SHOW_SETTINGS}, &error));
+  SDL_SetWindowSize(settings->backend->window, 1040, 780);
   capture("task8-hidden-100");
   /* Exercise the real collection popup without opening an OS dialog. */
   CHECK(pp_app_command(

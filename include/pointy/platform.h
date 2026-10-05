@@ -69,8 +69,11 @@ void pp_platform_drawer_window(uint32_t window_id);
 void pp_platform_drawer_close(bool restore_focus);
 void pp_surface_raise(PPSurface *surface);
 bool pp_surface_create(PPSurface **out, PPError *error);
-/* Borrows frame. Desktop bounds use physical desktop pixels. Dimensions must
- * match the frame. Failure hides and destroys the native interceptor; caller
+/* Retained native CPU raster bytes for a validated width/height (<=8192).
+ * Presenter reserves this before allocating the candidate native copies. */
+size_t pp_surface_raster_bytes(int width, int height);
+/* Borrows frame. Bounds are native desktop units; frame dimensions are drawable
+ * pixels. The adapter maps the raster to those bounds. Failure destroys the interceptor; caller
  * still releases the PPSurface owner with pp_surface_destroy. */
 bool pp_surface_present(PPSurface *surface, const PPFrame *frame,
     PPRect desktop_bounds, PPError *error);
@@ -93,4 +96,8 @@ void pp_platform_release_capture(void);
 void pp_surface_cancel_input(PPSurface *surface);
 /* Pumps native messages on the main thread, then pops one normalized event. */
 bool pp_platform_poll(PPPlatformEvent *out);
+typedef struct PPApp PPApp;
+typedef struct PPTray PPTray;
+bool pp_platform_tray_create(PPTray **out, PPApp *app, PPError *error);
+void pp_platform_tray_destroy(PPTray *tray);
 #endif

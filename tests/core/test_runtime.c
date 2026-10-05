@@ -5,6 +5,7 @@
 #include "../../src/ui/drawer_internal.h"
 #include "../project_fixture.h"
 #include "../test.h"
+size_t pp_surface_raster_bytes(int width,int height) {return (size_t)width*height*4;}
 #include "pointy/runtime.h"
 #include <math.h>
 struct PPSurface {

@@ -26,7 +26,7 @@ struct PPUIBackend {
   struct nk_buffer commands, vertices, elements;
   GLuint program, vao, vbo, ebo, font_texture;
   GLint projection_location;
-  float scale, width, height;
+  float scale, window_scale, width, height;
   bool input_started, failed, composing, visible, keyboard_focus, activate,
       escape;
   PPKey navigation;

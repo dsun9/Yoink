@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 static const wchar_t surface_class[] = L"PointyPointer.Surface";
+size_t pp_surface_raster_bytes(int width, int height) { return (size_t)width * height * 4; }
 static void release_bitmap(PPSurface *surface);
 static bool fail(PPSurface *surface, PPError *error, int code, const char *message) {
     DWORD failure = GetLastError();

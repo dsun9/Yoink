@@ -92,7 +92,10 @@ void pp_drawer_layout(PPDrawer *d, const PPDisplay *displays, size_t count) {
     return;
   }
   double scale = display->desktop_units_per_dip;
+  bool scale_changed = d->scale != (float)scale ||
+                       d->raster_scale != (float)display->drawable_pixels_per_dip;
   d->scale = (float)scale;
+  d->raster_scale = (float)display->drawable_pixels_per_dip;
   PPRect b = display->bounds;
   d->bounds.w = fmin(340 * scale, b.w);
   d->bounds.h = fmin(360 * scale, b.h);
@@ -100,7 +103,7 @@ void pp_drawer_layout(PPDrawer *d, const PPDisplay *displays, size_t count) {
       b.x, fmin(instance->pose.center.x + 16 * scale, b.x + b.w - d->bounds.w));
   d->bounds.y = fmax(
       b.y, fmin(instance->pose.center.y + 16 * scale, b.y + b.h - d->bounds.h));
-  if (d->backend && d->backend->scale != d->scale) {
+  if (d->backend && scale_changed) {
     if (!d->render_hidden &&
         !(SDL_GetWindowFlags(d->backend->window) & SDL_WINDOW_INPUT_FOCUS))
       d->dismissed = true;

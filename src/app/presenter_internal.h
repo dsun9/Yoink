@@ -53,7 +53,7 @@ PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                             double now, PPError *error);
 bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
-                PPPose pose, double scale, size_t *retained, PPError *error);
+                PPPose pose, const PPDisplay *display, size_t *retained, PPError *error);
 bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,

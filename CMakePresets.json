@@ -4,7 +4,7 @@
   "configurePresets": [
     {"name":"windows-dev","generator":"Visual Studio 17 2022","architecture":"x64","binaryDir":"${sourceDir}/build/windows-dev"},
     {"name":"windows-release","inherits":"windows-dev","binaryDir":"${sourceDir}/build/windows-release"},
-    {"name":"macos-dev","generator":"Ninja","binaryDir":"${sourceDir}/build/macos-dev","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug"}}
+    {"name":"macos-dev","generator":"Ninja","binaryDir":"${sourceDir}/build/macos-dev","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug","CMAKE_OSX_DEPLOYMENT_TARGET":"11.0"}}
   ],
   "buildPresets": [
     {"name":"windows-dev","configurePreset":"windows-dev","configuration":"Debug"},
