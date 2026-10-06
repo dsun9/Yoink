@@ -93,7 +93,7 @@ if(WIN32 OR APPLE)
   if(WIN32)
     set_target_properties(PointyPointer PROPERTIES WIN32_EXECUTABLE TRUE)
     target_link_options(PointyPointer PRIVATE /ENTRY:mainCRTStartup)
-    target_link_options(PointyPointer PRIVATE "/MANIFEST:EMBED" "/MANIFESTINPUT:${CMAKE_CURRENT_BINARY_DIR}/windows.manifest")
+    target_sources(PointyPointer PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/windows.manifest")
   else()
     set_target_properties(PointyPointer PROPERTIES MACOSX_BUNDLE TRUE
       MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Info.plist.in")
