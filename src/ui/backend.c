@@ -252,7 +252,7 @@ failed:
 void pp_ui_backend_destroy(PPUIBackend *ui) {
   if (!ui)
     return;
-  pp_ui_shaped_reset(ui);
+  pp_ui_shaped_destroy(ui);
   pp_ui_poll_reset(pp_ui_backend_window_id(ui));
   if (ui->gl_context && SDL_GL_MakeCurrent(ui->window, ui->gl_context)) {
     if (ui->font_texture)
@@ -300,7 +300,7 @@ static bool SDLCALL retain_other_window_event(void *userdata,SDL_Event *event) {
 bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error) {
   if (!ui || !ui->body_font)
     return fail(error,"Cannot reset an unavailable UI backend");
-  pp_ui_shaped_reset(ui);
+  if(!pp_ui_shaped_reset(ui)) return fail(error,"Cannot bind editor context for reset");
   nk_free(&ui->context);
   if (!nk_init_default(&ui->context,&ui->body_font->handle))
     return fail(error,"Cannot reset drawer UI context");

@@ -71,3 +71,39 @@ All worker launches owned their process handles, redirected output, used hidden 
 ## Changed paths
 
 CMakeLists.txt (only source/link hunk), cmake/Tests.cmake; include/pointy/platform.h and ui.h; src/media/text_raster.c/h; src/ui/backend.c/h,events.c,item_editor.c; new src/ui/text_layout.c/h,edit_state.c/h,shaped_edit.c/h; tests/platform/test_shaped_editor.c,new density/event assertions; this report.
+
+## Review repair round 1 (2026-10-06)
+
+Fix base: `cb73385509e7eb4e1ed7d5b7ffeb4797b667a198`. Read independent `task-3-review.md`; repaired all three Important findings in one focused wave. Native/key/raster algorithms are unchanged. Review approval is not claimed.
+
+### Fresh RED before repair
+
+Added actual fresh-draft/budget failure fixtures to `pointy_shaped_editor_test`, with narrow compile-time seams only around SDL_GL_MakeCurrent (inject failure), glDeleteTextures (record current-context ownership), and layout create (count attempts). Real fonts, rasters, GL windows/textures, editing queues and PPAssets reservations are used. The failure modes can be run individually.
+
+Built existing production with the new fixture using `build/interaction-debug-2026-10-05/build-editor.cmd` (VS18 environment, actual CLion Ninja Debug). Build exit0: `build/editor-fix1-red-build.log`. Each child used an owned60s hidden-process bound and stopped at its first assertion:
+
+- `cmake-build-debug/Debug/pointy_shaped_editor_test.exe --failure initial`: exit1, `CHECK(draw(NULL)) failed`, at recovery from an initially oversized1300-W draft (`editor-fix1-initial-red.err`). This differs from the old valid-AB-then-oversized fixture.
+- Same executable `--failure context`: exit1, `CHECK(foreign_deletes==0) failed` with another real backend's GL context current and owner MakeCurrent denied (`editor-fix1-context-red.err`).
+- Same executable `--failure density`: exit1, `CHECK(pp_ui_shaped_view(ui)==old && error_drawn) failed` after real shared raster budget denial at150% (`editor-fix1-density-red.err`). `error_drawn` inspects emitted Nuklear text commands in the actual field, not just an error variable.
+
+### Repairs and caller contracts
+
+1. Rendering is no longer a precondition for draining draft events. A NULL layout still permits Ctrl+A/clipboard/undo/replacement and composition transactions; geometry-dependent keys/pointer/scroll wait for usable layout. A changed draft can create a successful layout in the same event drain. Exact draft bytes remain authoritative. Fresh oversized and initially budget-denied fixtures both replace their drafts and recover; budget-denied replacements are retained before budget release.
+2. `pp_ui_shaped_reset` now returns bool. It binds the owning GL context before any mutation; failure preserves all IDs, CPU layout, queued events and edit state. `pp_ui_backend_reset` propagates a render error before resetting Nuklear/focus/input. `pp_item_editor_sync` releases its newly acquired candidate snapshot and retains the existing editor plus a visible content error on failure. Final teardown calls separate `pp_ui_shaped_destroy`: if binding fails it releases CPU ownership without issuing GL deletes; the backend's eventual owning-context destruction reclaims GPU resources. Tests verify backend-reset error propagation/focus preservation, zero foreign-context deletes, the foreign atlas remaining valid, successful reset retry and final teardown CPU budget release under denied binding.
+3. Configuration failures have separate persistent diagnostics from old-layout string updates. One attempted draft copy, target density and shared raster occupancy form the failure signature; repeated unchanged/caret/blink frames do not reload fonts or reraster the failed configuration. Draft/density/occupancy change permits retry. Budget release triggers exactly one successful rebuild; reverting to the already retained density clears a no-longer-applicable configuration error. The signature owns at most one draft-sized string and is freed on replacement/reset/destruction. The old raster/layout and caret state remain usable during failed density replacement.
+
+### GREEN validation
+
+- Debug product/covering targets rebuilt via `build-editor-cover.cmd`, exit0 (`editor-fix1-final-build.log`); final fixture build exit0 (`editor-fix1-final-test-build.log`). Actual `cmake-build-debug/Debug/PointyPointer.exe` is rebuilt.
+- `ctest --test-dir cmake-build-debug -C Debug -R "^(shaped_editor|ui_events|ui_density)$" --output-on-failure --stop-on-failure`: **3/3 pass**,4.09s (`build/editor-fix1-debug-final.log`). Default shaped_editor includes all three new failure fixtures alongside prior pixels/editing tests.
+- Release rebuilt via `build-editor-release.cmd`, exit0 (`build/editor-fix1-release-build.log`).
+- `ctest --test-dir build/windows-release -C Release -R "^(shaped_editor|ui_events|ui_density)$" --output-on-failure --stop-on-failure`: **3/3 pass**,2.45s (`build/editor-fix1-release-final.log`).
+- Retained Settings/actions covering result is recorded below after completion; no additional native input or broad desktop suite run for this wave.
+
+### Self-review and deferred minor items
+
+Reviewed reset callers, terminal vs reusable destruction, candidate snapshot reference release, NULL-layout event paths, configuration diagnostic lifetime and retry signature ownership. Failure signatures do not use caret/blink/selection as invalidators. Tests observe actual emitted error commands and distinct GL context resources. Existing bitmap kernel and raster-origin implementation are unchanged.
+
+The review's minor origin-test criticism is valid: the algebraic identity is documentation, not independent origin evidence. An independently measured overhang/image/caret fixture is deferred rather than expanding this focused failure-path repair; current field pixel/density and native caret evidence remain as previously bounded. Existing intentional Release `/UNDEBUG` override warnings are unchanged. Native picker/IME and macOS limitations from the original report remain.
+
+Final retained integration: `cmake-build-debug/Debug/pointy_settings_smoke.exe --render-only` exited0 under the60s owner bound (`build/editor-fix1-settings.log/err`). Actual hidden GL/Nuklear staged imports/validation/cancellation/targets, text and invalid drafts + close/reopen/selection, Save/New shortcut/button actions, and100/150%/narrow rendering all pass.

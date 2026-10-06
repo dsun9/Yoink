@@ -1,5 +1,6 @@
 if(BUILD_TESTING AND (WIN32 OR APPLE))
-  add_executable(pointy_shaped_editor_test tests/platform/test_shaped_editor.c src/ui/edit_state.c)
+  add_executable(pointy_shaped_editor_test tests/platform/test_shaped_editor.c src/ui/edit_state.c src/ui/shaped_edit.c)
+  target_compile_definitions(pointy_shaped_editor_test PRIVATE SDL_GL_MakeCurrent=pp_test_make_current pp_ui_text_layout_create=pp_test_layout_create glDeleteTextures=pp_test_delete_textures)
   target_compile_definitions(pointy_shaped_editor_test PRIVATE SDL_SetClipboardText=pp_test_set_clipboard SDL_GetClipboardText=pp_test_get_clipboard)
   target_include_directories(pointy_shaped_editor_test PRIVATE ${nuklear_SOURCE_DIR})
   target_compile_definitions(pointy_shaped_editor_test PRIVATE PP_EDITOR_OUTPUT="${CMAKE_CURRENT_BINARY_DIR}")

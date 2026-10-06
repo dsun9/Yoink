@@ -7,6 +7,32 @@
 #include <windows.h>
 #endif
 
+#undef SDL_GL_MakeCurrent
+#undef pp_ui_text_layout_create
+#undef glDeleteTextures
+bool SDLCALL SDL_GL_MakeCurrent(SDL_Window *, SDL_GLContext);
+bool pp_ui_text_layout_create(PPUITextLayout **, PPAssets *, double, double,
+                              const uint8_t[4], PPError *);
+void APIENTRY glDeleteTextures(GLsizei, const GLuint *);
+static bool deny_context;
+static unsigned layout_creates, foreign_deletes;
+static SDL_GLContext expected_context;
+static float forced_density;
+static bool error_drawn;
+bool SDLCALL pp_test_make_current(SDL_Window *window, SDL_GLContext context) {
+  return !deny_context && SDL_GL_MakeCurrent(window, context);
+}
+bool pp_test_layout_create(PPUITextLayout **out, PPAssets *assets, double size,
+                           double density, const uint8_t ink[4], PPError *e) {
+  layout_creates++;
+  return pp_ui_text_layout_create(out, assets, size, density, ink, e);
+}
+void APIENTRY pp_test_delete_textures(GLsizei count, const GLuint *textures) {
+  if (expected_context && SDL_GL_GetCurrentContext() != expected_context)
+    foreign_deletes++;
+  glDeleteTextures(count, textures);
+}
+
 static PPUIBackend *ui;
 static PPError error;
 static char draft[16384];
@@ -26,11 +52,21 @@ char *SDLCALL pp_test_get_clipboard(void) {
 }
 static bool draw(const char *capture) {
   CHECK(pp_ui_begin(ui, &error));
+  if (forced_density)
+    ui->scale = forced_density;
   CHECK(nk_begin(&ui->context, "field", nk_rect(0, 0, 600, 240),
                  NK_WINDOW_NO_SCROLLBAR));
   nk_layout_row_dynamic(&ui->context, 78, 1);
   bool changed = pp_ui_edit(ui, "item-text", draft, sizeof(draft), true, true);
   nk_end(&ui->context);
+  error_drawn = false;
+  const struct nk_command *command;
+  nk_foreach(command, &ui->context) if (command->type == NK_COMMAND_TEXT) {
+    const struct nk_command_text *text =
+        (const struct nk_command_text *)command;
+    if (text->length >= 6 && !memcmp(text->string, "Cannot", 6))
+      error_drawn = true;
+  }
   ui->capture_path = capture;
   CHECK(pp_ui_end(ui, &error));
   return changed;
@@ -385,6 +421,107 @@ static int native_observe(void) {
   ui = NULL;
   return 0;
 }
+static void failure_case(const char *which) {
+  PPUIWindowOptions options = {
+      "Hidden failures", {0, 0, 600, 240}, 1, false, true};
+  CHECK(pp_ui_backend_create(&ui, &options, &error));
+  PPAssets *assets = NULL;
+  CHECK(pp_assets_create(&assets, &error));
+  ui->text_assets = assets;
+  const size_t block = 256u * 1024 * 1024;
+  if (!strcmp(which, "initial")) {
+    memset(draft, 'W', 1300);
+    draft[1300] = 0;
+    draw(NULL);
+    CHECK(error_drawn);
+    pp_ui_focus(ui, "item-text");
+    key(PP_KEY_A, PP_MOD_CONTROL);
+    payload("recovered");
+    CHECK(draw(NULL));
+    CHECK(!strcmp(draft, "recovered"));
+    CHECK(pp_ui_shaped_view(ui));
+    pp_ui_shaped_reset(ui);
+    CHECK(pp_assets_reserve_raster(assets, block, &error));
+    CHECK(pp_assets_reserve_raster(assets, block, &error));
+    strcpy(draft, "budget denied");
+    draw(NULL);
+    CHECK(error_drawn);
+    pp_ui_focus(ui, "item-text");
+    key(PP_KEY_A, PP_MOD_CONTROL);
+    payload("retained");
+    CHECK(draw(NULL));
+    CHECK(!strcmp(draft, "retained"));
+    pp_assets_release_raster(assets, block);
+    pp_assets_release_raster(assets, block);
+    draw(NULL);
+    CHECK(pp_ui_shaped_view(ui) && !error_drawn);
+  } else if (!strcmp(which, "context")) {
+    strcpy(draft, "owned");
+    draw(NULL);
+    PPUIBackend *other = NULL;
+    CHECK(pp_ui_backend_create(&other, &options, &error));
+    CHECK(SDL_GL_MakeCurrent(other->window, other->gl_context));
+    CHECK(glIsTexture(other->font_texture));
+    expected_context = ui->gl_context;
+    deny_context = true;
+    pp_ui_focus(ui, "item-text");
+    uint64_t saved_focus = ui->focus_id;
+    CHECK(!pp_ui_backend_reset(ui, &error));
+    CHECK(ui->focus_id == saved_focus && strstr(error.message, "context"));
+    CHECK(foreign_deletes == 0);
+    CHECK(ui->shaped && glIsTexture(other->font_texture));
+    deny_context = false;
+    pp_ui_shaped_reset(ui);
+    CHECK(!ui->shaped);
+    expected_context = NULL;
+    CHECK(SDL_GL_MakeCurrent(other->window, other->gl_context));
+    CHECK(glIsTexture(other->font_texture));
+    draw(NULL);
+    CHECK(pp_assets_external_raster_bytes(assets) > 0);
+    CHECK(SDL_GL_MakeCurrent(other->window, other->gl_context));
+    expected_context = ui->gl_context;
+    deny_context = true;
+    pp_ui_shaped_destroy(ui);
+    CHECK(!ui->shaped && foreign_deletes == 0);
+    CHECK(pp_assets_external_raster_bytes(assets) == 0 &&
+          glIsTexture(other->font_texture));
+    expected_context = NULL;
+    deny_context = false;
+    pp_ui_backend_destroy(other);
+  } else {
+    strcpy(draft, "density retained");
+    draw(NULL);
+    pp_ui_focus(ui, "item-text");
+    key(PP_KEY_END, 0);
+    draw(NULL);
+    size_t caret = pp_ui_shaped_state(ui)->caret;
+    const PPUITextView *old = pp_ui_shaped_view(ui);
+    size_t held = pp_assets_external_raster_bytes(assets);
+    CHECK(pp_assets_reserve_raster(assets, block, &error));
+    CHECK(pp_assets_reserve_raster(assets, block - held, &error));
+    forced_density = 1.5f;
+    draw(NULL);
+    CHECK(pp_ui_shaped_view(ui) == old && error_drawn);
+    unsigned attempts = layout_creates;
+    draw(NULL);
+    key(PP_KEY_LEFT, 0);
+    draw(NULL);
+    draw(NULL);
+    CHECK(layout_creates == attempts && error_drawn &&
+          pp_ui_shaped_state(ui)->caret < caret);
+    pp_assets_release_raster(assets, block);
+    pp_assets_release_raster(assets, block - held);
+    draw(NULL);
+    CHECK(pp_ui_shaped_view(ui)->density == 1.5 && !error_drawn);
+    CHECK(layout_creates == attempts + 1);
+    forced_density = 0;
+  }
+  pp_ui_backend_destroy(ui);
+  ui = NULL;
+  CHECK(pp_assets_external_raster_bytes(assets) == 0);
+  pp_assets_destroy(assets);
+  printf("PASS failure recovery: %s\n", which);
+}
 #ifdef _WIN32
 static void native_cleanup(void) {
   INPUT release[8] = {0};
@@ -494,6 +631,10 @@ static int native_input(void) {
 }
 #endif
 int main(int argc, char **argv) {
+  if (argc == 3 && !strcmp(argv[1], "--failure")) {
+    failure_case(argv[2]);
+    return 0;
+  }
 #ifdef _WIN32
   if (argc == 2 && !strcmp(argv[1], "--native-input"))
     return native_input();
@@ -504,6 +645,9 @@ int main(int argc, char **argv) {
   field_pixels(1.5f);
   cluster_edits();
   layout_contracts();
+  failure_case("initial");
+  failure_case("context");
+  failure_case("density");
   puts("shaped_editor: field pixels, clusters, clipboard, atomic undo/redo, "
        "blank rows, navigation, preedit and reset passed");
   SDL_free(clipboard_text);

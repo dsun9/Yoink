@@ -62,7 +62,11 @@ void pp_item_editor_sync(PPSettings *settings) {
     pp_item_snapshot_release(snapshot);
     return;
   }
-  pp_ui_shaped_reset(settings->backend);
+  if(!pp_ui_shaped_reset(settings->backend)) {
+    pp_item_snapshot_release(snapshot);
+    snprintf(editor->content_error,sizeof(editor->content_error),"Cannot bind editor context; retry selection.");
+    return;
+  }
   pp_item_snapshot_release(editor->preview);
   editor->preview = snapshot;
   editor->id = id;
@@ -363,7 +367,7 @@ void pp_item_editor(PPSettings *settings) {
            NK_TEXT_LEFT);
 }
 void pp_item_editor_destroy(PPSettings *settings) {
-  pp_ui_shaped_reset(settings->backend);
+  pp_ui_shaped_destroy(settings->backend);
   PPItemEditor *editor = &settings->editor;
   pp_item_snapshot_release(editor->preview);
   free(editor->text);

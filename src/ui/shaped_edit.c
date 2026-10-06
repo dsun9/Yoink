@@ -19,6 +19,10 @@ struct PPUIShapedEdit {
   bool enabled, dragging;
   char *last_draft;
   char error[512];
+  char configuration_error[512];
+  char *attempted_draft;
+  float attempted_density;
+  size_t attempted_budget;
 };
 static void clear_textures(PPUIShapedEdit *e) {
   if (e->textures)
@@ -28,13 +32,14 @@ static void clear_textures(PPUIShapedEdit *e) {
   e->texture_count = 0;
   e->texture_generation = 0;
 }
-void pp_ui_shaped_reset(PPUIBackend *ui) {
+static void dispose(PPUIBackend *ui, bool bound) {
   PPUIShapedEdit *e = ui->shaped;
   if (!e)
     return;
-  if (ui->window && ui->gl_context)
-    SDL_GL_MakeCurrent(ui->window, ui->gl_context);
-  clear_textures(e);
+  if (bound)
+    clear_textures(e);
+  else
+    free(e->textures); /* Owning context destruction reclaims GPU objects. */
   pp_ui_text_layout_destroy(e->layout);
   pp_ui_edit_state_clear(&e->state);
   while (e->head) {
@@ -44,8 +49,59 @@ void pp_ui_shaped_reset(PPUIBackend *ui) {
     free(event);
   }
   free(e->last_draft);
+  free(e->attempted_draft);
   free(e);
   ui->shaped = NULL;
+}
+bool pp_ui_shaped_reset(PPUIBackend *ui) {
+  if (!ui->shaped)
+    return true;
+  if (!SDL_GL_MakeCurrent(ui->window, ui->gl_context))
+    return false;
+  dispose(ui, true);
+  return true;
+}
+void pp_ui_shaped_destroy(PPUIBackend *ui) {
+  if (!ui || !ui->shaped)
+    return;
+  dispose(ui, SDL_GL_MakeCurrent(ui->window, ui->gl_context));
+}
+static void configure(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft) {
+  const PPUITextView *view = pp_ui_text_layout_view(e->layout);
+  if (view && fabs(view->density - ui->scale) <= .001) {
+    e->configuration_error[0] = 0;
+    return;
+  }
+  size_t budget = pp_assets_raster_bytes(ui->text_assets);
+  /* Failed configuration attempts retry only for changed input/configuration
+   * or shared-budget occupancy. Blink/caret frames retain the error and image.
+   */
+  if (e->configuration_error[0] && e->attempted_density == ui->scale &&
+      e->attempted_budget == budget && e->attempted_draft &&
+      !strcmp(e->attempted_draft, draft))
+    return;
+  free(e->attempted_draft);
+  e->attempted_draft = SDL_strdup(draft);
+  e->attempted_density = ui->scale;
+  PPUITextLayout *candidate = NULL;
+  PPError error = {0};
+  uint8_t ink[] = {pp_ui_theme.ink.r, pp_ui_theme.ink.g, pp_ui_theme.ink.b,
+                   255};
+  if (pp_ui_text_layout_create(&candidate, ui->text_assets,
+                               pp_ui_theme.body_size, ui->scale, ink, &error) &&
+      pp_ui_text_layout_set(candidate, draft, &error)) {
+    pp_ui_text_layout_destroy(e->layout);
+    e->layout = candidate;
+    clear_textures(e);
+    e->configuration_error[0] = 0;
+  } else {
+    pp_ui_text_layout_destroy(candidate);
+    SDL_strlcpy(e->configuration_error,
+                error.message[0] ? error.message
+                                 : "Cannot configure editor text",
+                sizeof(e->configuration_error));
+  }
+  e->attempted_budget = pp_assets_raster_bytes(ui->text_assets);
 }
 static bool contains(struct nk_rect r, double x, double y) {
   return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
@@ -128,6 +184,10 @@ bool pp_ui_shaped_event(PPUIBackend *ui, const PPPlatformEvent *event) {
 }
 static bool layout_display(PPUIShapedEdit *e, const char *draft, size_t *first,
                            size_t *last, size_t *caret) {
+  *first = *last = 0;
+  *caret = e->state.caret;
+  if (!e->layout)
+    return false;
   char *display = pp_ui_edit_display(&e->state, draft, first, last, caret);
   PPError error = {0};
   bool ok = display && pp_ui_text_layout_set(e->layout, display, &error);
@@ -186,36 +246,13 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
     pp_ui_edit_state_clear(&e->state);
   if (!focused && !e->head)
     pp_ui_edit_cancel(&e->state);
-  const PPUITextView *v = pp_ui_text_layout_view(e->layout);
-  if (!v || fabs(v->density - ui->scale) > .001) {
-    PPUITextLayout *candidate = NULL;
-    PPError error = {0};
-    uint8_t ink[] = {pp_ui_theme.ink.r, pp_ui_theme.ink.g, pp_ui_theme.ink.b,
-                     255};
-    if (pp_ui_text_layout_create(&candidate, ui->text_assets,
-                                 pp_ui_theme.body_size, ui->scale, ink,
-                                 &error) &&
-        pp_ui_text_layout_set(candidate, draft, &error)) {
-      pp_ui_text_layout_destroy(e->layout);
-      e->layout = candidate;
-      clear_textures(e);
-    } else {
-      pp_ui_text_layout_destroy(candidate);
-      SDL_strlcpy(e->error, error.message, sizeof(e->error));
-    }
-  }
+  configure(ui, e, draft);
   struct nk_rect allocated;
   nk_widget(&allocated, &ui->context);
   struct nk_command_buffer *canvas = nk_window_get_canvas(&ui->context);
   nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius, pp_ui_theme.surface);
   nk_stroke_rect(canvas, bounds, pp_ui_theme.control_radius, 1,
                  focused ? pp_ui_theme.accent : pp_ui_theme.muted);
-  if (!e->layout) {
-    nk_draw_text(canvas, bounds, e->error, (int)strlen(e->error),
-                 &ui->body_font->handle, pp_ui_theme.surface,
-                 pp_ui_theme.danger);
-    return false;
-  }
   size_t marked_first, marked_last, display_caret;
   bool changed = false;
   bool reveal = false;
@@ -256,7 +293,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
         changed = pp_ui_edit_key(&e->state, e->layout, draft, (size_t)capacity,
                                  event.key, event.modifiers) ||
                   changed;
-    } else if (event.kind == PP_EVENT_WHEEL) {
+    } else if (event.kind == PP_EVENT_WHEEL && e->layout) {
       e->state.scroll.y =
           fmax(0, e->state.scroll.y -
                       event.wheel_delta *
@@ -272,10 +309,13 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
     }
     free(q->payload);
     free(q);
+    configure(ui, e, draft);
     layout_ok =
         layout_display(e, draft, &marked_first, &marked_last, &display_caret);
   }
-  v = pp_ui_text_layout_view(e->layout);
+  const PPUITextView *v = pp_ui_text_layout_view(e->layout);
+  if (!v)
+    goto done;
   if (e->texture_generation != v->generation) {
     clear_textures(e);
     e->textures = calloc(v->row_count, sizeof(*e->textures));
@@ -356,10 +396,12 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   }
   nk_push_scissor(canvas, clip);
 done:
-  if (e->error[0]) {
+  const char *diagnostic =
+      e->configuration_error[0] ? e->configuration_error : e->error;
+  if (diagnostic[0]) {
     struct nk_rect notice =
         nk_rect(bounds.x + 4, bounds.y + bounds.h - 22, bounds.w - 8, 20);
-    nk_draw_text(canvas, notice, e->error, (int)strlen(e->error),
+    nk_draw_text(canvas, notice, diagnostic, (int)strlen(diagnostic),
                  &ui->body_font->handle, pp_ui_theme.surface,
                  pp_ui_theme.danger);
   }
