@@ -49,6 +49,8 @@ void pp_ui_apply_theme(PPUIBackend *ui);
 bool pp_ui_begin(PPUIBackend *ui, PPError *error);
 bool pp_ui_end(PPUIBackend *ui, PPError *error);
 void pp_ui_show(PPUIBackend *ui, bool show);
+/* Reset per-open UI state while retaining the window, GL objects and fonts. */
+bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error);
 void pp_ui_modal(PPUIBackend *ui, bool modal);
 void pp_ui_heading(PPUIBackend *ui, const char *text);
 bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,

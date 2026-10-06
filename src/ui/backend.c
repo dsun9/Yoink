@@ -291,6 +291,36 @@ void pp_ui_show(PPUIBackend *ui, bool show) {
   else
     SDL_HideWindow(ui->window);
 }
+static bool SDLCALL retain_other_window_event(void *userdata,SDL_Event *event) {
+  return SDL_GetWindowFromEvent(event)!=(SDL_Window *)userdata;
+}
+bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error) {
+  if (!ui || !ui->body_font)
+    return fail(error,"Cannot reset an unavailable UI backend");
+  nk_free(&ui->context);
+  if (!nk_init_default(&ui->context,&ui->body_font->handle))
+    return fail(error,"Cannot reset drawer UI context");
+  ui->context.clip.copy=clipboard_copy;
+  ui->context.clip.paste=clipboard_paste;
+  ui->context.clip.userdata=nk_handle_ptr(ui);
+  pp_ui_apply_theme(ui);
+  nk_buffer_clear(&ui->commands);
+  nk_buffer_clear(&ui->vertices);
+  nk_buffer_clear(&ui->elements);
+  ui->input_started=ui->failed=ui->composing=ui->keyboard_focus=false;
+  ui->activate=ui->escape=ui->in_popup=ui->modal=ui->last_modal=false;
+  ui->pointer_target=ui->text_target=false;
+  ui->navigation=PP_KEY_NONE;
+  ui->modifiers=0; ui->tab_direction=0;
+  ui->focus_id=ui->restore_focus=ui->popup_id=0;
+  ui->popup_index=0; ui->control_count=0; ui->capture_path=NULL;
+  /* A retained native window keeps its ID across opens. Discard queued input
+   * and focus notifications belonging to the previous drawer session only. */
+  SDL_FilterEvents(retain_other_window_event,ui->window);
+  SDL_StopTextInput(ui->window);
+  SDL_StartTextInput(ui->window);
+  return true;
+}
 static void key(PPUIBackend *ui, PPKey code, bool down, bool control) {
   struct nk_context *ctx = &ui->context;
   switch (code) {

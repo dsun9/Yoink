@@ -1,4 +1,5 @@
 #include "text_raster.h"
+#include "bitmap_sample.h"
 #include "limits.h"
 #include <SDL3_ttf/SDL_textengine.h>
 #include <ft2build.h>
@@ -102,36 +103,12 @@ static bool draw_bitmap(PPFrame *out, const TTF_CopyOperation *op, double scale,
         pp_frame_destroy(&glyph);
         return false;
     }
-    int left = (int)floor(op->dst.x * scale), top = (int)floor(op->dst.y * scale);
-    int right = (int)ceil((op->dst.x + op->dst.w) * scale);
-    int bottom = (int)ceil((op->dst.y + op->dst.h) * scale);
-    for (int y = top; y < bottom; y++) {
-        for (int x = left; x < right; x++) {
-            double sx = (x + 0.5) / scale - op->dst.x + op->src.x - 0.5;
-            double sy = (y + 0.5) / scale - op->dst.y + op->src.y - 0.5;
-            int x0 = (int)floor(sx), y0 = (int)floor(sy);
-            double fx = sx - x0, fy = sy - y0;
-            uint8_t rgba[4];
-            for (int c = 0; c < 4; c++) {
-                double value = 0;
-                for (int dy = 0; dy < 2; dy++) {
-                    for (int dx = 0; dx < 2; dx++) {
-                        int xx = x0 + dx, yy = y0 + dy;
-                        if (xx >= op->src.x && yy >= op->src.y && xx < op->src.x + op->src.w &&
-                            yy < op->src.y + op->src.h && xx >= 0 && yy >= 0 && xx < glyph.width && yy < glyph.height)
-                            value += glyph.pixels[((size_t)yy * glyph.width + xx) * 4 + c] *
-                                (dx ? fx : 1-fx) * (dy ? fy : 1-fy);
-                    }
-                }
-                rgba[c] = (uint8_t)lround(value * color[3] / 255.0);
-            }
-            if (type == TTF_IMAGE_ALPHA)
-                for (int c = 0; c < 3; c++) rgba[c] = (uint8_t)((color[c] * rgba[3] + 127) / 255);
-            over(out, x + origin_x, y + origin_y, rgba);
-        }
-    }
+    PPBitmapSampling sample = {
+        {op->src.x,op->src.y,op->src.w,op->src.h},
+        {op->dst.x,op->dst.y,op->dst.w,op->dst.h},type==TTF_IMAGE_ALPHA};
+    ok = pp_bitmap_sample(out,&glyph,&sample,scale,origin_x,origin_y,color,error);
     pp_frame_destroy(&glyph);
-    return true;
+    return ok;
 }
 
 static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double scale,

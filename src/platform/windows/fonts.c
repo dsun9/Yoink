@@ -37,7 +37,9 @@ static bool family_in_file(const wchar_t *path, const char *family, PPBlob *out)
         for (int face = 0; face < 256; face++) {
             PPFontInfo info;
             if (!pp_font_inspect((PPBytes){blob.data, blob.size}, face, &info, NULL)) break;
-            if (!_stricmp(info.family, family)) {
+            char styled[sizeof(info.family)+sizeof(info.style)+2];
+            snprintf(styled,sizeof(styled),"%s %s",info.family,info.style);
+            if (!_stricmp(info.family, family) || !_stricmp(styled,family)) {
                 *out = blob;
                 return true;
             }
@@ -47,7 +49,7 @@ static bool family_in_file(const wchar_t *path, const char *family, PPBlob *out)
     return false;
 }
 
-static bool registered_fonts(HKEY hive, const char *family, PPBlob *out) {
+static bool registered_fonts(HKEY hive, const char *family, bool hinted, PPBlob *out) {
     HKEY key;
     if (RegOpenKeyExW(hive, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
             0, KEY_READ, &key) != ERROR_SUCCESS) return false;
@@ -56,11 +58,25 @@ static bool registered_fonts(HKEY hive, const char *family, PPBlob *out) {
     wchar_t *path = calloc(PP_FONT_PATH, sizeof(wchar_t));
     bool found = false;
     if (!name || !value || !path) goto done;
+    wchar_t requested[256];
+    if (!MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,family,-1,requested,256)) goto done;
+    size_t requested_length=wcslen(requested);
+    /* Registry display names are only search hints. First inspect likely files,
+     * then retain the full metadata-based fallback for aliases/collections.
+     * Do not treat "Segoe UI Bold" as a hint for regular "Segoe UI". */
     for (DWORD index = 0; ; index++) {
         DWORD name_count = PP_FONT_PATH, data_bytes = (PP_FONT_PATH - 1) * sizeof(wchar_t), type;
         LONG result = RegEnumValueW(key, index, name, &name_count, NULL, &type, (BYTE *)value, &data_bytes);
         if (result == ERROR_NO_MORE_ITEMS) break;
         if (result != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ)) continue;
+        name[name_count]=0;
+        bool hint=false;
+        if (!_wcsnicmp(name,requested,requested_length)) {
+            const wchar_t *suffix=name+requested_length;
+            while (*suffix==L' ') suffix++;
+            hint=!*suffix || *suffix==L'(';
+        }
+        if (hint != hinted) continue;
         value[data_bytes / sizeof(wchar_t)] = 0;
         if (type == REG_EXPAND_SZ) {
             DWORD n = ExpandEnvironmentStringsW(value, path, PP_FONT_PATH);
@@ -121,8 +137,10 @@ static bool font_directory(const wchar_t *directory, unsigned depth, const char 
 bool pp_platform_find_font(const char *family, PPBlob *out, PPError *error) {
     if (!family || !*family || !out || out->data || out->size)
         return font_error(error, PP_ERROR_ARGUMENT, "Font lookup requires a family and empty owned blob");
-    if (registered_fonts(HKEY_CURRENT_USER, family, out) ||
-        registered_fonts(HKEY_LOCAL_MACHINE, family, out)) return true;
+    if (registered_fonts(HKEY_CURRENT_USER, family, true, out) ||
+        registered_fonts(HKEY_LOCAL_MACHINE, family, true, out) ||
+        registered_fonts(HKEY_CURRENT_USER, family, false, out) ||
+        registered_fonts(HKEY_LOCAL_MACHINE, family, false, out)) return true;
     struct FontLocation { const wchar_t *variable, *suffix; } locations[] = {
         /* Enumerate Office cache versions under the standard per-user root;
          * never assume a user's name, version number, or numeric font filename. */

@@ -6,19 +6,52 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void release_thumbnails(PPDrawer *d) {
+  if (d->backend && SDL_GL_MakeCurrent(d->backend->window,d->backend->gl_context))
+    glDeleteTextures(8,d->textures);
+  memset(d->textures,0,sizeof(d->textures));
+  for(size_t i=0;i<8;i++) {
+    pp_item_snapshot_release(d->thumbnails[i].snapshot);
+    d->thumbnails[i]=(PPDrawerThumbnail){0};
+  }
+}
 static void close_backend(PPDrawer *d) {
   if (!d->backend)
     return;
   d->focus_id = d->backend->focus_id;
   if (d->backend->visible)
     pp_platform_drawer_close(d->restore_focus);
-  if (SDL_GL_MakeCurrent(d->backend->window, d->backend->gl_context))
-    glDeleteTextures(8, d->textures);
-  memset(d->textures, 0, sizeof(d->textures));
-  pp_renderer_destroy(d->renderer);
-  d->renderer = NULL;
+  release_thumbnails(d);
+  if (!d->cache) {pp_renderer_destroy(d->renderer);d->renderer=NULL;}
   pp_ui_backend_destroy(d->backend);
   d->backend = NULL;
+}
+bool pp_drawer_cache_warm(PPDrawerCache *cache,const PPDisplay *display,PPError *error) {
+  if (!cache || cache->in_use || !display) return false;
+  if (cache->backend) return true;
+  PPUIWindowOptions options={.title="Replace sprite",
+    .geometry={display->bounds.x,display->bounds.y,340,360},
+    .scale=(float)display->desktop_units_per_dip,.compact=true};
+  return pp_ui_backend_create(&cache->backend,&options,error);
+}
+void pp_drawer_cache_destroy(PPDrawerCache *cache) {
+  if (!cache) return;
+  pp_ui_backend_destroy(cache->backend);
+  cache->backend=NULL;
+}
+bool pp_drawer_use_cache(PPDrawer *d,PPDrawerCache *cache,PPError *error) {
+  if (!d || !cache || cache->in_use || d->backend) return false;
+  if (cache->backend && !pp_ui_backend_reset(cache->backend,error)) {
+    pp_drawer_cache_destroy(cache); return false;
+  }
+  d->cache=cache; cache->in_use=true;
+  d->renderer=cache->renderer;
+  d->backend=cache->backend; cache->backend=NULL;
+  if (d->backend) {
+    d->scale=d->backend->window_scale;
+    d->raster_scale=d->backend->scale;
+  }
+  return true;
 }
 
 bool pp_drawer_valid(const PPDrawer *d) {
@@ -142,11 +175,21 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
                       struct nk_rect bounds, PPError *error) {
   PPItemSnapshot *snapshot =
       pp_project_snapshot(pp_app_project(d->app), item->id);
+  PPDrawerThumbnail *cached=&d->thumbnails[slot];
+  bool ok=true;
+  if (cached->snapshot == snapshot && cached->scale == d->backend->scale)
+    goto draw;
+  /* A retained snapshot distinguishes edits and slot reuse even if an allocator
+   * reuses an old address. Its scale-dependent CPU raster may change in another
+   * consumer without changing the immutable content represented by this texture.
+   * GIF thumbnails intentionally sample time zero and stay static. */
+  pp_item_snapshot_release(cached->snapshot);
+  *cached=(PPDrawerThumbnail){0};
   PPVec2 size = pp_item_snapshot_size(snapshot);
   const PPFrame *source = NULL;
   double next;
   double pixels = 48 * d->backend->scale;
-  bool ok = pp_item_snapshot_frame(snapshot, 0, pixels / fmax(size.x, size.y),
+  ok = pp_item_snapshot_frame(snapshot, 0, pixels / fmax(size.x, size.y),
                                    &source, &next, error);
   PPFrame small = {0};
   int width = 0, height = 0;
@@ -160,16 +203,8 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
                                &small, error);
     if (ok)
       ok = pp_ui_upload_frame(d->backend, &d->textures[slot], &small, error);
-    if (ok) {
-      float factor = fminf(bounds.w / small.width, bounds.h / small.height);
-      float w = small.width * factor, h = small.height * factor;
-      struct nk_rect image_bounds = nk_rect(
-          bounds.x + (bounds.w - w) / 2, bounds.y + (bounds.h - h) / 2, w, h);
-      nk_draw_image(
-          nk_window_get_canvas(&d->backend->context), image_bounds,
-          &(struct nk_image){.handle = nk_handle_id((int)d->textures[slot])},
-          nk_rgba(255, 255, 255, 255));
-    }
+    if (ok)
+      *cached=(PPDrawerThumbnail){pp_item_snapshot_retain(snapshot),d->backend->scale,small.width,small.height};
     pp_frame_destroy(&small);
     pp_assets_release_raster(pp_app_assets(d->app), charge);
   } else
@@ -181,6 +216,14 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
       *error =
           (PPError){PP_ERROR_RENDER, "Cannot restore drawer graphics context"};
     ok = false;
+  }
+draw:
+  if (ok && cached->snapshot) {
+    float factor=fminf(bounds.w/cached->width,bounds.h/cached->height);
+    float w=cached->width*factor,h=cached->height*factor;
+    struct nk_rect image_bounds=nk_rect(bounds.x+(bounds.w-w)/2,bounds.y+(bounds.h-h)/2,w,h);
+    nk_draw_image(nk_window_get_canvas(&d->backend->context),image_bounds,
+      &(struct nk_image){.handle=nk_handle_id((int)d->textures[slot])},nk_rgba(255,255,255,255));
   }
   pp_item_snapshot_release(snapshot);
   return ok;
@@ -199,7 +242,7 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
                                  .compact = true};
     if (!pp_ui_backend_create(&d->backend, &options, error))
       return false;
-    if (!pp_renderer_create(&d->renderer, error))
+    if (!d->renderer && !pp_renderer_create(&d->renderer, error))
       return false;
     d->backend->focus_id = d->focus_id;
     d->backend->keyboard_focus = d->focus_id != 0;
@@ -277,6 +320,13 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
 void pp_drawer_close(PPDrawer *d) {
   if (!d)
     return;
-  close_backend(d);
+  if (d->cache) {
+    if (d->backend && d->backend->visible) pp_platform_drawer_close(d->restore_focus);
+    if (d->backend) pp_ui_show(d->backend,false);
+    release_thumbnails(d);
+    d->cache->backend=d->backend;
+    d->cache->in_use=false;
+    d->backend=NULL;
+  } else close_backend(d);
   free(d);
 }

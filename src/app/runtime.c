@@ -29,6 +29,7 @@ static void failure(PPRuntime *r) {
   pp_app_report(r->app, &r->error);
   pp_drawer_close(r->drawer);
   r->drawer = NULL;
+  pp_drawer_cache_destroy(&r->drawer_cache);
   pp_anchor_presenter_destroy(r->presenter);
   r->presenter = NULL;
   pp_platform_release_capture();
@@ -75,8 +76,19 @@ bool pp_runtime_create(PPRuntime **out, PPApp *app, PPError *error) {
     free(r);
     return false;
   }
+  r->drawer_cache.renderer=r->renderer;
   *out = r;
   return true;
+}
+void pp_runtime_prepare_ui(PPRuntime *r) {
+  PPDisplay *displays=NULL;size_t count=0;PPError error={0};PPVec2 pointer={0};
+  if (pp_platform_displays(&displays,&count,&error) && count) {
+    pp_platform_pointer(&pointer);
+    const PPDisplay *display=pp_display_at(displays,count,pointer);
+    if (!display) display=displays;
+    if (!pp_drawer_cache_warm(&r->drawer_cache,display,&error)) pp_app_report(r->app,&error);
+  }
+  pp_displays_free(displays);
 }
 void pp_runtime_event(PPRuntime *r, const PPPlatformEvent *event) {
   if (!event || !synchronize(r))
@@ -99,8 +111,11 @@ void pp_runtime_event(PPRuntime *r, const PPPlatformEvent *event) {
   if (id && pp_scene_get(pp_app_scene(r->app), id)) {
     pp_drawer_close(r->drawer);
     r->drawer = NULL;
-    if (!pp_drawer_open(&r->drawer, r->app, id, &r->error))
+    if (!pp_drawer_open(&r->drawer, r->app, id, &r->error) ||
+        !pp_drawer_use_cache(r->drawer,&r->drawer_cache,&r->error)) {
       pp_app_report(r->app, &r->error);
+      pp_drawer_close(r->drawer);r->drawer=NULL;
+    }
   }
 }
 void pp_runtime_tick(PPRuntime *r, double now) {
@@ -148,6 +163,7 @@ void pp_runtime_destroy(PPRuntime *r) {
   if (!r)
     return;
   pp_drawer_close(r->drawer);
+  pp_drawer_cache_destroy(&r->drawer_cache);
   pp_anchor_presenter_destroy(r->presenter);
   pp_renderer_destroy(r->renderer);
   free(r);

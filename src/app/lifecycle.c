@@ -13,6 +13,7 @@ bool pp_lifecycle_start(PPLifecycle *life, const PPAppOptions *options, PPError 
       !pp_tray_create(&life->tray,life->app,error)) {
     pp_lifecycle_stop(life); return false;
   }
+  pp_runtime_prepare_ui(life->runtime);
   pp_runtime_tick(life->runtime,seconds());
   if(life->runtime->failed) {
     if(error) *error=life->runtime->error;

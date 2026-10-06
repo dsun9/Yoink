@@ -241,10 +241,19 @@ static bool restore_desktop(void) {
   left_held = right_held = alt_held = control_held = false;
   SetCursorPos(old_cursor.x, old_cursor.y);
   if (old_foreground && IsWindow(old_foreground)) {
-    SetForegroundWindow(old_foreground);
-    DWORD_PTR response;
-    SendMessageTimeoutW(old_foreground, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 1000,
-                        &response);
+    /* Cross-thread activation is asynchronous. WM_NULL completion is not a
+     * foreground transition acknowledgement, especially after receiver exit.
+     * Wait on the actual condition while servicing our own native messages. */
+    ULONGLONG deadline=GetTickCount64()+1000;
+    do {
+      SetForegroundWindow(old_foreground);
+      MSG message;
+      while(PeekMessageW(&message,NULL,0,0,PM_REMOVE)) {
+        TranslateMessage(&message);DispatchMessageW(&message);
+      }
+      if(GetForegroundWindow()==old_foreground) break;
+      Sleep(10);
+    } while(IsWindow(old_foreground) && GetTickCount64()<deadline);
   }
   POINT actual = {0};
   GetCursorPos(&actual);
