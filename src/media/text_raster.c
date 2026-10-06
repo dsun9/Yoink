@@ -140,9 +140,9 @@ static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double s
     return true;
 }
 
-bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],
+bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
         double shaping_size, double requested_size, const uint8_t color[4],
-        PPFrame *out, PPError *error) {
+        PPFrame *out, PPVec2 *origin_px, PPError *error) {
     FT_Library library = NULL;
     RasterFont raster_fonts[2] = {0};
     bool ok = false;
@@ -194,6 +194,7 @@ bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],
     }
     if (!pp_media_size(right - left, bottom - top, 1, &bytes, error)) goto done;
     int origin_x = -left, origin_y = -top;
+    if (origin_px) *origin_px = (PPVec2){origin_x, origin_y};
     out->width = right - left;
     out->height = bottom - top;
     out->stride = (size_t)out->width * 4;
@@ -225,4 +226,11 @@ done:
     FT_Done_FreeType(library);
     if (!ok) pp_frame_destroy(out);
     return ok;
+}
+
+bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],
+        double shaping_size, double requested_size, const uint8_t color[4],
+        PPFrame *out, PPError *error) {
+    return pp_text_raster_origin(text, fonts, shaping_size, requested_size,
+                                color, out, NULL, error);
 }

@@ -1,4 +1,5 @@
 #include "settings_internal.h"
+#include "shaped_edit.h"
 #include <ctype.h>
 #include <errno.h>
 #include <math.h>
@@ -61,6 +62,7 @@ void pp_item_editor_sync(PPSettings *settings) {
     pp_item_snapshot_release(snapshot);
     return;
   }
+  pp_ui_shaped_reset(settings->backend);
   pp_item_snapshot_release(editor->preview);
   editor->preview = snapshot;
   editor->id = id;
@@ -202,17 +204,6 @@ static void field(PPSettings *settings, const char *label, const char *id,
       pp_ui_edit(ui, id, value, capacity, false, !settings->dialog_pending) ||
       *changed;
 }
-static void editor_glyph_notice(PPSettings *settings) {
-  PPUIBackend *ui = settings->backend;
-  char notice[512];
-  if (!pp_ui_unicode_notice(ui, settings->editor.text, notice, sizeof(notice)))
-    return;
-  size_t length = strlen(notice);
-  snprintf(notice + length, sizeof(notice) - length,
-           " The preview above shows the actual text.");
-  nk_layout_row_dynamic(&ui->context, 60, 1);
-  nk_label_wrap(&ui->context, notice);
-}
 static void preview(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
@@ -300,12 +291,12 @@ void pp_item_editor(PPSettings *settings) {
   }
   bool changed = false;
   if (editor->draft.kind == PP_ITEM_TEXT && editor->text) {
+    ui->text_assets=pp_app_assets(settings->app);
     nk_layout_row_dynamic(&ui->context, 20, 1);
     nk_label(&ui->context, "Text / emoji (Unicode, multiline)", NK_TEXT_LEFT);
     nk_layout_row_dynamic(&ui->context, 78, 1);
     changed = pp_ui_edit(ui, "item-text", editor->text, editor->text_capacity,
                          true, !settings->dialog_pending);
-    editor_glyph_notice(settings);
     pp_ui_error(ui, editor->content_error);
     nk_layout_row_dynamic(&ui->context, 24, 1);
     char font[300];
@@ -372,6 +363,7 @@ void pp_item_editor(PPSettings *settings) {
            NK_TEXT_LEFT);
 }
 void pp_item_editor_destroy(PPSettings *settings) {
+  pp_ui_shaped_reset(settings->backend);
   PPItemEditor *editor = &settings->editor;
   pp_item_snapshot_release(editor->preview);
   free(editor->text);

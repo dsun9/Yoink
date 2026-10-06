@@ -22,7 +22,8 @@ void pp_ui_backend_destroy(PPUIBackend *backend);
 void pp_ui_backend_event(PPUIBackend *backend, const PPPlatformEvent *event);
 uint32_t pp_ui_backend_window_id(const PPUIBackend *backend);
 /* Poll SDL UI events once at application level and route by window_id. TEXT
- * is one Unicode scalar per event; no borrowed SDL string escapes. */
+ * retains scalar compatibility plus a complete borrowed UTF-8 payload on
+ * its first scalar. Payload lifetime ends at the next pp_ui_poll call. */
 bool pp_ui_poll(PPPlatformEvent *event);
 bool pp_settings_create(PPSettings **out, PPApp *app, PPError *error);
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event);

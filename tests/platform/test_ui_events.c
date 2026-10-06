@@ -103,15 +103,25 @@ int main(void) {
   PPPlatformEvent event;
   CHECK(pp_ui_poll(&event) && event.kind == PP_EVENT_TEXT &&
         event.window_id == 42 && event.codepoint == 'A');
+  CHECK(event.text_utf8 && !strcmp(event.text_utf8,source.text.text) && !event.text_continuation);
   CHECK(pp_ui_poll(&event) && event.codepoint == 0xe9);
+  CHECK(event.text_continuation && !event.text_utf8);
   CHECK(pp_ui_poll(&event) && event.codepoint == 0x1f449);
+  source.text.text="ABC";
+  CHECK(SDL_PushEvent(&source));
+  CHECK(next_event(&event) && event.codepoint=='A');
+  pp_ui_poll_reset(42);
+  CHECK(!next_event(&event)); /* Reset discards the borrowed payload tail. */
   source = (SDL_Event){0};
   source.type = SDL_EVENT_TEXT_EDITING;
   source.edit.windowID = 42;
   source.edit.text = "composition";
+  source.edit.start=3;
+  source.edit.length=4;
   CHECK(SDL_PushEvent(&source));
   CHECK(next_event(&event) && event.kind == PP_EVENT_COMPOSITION &&
         event.composing);
+  CHECK(event.text_utf8 && !strcmp(event.text_utf8,"composition") && event.composition_start==3 && event.composition_length==4);
   source = (SDL_Event){0};
   source.type = SDL_EVENT_KEY_DOWN;
   source.key.windowID = 42;

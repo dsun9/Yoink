@@ -4,6 +4,7 @@
  * context, fonts, GL resources and focus registry; no global context lookup. */
 #define NK_IMPLEMENTATION
 #include "backend.h"
+#include "shaped_edit.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -251,6 +252,8 @@ failed:
 void pp_ui_backend_destroy(PPUIBackend *ui) {
   if (!ui)
     return;
+  pp_ui_shaped_reset(ui);
+  pp_ui_poll_reset(pp_ui_backend_window_id(ui));
   if (ui->gl_context && SDL_GL_MakeCurrent(ui->window, ui->gl_context)) {
     if (ui->font_texture)
       glDeleteTextures(1, &ui->font_texture);
@@ -297,6 +300,7 @@ static bool SDLCALL retain_other_window_event(void *userdata,SDL_Event *event) {
 bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error) {
   if (!ui || !ui->body_font)
     return fail(error,"Cannot reset an unavailable UI backend");
+  pp_ui_shaped_reset(ui);
   nk_free(&ui->context);
   if (!nk_init_default(&ui->context,&ui->body_font->handle))
     return fail(error,"Cannot reset drawer UI context");
@@ -317,6 +321,7 @@ bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error) {
   /* A retained native window keeps its ID across opens. Discard queued input
    * and focus notifications belonging to the previous drawer session only. */
   SDL_FilterEvents(retain_other_window_event,ui->window);
+  pp_ui_poll_reset(pp_ui_backend_window_id(ui));
   SDL_StopTextInput(ui->window);
   SDL_StartTextInput(ui->window);
   return true;
@@ -379,6 +384,7 @@ static void key(PPUIBackend *ui, PPKey code, bool down, bool control) {
 void pp_ui_backend_event(PPUIBackend *ui, const PPPlatformEvent *event) {
   if (!ui || !event || event->window_id != pp_ui_backend_window_id(ui))
     return;
+  if (pp_ui_shaped_event(ui,event)) return;
   if (!ui->input_started) {
     nk_input_begin(&ui->context);
     ui->input_started = true;
@@ -668,6 +674,10 @@ bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
   enabled = enabled && (!ui->popup_id || ui->in_popup);
   struct nk_rect bounds;
   bool focused = control(ui, id, id, enabled, true, &bounds);
+  if (!strcmp(id,"item-text")) {
+    if (focused) nk_edit_unfocus(&ui->context);
+    return pp_ui_shaped_draw(ui,value,capacity,bounds,focused,enabled);
+  }
   nk_flags flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE |
                    NK_EDIT_CLIPBOARD | NK_EDIT_SIG_ENTER;
   if (multiline)

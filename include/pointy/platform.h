@@ -49,6 +49,12 @@ typedef struct PPPlatformEvent {
     PPVec2 window_point;
     PPKey key;
     bool repeat, composing;
+    /* UI poll payload borrowed until the next poll. TEXT's first scalar has
+     * the complete committed payload; subsequent scalars set continuation.
+     * Composition ranges count UTF-8 characters, as specified by SDL. */
+    const char *text_utf8;
+    int composition_start, composition_length;
+    bool text_continuation;
 } PPPlatformEvent;
 typedef enum PPDialogKind { PP_DIALOG_OPEN_PROJECT, PP_DIALOG_SAVE_PROJECT, PP_DIALOG_IMPORT_IMAGE, PP_DIALOG_IMPORT_FONT } PPDialogKind;
 /* Result is borrowed only during callback; NULL path/error means cancellation.

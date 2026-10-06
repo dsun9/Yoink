@@ -16,6 +16,8 @@ typedef struct PPUITheme {
 } PPUITheme;
 extern const PPUITheme pp_ui_theme;
 struct PPUIBackend {
+  struct PPUIShapedEdit *shaped;
+  PPAssets *text_assets; /* Borrowed app raster budget; outlives this field. */
   SDL_Window *window;
   SDL_GLContext gl_context;
   PPGL gl;
@@ -51,6 +53,7 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error);
 void pp_ui_show(PPUIBackend *ui, bool show);
 /* Reset per-open UI state while retaining the window, GL objects and fonts. */
 bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error);
+void pp_ui_poll_reset(uint32_t window_id);
 void pp_ui_modal(PPUIBackend *ui, bool modal);
 void pp_ui_heading(PPUIBackend *ui, const char *text);
 bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,

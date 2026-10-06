@@ -1,0 +1,511 @@
+#include "../../src/ui/shaped_edit.h"
+#include "../test.h"
+#include <SDL3/SDL.h>
+#include <math.h>
+#include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+static PPUIBackend *ui;
+static PPError error;
+static char draft[16384];
+/* Test the exact SDL boundary bytes without replacing any user clipboard
+ * format. The native input mode does not synthesize copy/paste. */
+static char *clipboard_text;
+bool SDLCALL pp_test_set_clipboard(const char *text) {
+  char *copy = SDL_strdup(text);
+  if (!copy)
+    return false;
+  SDL_free(clipboard_text);
+  clipboard_text = copy;
+  return true;
+}
+char *SDLCALL pp_test_get_clipboard(void) {
+  return SDL_strdup(clipboard_text ? clipboard_text : "");
+}
+static bool draw(const char *capture) {
+  CHECK(pp_ui_begin(ui, &error));
+  CHECK(nk_begin(&ui->context, "field", nk_rect(0, 0, 600, 240),
+                 NK_WINDOW_NO_SCROLLBAR));
+  nk_layout_row_dynamic(&ui->context, 78, 1);
+  bool changed = pp_ui_edit(ui, "item-text", draft, sizeof(draft), true, true);
+  nk_end(&ui->context);
+  ui->capture_path = capture;
+  CHECK(pp_ui_end(ui, &error));
+  return changed;
+}
+static void event(PPPlatformEvent e) {
+  e.window_id = pp_ui_backend_window_id(ui);
+  pp_ui_backend_event(ui, &e);
+}
+static void key(PPKey code, unsigned mods) {
+  event((PPPlatformEvent){
+      .kind = PP_EVENT_KEY_DOWN, .key = code, .modifiers = mods});
+  event((PPPlatformEvent){
+      .kind = PP_EVENT_KEY_UP, .key = code, .modifiers = mods});
+}
+static void payload(const char *text) {
+  SDL_Event source = {.type = SDL_EVENT_TEXT_INPUT};
+  source.text.windowID = pp_ui_backend_window_id(ui);
+  source.text.text = text;
+  CHECK(SDL_PushEvent(&source));
+  for (int pass = 0; pass < 3; pass++) {
+    PPPlatformEvent e;
+    while (pp_ui_poll(&e)) {
+      if (e.kind == PP_EVENT_KEY_DOWN)
+        fprintf(stderr, "OS normalized key=%d mods=%u\n", e.key, e.modifiers);
+      pp_ui_backend_event(ui, &e);
+    }
+  }
+}
+static void click_byte(size_t byte) {
+  const PPUITextView *v = pp_ui_shaped_view(ui);
+  PPUITextCaret caret = {0};
+  for (size_t i = 0; i < v->caret_count; i++)
+    if (v->carets[i].byte == byte)
+      caret = v->carets[i];
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(ui, "item-text", &bounds));
+  PPVec2 p = {(bounds.x + 6 + caret.point.x) * ui->window_scale,
+              (bounds.y + 6 + caret.point.y + caret.height / 2) *
+                  ui->window_scale};
+  event((PPPlatformEvent){.kind = PP_EVENT_BUTTON_DOWN,
+                          .button = PP_BUTTON_LEFT,
+                          .window_point = p});
+  event((PPPlatformEvent){
+      .kind = PP_EVENT_BUTTON_UP, .button = PP_BUTTON_LEFT, .window_point = p});
+  draw(NULL);
+  CHECK(pp_ui_shaped_state(ui)->caret == byte);
+}
+static void fixture(const char *text) {
+  pp_ui_shaped_reset(ui);
+  strcpy(draft, text);
+  draw(NULL);
+  pp_ui_focus(ui, "item-text");
+  draw(NULL);
+}
+static void field_pixels(float density) {
+  PPUIWindowOptions options = {
+      "Hidden shaped editor", {0, 0, 600, 240}, density, false, true};
+  CHECK(pp_ui_backend_create(&ui, &options, &error));
+  strcpy(draft, "A\xf0\x9f\x91\x89"
+                "B");
+  const char *path = density == 1
+                         ? PP_EDITOR_OUTPUT "/shaped-editor-field-100.bmp"
+                         : PP_EDITOR_OUTPUT "/shaped-editor-field-150.bmp";
+  draw(path);
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(ui, "item-text", &bounds));
+  SDL_Surface *bmp = SDL_LoadBMP(path);
+  CHECK(bmp);
+  unsigned colored = 0;
+  for (int y = (int)((bounds.y + 5) * ui->scale);
+       y < (int)((bounds.y + bounds.h - 5) * ui->scale); y++)
+    for (int x = (int)((bounds.x + 5) * ui->scale);
+         x < (int)((bounds.x + bounds.w - 5) * ui->scale); x++) {
+      Uint8 r, g, b, a;
+      CHECK(SDL_ReadSurfacePixel(bmp, x, y, &r, &g, &b, &a));
+      if (r > b + 45 && g > b + 20 && r > 110)
+        colored++;
+    }
+  fprintf(stderr, "field-only density=%.2f colored pixels=%u\n", ui->scale,
+          colored);
+  SDL_DestroySurface(bmp);
+  CHECK(colored > 15);
+  const PPUITextView *v = pp_ui_shaped_view(ui);
+  CHECK(v && v->caret_count == 4 && v->carets[1].byte == 1 &&
+        v->carets[2].byte == 5);
+  uint64_t generation = v->generation;
+  pp_ui_focus(ui, "item-text");
+  key(PP_KEY_END, 0);
+  draw(NULL);
+  key(PP_KEY_LEFT, PP_MOD_SHIFT);
+  draw(NULL);
+  CHECK(pp_ui_shaped_view(ui)->generation == generation);
+  CHECK(pp_ui_backend_reset(ui, &error));
+  CHECK(!ui->shaped);
+  pp_ui_backend_destroy(ui);
+  ui = NULL;
+}
+static void cluster_edits(void) {
+  PPUIWindowOptions options = {
+      "Hidden editing contracts", {0, 0, 600, 240}, 1, false, true};
+  CHECK(pp_ui_backend_create(&ui, &options, &error));
+  const char *clusters[] = {
+      "\xf0\x9f\x91\x89", "\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb",
+      "\xf0\x9f\x91\x89\xf0\x9f\x8f\xbd", "\xf0\x9f\x91\x89\xef\xb8\x8f",
+      "\xf0\x9f\x87\xba\xf0\x9f\x87\xb8"};
+  for (size_t i = 0; i < sizeof(clusters) / sizeof(*clusters); i++) {
+    char text[128];
+    snprintf(text, sizeof(text), "A%sB", clusters[i]);
+    fixture(text);
+    const PPUITextView *v = pp_ui_shaped_view(ui);
+    fprintf(stderr, "cluster fixture %zu carets=%zu bytes=%zu\n", i,
+            v->caret_count, strlen(text));
+    CHECK(v->caret_count == 4);
+    size_t after = 1 + strlen(clusters[i]);
+    CHECK(v->carets[1].byte == 1 && v->carets[2].byte == after);
+    click_byte(after);
+    key(PP_KEY_LEFT, 0);
+    draw(NULL);
+    CHECK(pp_ui_shaped_state(ui)->caret == 1);
+    key(PP_KEY_RIGHT, PP_MOD_SHIFT);
+    draw(NULL);
+    CHECK(pp_ui_shaped_state(ui)->caret == after &&
+          pp_ui_shaped_state(ui)->anchor == 1);
+    uint64_t generation = pp_ui_shaped_view(ui)->generation;
+    key(PP_KEY_C, PP_MOD_CONTROL);
+    draw(NULL);
+    char *clipboard = SDL_GetClipboardText();
+    CHECK(clipboard && !strcmp(clipboard, clusters[i]));
+    SDL_free(clipboard);
+    CHECK(pp_ui_shaped_view(ui)->generation == generation);
+    payload("XY");
+    CHECK(draw(NULL));
+    CHECK(!strcmp(draft, "AXYB"));
+    key(PP_KEY_Z, PP_MOD_CONTROL);
+    CHECK(draw(NULL));
+    CHECK(!strcmp(draft, text));
+    key(PP_KEY_Z, PP_MOD_CONTROL | PP_MOD_SHIFT);
+    CHECK(draw(NULL));
+    CHECK(!strcmp(draft, "AXYB"));
+    key(PP_KEY_Z, PP_MOD_CONTROL);
+    draw(NULL);
+    key(PP_KEY_BACKSPACE, 0);
+    draw(NULL);
+    CHECK(!strcmp(draft, "AB"));
+    key(PP_KEY_Z, PP_MOD_CONTROL);
+    draw(NULL);
+    CHECK(!strcmp(draft, text));
+    click_byte(1);
+    key(PP_KEY_DELETE, 0);
+    draw(NULL);
+    CHECK(!strcmp(draft, "AB"));
+    key(PP_KEY_Z, PP_MOD_CONTROL);
+    draw(NULL);
+    CHECK(!strcmp(draft, text));
+    click_byte(after);
+    key(PP_KEY_BACKSPACE, 0);
+    draw(NULL);
+    CHECK(!strcmp(draft, "AB"));
+    key(PP_KEY_V, PP_MOD_CONTROL);
+    draw(NULL);
+    CHECK(!strcmp(draft, text));
+  }
+  fixture("A\xcc\x81"
+          "B");
+  CHECK(pp_ui_shaped_view(ui)->caret_count == 3);
+  click_byte(3);
+  key(PP_KEY_BACKSPACE, 0);
+  draw(NULL);
+  CHECK(!strcmp(draft, "B"));
+  const char *blank[] = {"", " ", "  ", "\n", "A\n\n", "A  ", "A\r\nB"};
+  const size_t rows[] = {1, 1, 1, 2, 3, 1, 2};
+  for (size_t i = 0; i < 7; i++) {
+    fixture(blank[i]);
+    const PPUITextView *v = pp_ui_shaped_view(ui);
+    CHECK(!strcmp(draft, blank[i]) && v->row_count == rows[i]);
+    CHECK(v->carets[v->caret_count - 1].byte == strlen(draft));
+    CHECK(v->line_height >= 16);
+    if (i == 1 || i == 2)
+      CHECK(v->extent.x > 0);
+  }
+  fixture("ABCDEFGHIJ\nAB\nABCDEFGHIJ");
+  click_byte(8);
+  key(PP_KEY_DOWN, 0);
+  draw(NULL);
+  CHECK(pp_ui_shaped_state(ui)->caret == 13);
+  key(PP_KEY_DOWN, 0);
+  draw(NULL);
+  CHECK(pp_ui_shaped_state(ui)->caret == 22);
+  fixture("a\na\na\na\na\na\na\na\na\na");
+  key(PP_KEY_END, PP_MOD_CONTROL);
+  draw(NULL);
+  CHECK(pp_ui_shaped_state(ui)->scroll.y > 0);
+  key(PP_KEY_HOME, PP_MOD_CONTROL);
+  draw(NULL);
+  CHECK(pp_ui_shaped_state(ui)->scroll.y == 0);
+  fixture("AB");
+  click_byte(1);
+  event((PPPlatformEvent){.kind = PP_EVENT_COMPOSITION,
+                          .composing = true,
+                          .text_utf8 =
+                              "\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb"
+                              "xy",
+                          .composition_start = 3,
+                          .composition_length = 1});
+  draw(NULL);
+  CHECK(!strcmp(draft, "AB") && pp_ui_shaped_state(ui)->composing);
+  CHECK(pp_ui_shaped_state(ui)->preedit_start == 3 &&
+        pp_ui_shaped_state(ui)->preedit_length == 1);
+  CHECK(pp_ui_shaped_view(ui)->carets[2].byte == 12);
+  key(PP_KEY_ENTER, 0);
+  draw(NULL);
+  CHECK(!strcmp(draft, "AB") && !ui->activate);
+  event((PPPlatformEvent){.kind = PP_EVENT_COMPOSITION, .text_utf8 = ""});
+  draw(NULL);
+  CHECK(!strcmp(draft, "AB") && !pp_ui_shaped_state(ui)->composing);
+  event((PPPlatformEvent){.kind = PP_EVENT_COMPOSITION,
+                          .composing = true,
+                          .text_utf8 = "marked",
+                          .composition_start = -1,
+                          .composition_length = -1});
+  draw(NULL);
+  payload("\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb"
+          "xy");
+  draw(NULL);
+  CHECK(!strcmp(draft, "A\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb"
+                       "xyB"));
+  CHECK(pp_ui_shaped_state(ui)->undo_count == 1 &&
+        !pp_ui_shaped_state(ui)->composing && !ui->composing);
+  key(PP_KEY_Z, PP_MOD_CONTROL);
+  draw(NULL);
+  CHECK(!strcmp(draft, "AB"));
+  event((PPPlatformEvent){
+      .kind = PP_EVENT_COMPOSITION, .composing = true, .text_utf8 = "cancel"});
+  draw(NULL);
+  event((PPPlatformEvent){.kind = PP_EVENT_FOCUS_LOST});
+  draw(NULL);
+  CHECK(!pp_ui_shaped_state(ui)->composing && !strcmp(draft, "AB"));
+  payload("kept");
+  event((PPPlatformEvent){.kind = PP_EVENT_FOCUS_LOST});
+  draw(NULL);
+  CHECK(!strcmp(draft, "AkeptB"));
+  fixture("AB");
+  char oversized[1300];
+  memset(oversized, 'W', sizeof(oversized) - 1);
+  oversized[sizeof(oversized) - 1] = 0;
+  key(PP_KEY_A, PP_MOD_CONTROL);
+  payload(oversized);
+  draw(NULL);
+  CHECK(!strcmp(draft, oversized));
+  key(PP_KEY_Z, PP_MOD_CONTROL);
+  draw(NULL);
+  CHECK(!strcmp(draft, "AB"));
+  /* A queued borrowed payload is owned before the next SDL poll/reset. */
+  payload("queued");
+  CHECK(pp_ui_backend_reset(ui, &error));
+  CHECK(!ui->shaped);
+  pp_ui_backend_destroy(ui);
+  ui = NULL;
+}
+static void layout_contracts(void) {
+  PPAssets *assets = NULL;
+  CHECK(pp_assets_create(&assets, &error));
+  PPUITextLayout *layout = NULL;
+  const uint8_t ink[] = {32, 53, 71, 255};
+  CHECK(pp_ui_text_layout_create(&layout, assets, 16, 1.5, ink, &error));
+  CHECK(pp_ui_text_layout_set(layout, "jA  \n\n", &error));
+  const PPUITextView *view = pp_ui_text_layout_view(layout);
+  CHECK(view->row_count == 3 && view->carets[view->caret_count - 1].byte == 6);
+  PPUITextCaret copied = view->carets[1];
+  uint64_t generation = view->generation;
+  size_t bytes = pp_assets_external_raster_bytes(assets);
+  CHECK(bytes > 0);
+  for (size_t row = 0; row < view->row_count; row++) {
+    CHECK(view->rows[row].origin_px.x >= 0 && view->rows[row].origin_px.y >= 0);
+    if (view->rows[row].frame.pixels) {
+      /* Frame-origin translation cancels exactly at the layout caret. */
+      double image_x = -view->rows[row].origin_px.x / view->density;
+      double pixel_x =
+          copied.point.x * view->density + view->rows[row].origin_px.x;
+      CHECK(fabs(image_x + pixel_x / view->density - copied.point.x) < .00001);
+    }
+  }
+  CHECK(pp_ui_text_layout_set(layout, "jA  \n\n", &error));
+  CHECK(pp_ui_text_layout_view(layout)->generation == generation);
+  CHECK(pp_assets_external_raster_bytes(assets) == bytes);
+  const size_t resource = 256u * 1024 * 1024;
+  CHECK(pp_assets_reserve_raster(assets, resource, &error));
+  CHECK(pp_assets_reserve_raster(assets, resource - bytes, &error));
+  CHECK(!pp_ui_text_layout_set(layout, "budget blocked", &error));
+  CHECK(pp_ui_text_layout_view(layout)->generation == generation);
+  CHECK(pp_ui_text_layout_view(layout)->carets[1].byte == copied.byte);
+  CHECK(pp_assets_external_raster_bytes(assets) == resource * 2);
+  pp_assets_release_raster(assets, resource);
+  pp_assets_release_raster(assets, resource - bytes);
+  CHECK(pp_ui_text_layout_set(layout,
+                              "A\xf0\x9f\x91\x89"
+                              "B",
+                              &error));
+  CHECK(pp_ui_text_layout_view(layout)->generation == generation + 1);
+  CHECK(copied.byte == 1 && copied.point.x > 0);
+  CHECK(!pp_ui_text_layout_set(layout, "\xc0\xaf", &error));
+  pp_ui_text_layout_destroy(layout);
+  CHECK(pp_assets_external_raster_bytes(assets) == 0);
+  pp_assets_destroy(assets);
+}
+static int native_observe(void) {
+  PPUIWindowOptions options = {"PointyPointer emoji field observation",
+                               {120, 120, 720, 300},
+                               1,
+                               true,
+                               true};
+  CHECK(pp_ui_backend_create(&ui, &options, &error));
+  strcpy(draft, "A\xf0\x9f\x91\x89"
+                "B\nA\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb"
+                "B");
+  draw(NULL);
+  pp_ui_focus(ui, "item-text");
+  pp_ui_show(ui, true);
+  SDL_RaiseWindow(ui->window);
+  key(PP_KEY_END, PP_MOD_CONTROL);
+  draw(NULL);
+  puts("READY native field, 20-second bounded observation; no app, surfaces or "
+       "hooks. Windows emoji picker / installed IME may input here.");
+  fflush(stdout);
+  Uint64 deadline = SDL_GetTicks() + 20000;
+  unsigned commits = 0, preedits = 0;
+  while (SDL_GetTicks() < deadline) {
+    PPPlatformEvent e;
+    while (pp_ui_poll(&e)) {
+      if (e.kind == PP_EVENT_QUIT || e.kind == PP_EVENT_WINDOW_CLOSE)
+        deadline = 0;
+      if (e.kind == PP_EVENT_TEXT && e.text_utf8) {
+        commits++;
+        fprintf(stderr, "Native SDL commit bytes=%zu: %s\n",
+                strlen(e.text_utf8), e.text_utf8);
+      }
+      if (e.kind == PP_EVENT_COMPOSITION) {
+        preedits++;
+        fprintf(stderr, "Native SDL preedit start=%d length=%d text=%s\n",
+                e.composition_start, e.composition_length,
+                e.text_utf8 ? e.text_utf8 : "");
+      }
+      pp_ui_backend_event(ui, &e);
+    }
+    draw(NULL);
+    SDL_Delay(10);
+  }
+  draw(PP_EDITOR_OUTPUT "/shaped-editor-native.bmp");
+  printf("Native observation complete: SDL commits=%u preedits=%u draft=%s\n",
+         commits, preedits, draft);
+  pp_ui_backend_destroy(ui);
+  ui = NULL;
+  return 0;
+}
+#ifdef _WIN32
+static void native_cleanup(void) {
+  INPUT release[8] = {0};
+  const WORD codes[] = {VK_CONTROL, VK_SHIFT,  VK_HOME, VK_RIGHT,
+                        VK_BACK,    VK_DELETE, VK_LWIN, VK_ESCAPE};
+  for (int i = 0; i < 8; i++) {
+    release[i].type = INPUT_KEYBOARD;
+    release[i].ki.wVk = codes[i];
+    release[i].ki.dwFlags = KEYEVENTF_KEYUP;
+  }
+  SendInput(8, release, sizeof(INPUT));
+  pp_ui_backend_destroy(ui);
+  ui = NULL;
+}
+static void native_pump(void) {
+  Uint64 until = SDL_GetTicks() + 120;
+  do {
+    PPPlatformEvent e;
+    while (pp_ui_poll(&e))
+      pp_ui_backend_event(ui, &e);
+    draw(NULL);
+    SDL_Delay(5);
+  } while (SDL_GetTicks() < until);
+}
+static void native_key(WORD code, bool shift, bool control) {
+  INPUT input[6] = {0};
+  UINT n = 0;
+  if (control) {
+    input[n].type = INPUT_KEYBOARD;
+    input[n++].ki.wVk = VK_CONTROL;
+  }
+  if (shift) {
+    input[n].type = INPUT_KEYBOARD;
+    input[n++].ki.wVk = VK_SHIFT;
+  }
+  DWORD flags = (code == VK_HOME || code == VK_RIGHT || code == VK_DELETE)
+                    ? KEYEVENTF_EXTENDEDKEY
+                    : 0;
+  input[n].type = INPUT_KEYBOARD;
+  input[n].ki.dwFlags = flags;
+  input[n].ki.wScan = (WORD)MapVirtualKeyW(code, MAPVK_VK_TO_VSC);
+  input[n++].ki.wVk = code;
+  input[n].type = INPUT_KEYBOARD;
+  input[n].ki.wVk = code;
+  input[n].ki.wScan = (WORD)MapVirtualKeyW(code, MAPVK_VK_TO_VSC);
+  input[n++].ki.dwFlags = flags | KEYEVENTF_KEYUP;
+  if (shift) {
+    input[n].type = INPUT_KEYBOARD;
+    input[n].ki.wVk = VK_SHIFT;
+    input[n++].ki.dwFlags = KEYEVENTF_KEYUP;
+  }
+  if (control) {
+    input[n].type = INPUT_KEYBOARD;
+    input[n].ki.wVk = VK_CONTROL;
+    input[n++].ki.dwFlags = KEYEVENTF_KEYUP;
+  }
+  CHECK(SendInput(n, input, sizeof(INPUT)) == n);
+  native_pump();
+}
+static int native_input(void) {
+  atexit(native_cleanup);
+  PPUIWindowOptions options = {
+      "PointyPointer native emoji input", {120, 120, 720, 300}, 1, true, true};
+  CHECK(pp_ui_backend_create(&ui, &options, &error));
+  draft[0] = 0;
+  draw(NULL);
+  pp_ui_focus(ui, "item-text");
+  pp_ui_show(ui, true);
+  SDL_RaiseWindow(ui->window);
+  HWND window =
+      SDL_GetPointerProperty(SDL_GetWindowProperties(ui->window),
+                             SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  CHECK(window && SetForegroundWindow(window));
+  native_pump();
+  CHECK(GetForegroundWindow() == window);
+  /* Actual OS Unicode keyboard input, including UTF-16 surrogate pairs. */
+  const WORD utf16[] = {'A', 0xd83d, 0xdc69, 0x200d, 0xd83d, 0xdcbb, 'B'};
+  INPUT input[14] = {0};
+  for (int i = 0; i < 7; i++) {
+    input[2 * i].type = INPUT_KEYBOARD;
+    input[2 * i].ki.wScan = utf16[i];
+    input[2 * i].ki.dwFlags = KEYEVENTF_UNICODE;
+    input[2 * i + 1] = input[2 * i];
+    input[2 * i + 1].ki.dwFlags |= KEYEVENTF_KEYUP;
+  }
+  CHECK(SendInput(14, input, sizeof(INPUT)) == 14);
+  native_pump();
+  const char *expected = "A\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb"
+                         "B";
+  CHECK(!strcmp(draft, expected));
+  CHECK(pp_ui_shaped_view(ui)->caret_count == 4);
+  native_key(VK_HOME, false, false);
+  native_key(VK_RIGHT, false, false);
+  CHECK(pp_ui_shaped_state(ui)->caret == 1);
+  native_key(VK_RIGHT, true, false);
+  CHECK(pp_ui_shaped_state(ui)->caret == 12 &&
+        pp_ui_shaped_state(ui)->anchor == 1);
+  native_key(VK_BACK, false, false);
+  CHECK(!strcmp(draft, "AB"));
+  native_key('Z', false, true);
+  CHECK(!strcmp(draft, expected));
+  draw(PP_EDITOR_OUTPUT "/shaped-editor-native-input.bmp");
+  puts("PASS OS SendInput UTF16->SDL->actual field: ZWJ exact bytes, 4 cluster "
+       "stops, physical arrows/selection/delete/undo. No picker selection or "
+       "native IME claimed.");
+  return 0;
+}
+#endif
+int main(int argc, char **argv) {
+#ifdef _WIN32
+  if (argc == 2 && !strcmp(argv[1], "--native-input"))
+    return native_input();
+#endif
+  if (argc == 2 && !strcmp(argv[1], "--native-observe"))
+    return native_observe();
+  field_pixels(1);
+  field_pixels(1.5f);
+  cluster_edits();
+  layout_contracts();
+  puts("shaped_editor: field pixels, clusters, clipboard, atomic undo/redo, "
+       "blank rows, navigation, preedit and reset passed");
+  SDL_free(clipboard_text);
+  return 0;
+}

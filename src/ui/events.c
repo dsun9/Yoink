@@ -1,6 +1,19 @@
 #include "backend.h"
 #include <string.h>
 
+static char *text, *preedit;
+static size_t offset;
+static uint32_t text_window;
+void pp_ui_poll_reset(uint32_t window_id) {
+  if (text_window == window_id) {
+    SDL_free(text);
+    text = NULL;
+    offset = 0;
+    SDL_free(preedit);
+    preedit = NULL;
+  }
+}
+
 static PPKey normalize_key(SDL_Keycode key) {
   switch (key) {
   case SDLK_TAB:
@@ -62,16 +75,17 @@ static PPKey normalize_key(SDL_Keycode key) {
   }
 }
 bool pp_ui_poll(PPPlatformEvent *out) {
-  static char *text;
-  static size_t offset;
-  static uint32_t text_window;
   if (!out)
     return false;
   *out = (PPPlatformEvent){0};
+  SDL_free(preedit);
+  preedit = NULL;
   if (text && text[offset]) {
     nk_rune rune;
     int used = nk_utf_decode(text + offset, &rune, (int)strlen(text + offset));
     if (used > 0) {
+      out->text_utf8 = offset == 0 ? text : NULL;
+      out->text_continuation = offset != 0;
       offset += (size_t)used;
       out->kind = PP_EVENT_TEXT;
       out->window_id = text_window;
@@ -116,9 +130,14 @@ bool pp_ui_poll(PPPlatformEvent *out) {
         out->modifiers |= PP_MOD_ALT;
       return true;
     case SDL_EVENT_TEXT_EDITING:
+      preedit = SDL_strdup(event.edit.text ? event.edit.text : "");
+      text_window = event.edit.windowID;
       out->kind = PP_EVENT_COMPOSITION;
       out->window_id = event.edit.windowID;
       out->composing = event.edit.text && *event.edit.text;
+      out->text_utf8 = preedit;
+      out->composition_start = event.edit.start;
+      out->composition_length = event.edit.length;
       return true;
     case SDL_EVENT_TEXT_INPUT:
       text = SDL_strdup(event.text.text);
