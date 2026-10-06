@@ -11,8 +11,10 @@ static PPSurface *surface;
 static PPRenderer *renderer;
 static HWND old_foreground;
 static POINT old_cursor;
+static bool right_held;
 static void cleanup(void) {
     pp_surface_destroy(surface); pp_renderer_destroy(renderer);
+    if(right_held) {INPUT up={.type=INPUT_MOUSE};up.mi.dwFlags=MOUSEEVENTF_RIGHTUP;SendInput(1,&up,sizeof(up));}
     if (receiver && receiver->window) PostMessageW((HWND)receiver->window, WM_CLOSE, 0, 0);
     if (child.hProcess) { WaitForSingleObject(child.hProcess, 3000); CloseHandle(child.hProcess); CloseHandle(child.hThread); }
     if (receiver) UnmapViewOfFile(receiver);
@@ -35,6 +37,15 @@ static void pump(void) {
         Sleep(1);
     } while (GetTickCount64() < until);
 }
+static void foreground_receiver(void) {
+    ULONGLONG until=GetTickCount64()+5000;
+    do {
+        SetForegroundWindow((HWND)receiver->window);
+        pump();
+        if(GetForegroundWindow() == (HWND)receiver->window) return;
+    } while(GetTickCount64() < until);
+    CHECK(GetForegroundWindow() == (HWND)receiver->window);
+}
 typedef struct Injection { INPUT *input; UINT count, sent; } Injection;
 static DWORD WINAPI inject(void *context) {
     Injection *request = context;
@@ -49,6 +60,12 @@ static void send_input(INPUT *input, UINT count) {
     while (WaitForSingleObject(thread, 0) == WAIT_TIMEOUT && GetTickCount64() < until) pump();
     CHECK(WaitForSingleObject(thread, 0) == WAIT_OBJECT_0);
     CloseHandle(thread); CHECK(request.sent == count); pump();
+}
+static void right_half(DWORD flags) {
+    INPUT input={.type=INPUT_MOUSE};input.mi.dwFlags=flags;
+    if(flags == MOUSEEVENTF_RIGHTDOWN) right_held=true;
+    send_input(&input,1);
+    if(flags == MOUSEEVENTF_RIGHTUP) right_held=false;
 }
 static void press(bool right) {
     INPUT input[2] = {0}; input[0].type = input[1].type = INPUT_MOUSE;
@@ -83,7 +100,9 @@ static void test_windows_surface_routes_alpha(void) {
     click(277, 252, false); CHECK(receiver->clicks == 1); CHECK(overlay_clicks == 1);
     CHECK(GetForegroundWindow() == foreground_before);
     click(252, 252, true); CHECK(receiver->right_clicks == 1); CHECK(overlay_right == 0);
+    CHECK(receiver->right_ups == 1 && receiver->context_menus == 1);
     click(277, 252, true); CHECK(receiver->right_clicks == 1); CHECK(overlay_right == 1);
+    CHECK(receiver->right_ups == 1 && receiver->context_menus == 1);
     CHECK(GetForegroundWindow() == foreground_before);
     /* Keep the pointer fixed after rim arrival, remove that pixel, click. */
     memset(source.pixels, 0, 64*256); memset(source.content_alpha, 0, 64*64);
@@ -105,6 +124,43 @@ static void test_windows_surface_routes_alpha(void) {
     printf("PASS alpha routing: receiver left=3 right=1; overlay left=1 right=1; focus preserved; rotated hole passes.\n");
     printf("Wheel observation at rotated hole: receiver=%ld overlay=%d (Task 2 gate pending).\n", receiver->wheels, overlay_wheels);
     pp_frame_destroy(&source); pp_frame_destroy(&rotated);
+}
+static void test_final_surface_right_drain(void) {
+    pp_surface_destroy(surface);surface=NULL;
+    PPError error={0};PPFrame source=ring();
+    for(int variant=0;variant<5;variant++) {
+        CHECK(pp_surface_create(&surface,&error));
+        CHECK(pp_surface_present(surface,&source,(PPRect){220,220,64,64},&error));pump();
+        CHECK(SetCursorPos(277,252));
+        HWND native=WindowFromPoint((POINT){277,252});
+        CHECK(native != (HWND)receiver->window && GetForegroundWindow() == (HWND)receiver->window);
+        POINT client={277,252};RECT bounds;
+        CHECK(ScreenToClient((HWND)receiver->window,&client) && GetClientRect((HWND)receiver->window,&bounds));
+        CHECK(PtInRect(&bounds,client));
+        LONG down=receiver->right_clicks,up=receiver->right_ups,context=receiver->context_menus;
+        int accepted=overlay_right;right_half(MOUSEEVENTF_RIGHTDOWN);
+        CHECK(overlay_right == accepted+1);
+        if(variant == 3) {pp_surface_hide(surface);CHECK(!IsWindowVisible(native));}
+        else if(variant == 4) {CHECK(!pp_surface_present(surface,NULL,(PPRect){0},&error));CHECK(!IsWindow(native));}
+        else {pp_surface_destroy(surface);surface=NULL;CHECK(!IsWindow(native));}
+        printf("right-surface boundary variant=%d: removed/hidden/failed before up; receiver down=%ld up=%ld context=%ld\n",
+               variant,receiver->right_clicks-down,receiver->right_ups-up,receiver->context_menus-context);
+        if(variant == 1) CHECK(SetCursorPos(430,350));
+        if(variant == 2) {
+            CHECK(pp_surface_create(&surface,&error));
+            CHECK(pp_surface_present(surface,&source,(PPRect){220,220,64,64},&error));pump();
+        }
+        right_half(MOUSEEVENTF_RIGHTUP);
+        printf("right-surface release variant=%d: receiver down=%ld up=%ld context=%ld\n",
+               variant,receiver->right_clicks-down,receiver->right_ups-up,receiver->context_menus-context);fflush(stdout);
+        CHECK(receiver->right_clicks == down && receiver->right_ups == up && receiver->context_menus == context);
+        pp_surface_destroy(surface);surface=NULL;
+        click(430,350,true);
+        CHECK(receiver->right_clicks == down+1 && receiver->right_ups == up+1 && receiver->context_menus == context+1);
+        CHECK(GetForegroundWindow() == (HWND)receiver->window);
+    }
+    pp_frame_destroy(&source);
+    puts("PASS final-surface right drain, moved release, registration during drain, hide/failure and original outside gesture");
 }
 static void test_renderer_preserves_rows_and_premultiplication(void) {
     PPFrame source = {0}; source.width = 2; source.height = 2; source.stride = 8;
@@ -181,7 +237,7 @@ int main(int argc, char **argv) {
     CHECK(CreateProcessA(NULL, command, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &child));
     ULONGLONG until = GetTickCount64() + 5000;
     while (!receiver->window && GetTickCount64() < until) Sleep(10);
-    CHECK(receiver->window); CHECK(SetForegroundWindow((HWND)receiver->window));
+    CHECK(receiver->window); foreground_receiver();
     test_windows_surface_routes_alpha(); test_renderer_preserves_rows_and_premultiplication();
-    test_failed_presentation_removes_interceptor();test_hit_matches_presented_boundary_pixels(); return 0;
+    test_failed_presentation_removes_interceptor();test_hit_matches_presented_boundary_pixels();test_final_surface_right_drain(); return 0;
 }

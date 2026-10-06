@@ -7,6 +7,14 @@ static HHOOK hook;
 static PPSurface *surfaces,*owner,*accepted_press;
 static PPSurface *button_targets[4];
 static bool capture_eligible;
+/* Physical consumption outlives its borrowed delivery target: deletion,
+ * hiding, failure and capture cancellation must not leak the matching up. */
+static bool right_consumed;
+static void unhook_if_idle(void) {
+    if(!surfaces && !right_consumed && hook) {
+        pp_platform_release_capture();UnhookWindowsHookEx(hook);hook=NULL;
+    }
+}
 HWND pp_windows_drawer_window(void);
 static PPButton button(UINT message) {
     switch(message) {
@@ -55,6 +63,7 @@ static LRESULT CALLBACK observe(int code,WPARAM w,LPARAM l) {
     }
     PPButton b=button(message);if(b==PP_BUTTON_NONE) return CallNextHookEx(hook,code,w,l);
     bool down=message==WM_LBUTTONDOWN||message==WM_RBUTTONDOWN||message==WM_MBUTTONDOWN;
+    bool consumed_up=!down && b==PP_BUTTON_RIGHT && right_consumed;
     HWND drawer=pp_windows_drawer_window();
     if(down&&drawer&&GetAncestor(WindowFromPoint(mouse->pt),GA_ROOT)!=drawer) {
         /* Observe the original outside click; do not consume or replay it. */
@@ -73,7 +82,17 @@ static LRESULT CALLBACK observe(int code,WPARAM w,LPARAM l) {
         s=(b==PP_BUTTON_LEFT && owner)?owner:button_targets[b];button_targets[b]=NULL;
         if(b==PP_BUTTON_LEFT) pp_platform_release_capture();
     }
-    if(s && pp_windows_enqueue(pp_windows_event(s,message,mouse->pt,0))) return 1;
+    bool enqueued=s && pp_windows_enqueue(pp_windows_event(s,message,mouse->pt,0));
+    if(b==PP_BUTTON_RIGHT) {
+        if(down) {
+            if(enqueued) right_consumed=true;
+            else button_targets[b]=NULL;
+        } else {
+            right_consumed=false;
+            unhook_if_idle();
+        }
+    }
+    if(enqueued || consumed_up) return 1;
     return CallNextHookEx(hook,code,w,l);
 }
 bool pp_windows_input_add(PPSurface *surface,PPError *error) {
@@ -89,7 +108,7 @@ void pp_windows_input_remove(PPSurface *surface) {
     PPSurface **link=&surfaces;while(*link && *link!=surface) link=&(*link)->input_next;
     if(*link) *link=surface->input_next;
     surface->input_next=NULL;
-    if(!surfaces && hook) {pp_platform_release_capture();UnhookWindowsHookEx(hook);hook=NULL;}
+    unhook_if_idle();
 }
 bool pp_windows_input_owned(PPSurface *surface) {return owner==surface || accepted_press==surface;}
 PPSurface *pp_windows_input_owner(void) {return owner?owner:accepted_press;}

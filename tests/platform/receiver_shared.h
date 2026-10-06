@@ -4,5 +4,6 @@
 typedef struct ReceiverState {
     ULONG_PTR window;
     volatile LONG clicks, right_clicks, wheels;
+    volatile LONG right_ups, context_menus;
 } ReceiverState;
 #endif

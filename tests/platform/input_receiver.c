@@ -4,6 +4,10 @@ static ReceiverState *state;
 static LRESULT CALLBACK receive(HWND window, UINT message, WPARAM w, LPARAM l) {
     if (message == WM_LBUTTONDOWN) InterlockedIncrement(&state->clicks);
     if (message == WM_RBUTTONDOWN) InterlockedIncrement(&state->right_clicks);
+    if (message == WM_RBUTTONUP) InterlockedIncrement(&state->right_ups);
+    /* Let right up reach DefWindowProc so standard context generation is
+     * exercised, but never open a real menu in this receiver fixture. */
+    if (message == WM_CONTEXTMENU) { InterlockedIncrement(&state->context_menus); return 0; }
     if (message == WM_MOUSEWHEEL) InterlockedIncrement(&state->wheels);
     if (message == WM_CLOSE) { DestroyWindow(window); return 0; }
     if (message == WM_DESTROY) { PostQuitMessage(0); return 0; }

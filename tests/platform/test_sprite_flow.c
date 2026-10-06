@@ -797,9 +797,21 @@ static void test_desktop_flow(void) {
   pump(20);
   point = opaque_point(a);
   move(point.x, point.y);
+  HWND deleted_window = native_sprite(a)->window;
+  LONG right_downs = receiver->right_clicks, right_ups = receiver->right_ups;
+  LONG contexts = receiver->context_menus;
+  size_t before_delete = pp_scene_count(pp_app_scene(flow_app));
+  CHECK(GetForegroundWindow() == (HWND)receiver->window);
   mouse(MOUSEEVENTF_RIGHTDOWN, 0);
+  CHECK(!pp_scene_get(pp_app_scene(flow_app), a) && !IsWindow(deleted_window));
+  CHECK(pp_scene_count(pp_app_scene(flow_app)) == before_delete-1);
+  printf("right deletion boundary: scene absent, window destroyed before physical up; receiver down=%ld up=%ld context=%ld\n",
+         receiver->right_clicks-right_downs,receiver->right_ups-right_ups,receiver->context_menus-contexts);
   mouse(MOUSEEVENTF_RIGHTUP, 0);
-  CHECK(!pp_scene_get(pp_app_scene(flow_app), a));
+  printf("right deletion release: receiver down=%ld up=%ld context=%ld\n",
+         receiver->right_clicks-right_downs,receiver->right_ups-right_ups,receiver->context_menus-contexts);
+  fflush(stdout);
+  CHECK(receiver->right_clicks == right_downs && receiver->right_ups == right_ups && receiver->context_menus == contexts);
   puts("PASS simulated monitor removal during native drag releases capture and "
        "keeps sprite reachable; right-click releases instance");
   CHECK(pp_settings_create_scaled(&flow_settings, flow_app, 1, &error));
