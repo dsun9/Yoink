@@ -137,7 +137,9 @@ void pp_drawer_layout(PPDrawer *d, const PPDisplay *displays, size_t count) {
   d->bounds.y = fmax(
       b.y, fmin(instance->pose.center.y + 16 * scale, b.y + b.h - d->bounds.h));
   if (d->backend && scale_changed) {
-    if (!d->render_hidden &&
+    /* A cached backend has not acquired focus before its first show. Only a
+     * previously visible drawer can lose focus during a density transition. */
+    if (d->backend->visible && !d->render_hidden &&
         !(SDL_GetWindowFlags(d->backend->window) & SDL_WINDOW_INPUT_FOCUS))
       d->dismissed = true;
     close_backend(d);

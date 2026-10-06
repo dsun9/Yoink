@@ -150,6 +150,48 @@ static void raster_reference(PPApp *app, bool save) {
   }
   printf("PASS %s 20 original RGBA/coverage rasters, mixed outlines, clusters, opacity and fractional scales\n",save?"saved":"byte-identical");
 }
+static void drawer_first_layout_density(PPApp *app) {
+  PPError error={0};PPRenderer *renderer=NULL;
+  CHECK(pp_renderer_create(&renderer,&error));
+  PPDrawerCache cache={.renderer=renderer};
+  uint64_t id=0;
+  CHECK(pp_scene_spawn(pp_app_scene(app),pp_app_project(app),PP_ANCHOR_TOP_LEFT,
+      (PPVec2){-19000,-19000},0,&id,&error));
+  const double densities[]={1,2,1};
+  PPDisplay display={1,{-20000,-20000,4000,4000},1,1};
+  CHECK(pp_drawer_cache_warm(&cache,&display,&error));
+  for(int i=1;i<3;i++) {
+    PPDrawer *d=NULL;
+    CHECK(pp_drawer_open(&d,app,id,&error));
+    CHECK(pp_drawer_use_cache(d,&cache,&error));
+    CHECK(!d->render_hidden && !d->backend->visible);
+    CHECK(!(SDL_GetWindowFlags(d->backend->window)&SDL_WINDOW_INPUT_FOCUS));
+    display.desktop_units_per_dip=densities[i];
+    display.drawable_pixels_per_dip=densities[i];
+    pp_drawer_layout(d,&display,1);
+    printf("FIRST LAYOUT density %.0f -> %.0f dismissed=%d\n",densities[i-1],densities[i],d->dismissed);
+    CHECK(!d->dismissed && !d->backend && pp_drawer_valid(d));
+    /* Only suppress native show AFTER exercising ordinary first-layout state. */
+    d->render_hidden=true;
+    CHECK(pp_drawer_draw(d,0,&error));
+    CHECK(d->backend && !d->dismissed && !d->backend->visible);
+    pp_drawer_close(d);
+    CHECK(!cache.in_use && cache.backend);
+  }
+  /* Keep the existing visible-but-unfocused dismissal rule. The UI visibility
+   * flag is the production history record; no foreground change is needed to
+   * exercise its focus-lost density branch with this hidden window. */
+  PPDrawer *active=NULL;
+  CHECK(pp_drawer_open(&active,app,id,&error));
+  CHECK(pp_drawer_use_cache(active,&cache,&error));
+  active->backend->visible=true;
+  display.desktop_units_per_dip=display.drawable_pixels_per_dip=2;
+  pp_drawer_layout(active,&display,1);
+  CHECK(active->dismissed && !active->backend);
+  pp_drawer_close(active);
+  pp_drawer_cache_destroy(&cache);pp_renderer_destroy(renderer);
+  puts("PASS production first-layout density increase/decrease rebuild without dismissal; previously visible unfocused drawer still dismisses");
+}
 static void font_source(void) {
   PPBlob font={0}; PPError error={0}; PPFontInfo info;
   CHECK(pp_platform_find_font("Segoe UI Semibold",&font,&error));
@@ -241,6 +283,7 @@ int main(int argc,char **argv) {
   else if(argc>1 && !strcmp(argv[1],"--drawer")) drawer(app,false,false,false);
   else if(argc>1 && !strcmp(argv[1],"--drawer-large")) drawer(app,false,true,false);
   else if(argc>1 && !strcmp(argv[1],"--drawer-warm")) drawer(app,false,false,true);
+  else if(argc>1 && !strcmp(argv[1],"--drawer-density-first")) drawer_first_layout_density(app);
   else if(argc>1 && !strcmp(argv[1],"--raster-save")) raster_reference(app,true);
   else if(argc>1 && !strcmp(argv[1],"--raster-compare")) raster_reference(app,false);
   else if(argc>1 && !strcmp(argv[1],"--font-source")) font_source();
