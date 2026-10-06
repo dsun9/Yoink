@@ -485,14 +485,83 @@ static void capture(const char *name) {
   CHECK(!settings->backend->capture_path);
   printf("Captured %s\n", path);
 }
+static bool settings_active(HWND owned, DWORD thread) {
+  GUITHREADINFO state = {.cbSize = sizeof(state)};
+  return GetForegroundWindow() == owned && GetGUIThreadInfo(thread, &state) &&
+         state.hwndActive == owned &&
+         (state.hwndFocus == owned || IsChild(owned, state.hwndFocus)) &&
+         (SDL_GetWindowFlags(settings->backend->window) & SDL_WINDOW_INPUT_FOCUS);
+}
+static void activate_owned_settings(void) {
+  CHECK(desktop_run);
+  HWND owned = window(), before = GetForegroundWindow();
+  DWORD process = 0;
+  DWORD thread = GetWindowThreadProcessId(owned, &process);
+  CHECK(process == GetCurrentProcessId() && IsWindowVisible(owned));
+  BOOL requested = SetForegroundWindow(owned);
+  pump(30);
+  if (!settings_active(owned, thread)) {
+    /* Windows can reject programmatic foreground requests. A real click on
+     * our verified title bar activates the owned window without invoking an
+     * application control or clicking whichever unrelated window has focus. */
+    RECT bounds;
+    POINT client = {0};
+    CHECK(GetWindowRect(owned, &bounds) && ClientToScreen(owned, &client));
+    POINT caption = {bounds.left + (bounds.right - bounds.left) / 4,
+                     bounds.top + (client.y - bounds.top) / 2};
+    DWORD_PTR hit = 0;
+    CHECK(SendMessageTimeoutW(owned, WM_NCHITTEST, 0,
+                              MAKELPARAM(caption.x, caption.y),
+                              SMTO_ABORTIFHUNG, 500, &hit));
+    CHECK(hit == HTCAPTION &&
+          GetAncestor(WindowFromPoint(caption), GA_ROOT) == owned);
+    CHECK(!(GetAsyncKeyState(VK_LBUTTON) & 0x8000) &&
+          !(GetAsyncKeyState(VK_RBUTTON) & 0x8000) &&
+          !(GetAsyncKeyState(VK_MENU) & 0x8000) &&
+          !(GetAsyncKeyState(VK_CONTROL) & 0x8000));
+    CHECK(SetCursorPos(caption.x, caption.y));
+    POINT actual;
+    CHECK(GetCursorPos(&actual));
+    fprintf(stderr,
+            "Settings activation: owned=%p before=%p requested=%d "
+            "caption=%ld,%ld cursor=%ld,%ld hit=%llu target=%p\n",
+            (void *)owned, (void *)before, requested, caption.x, caption.y,
+            actual.x, actual.y, (unsigned long long)hit,
+            (void *)GetAncestor(WindowFromPoint(actual), GA_ROOT));
+    CHECK(abs(actual.x - caption.x) <= 1 &&
+          abs(actual.y - caption.y) <= 1 &&
+          GetAncestor(WindowFromPoint(actual), GA_ROOT) == owned);
+    INPUT click[2] = {0};
+    click[0].type = click[1].type = INPUT_MOUSE;
+    click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+    click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+    send_inputs(click, 2);
+  }
+  ULONGLONG until = GetTickCount64() + 1000;
+  while (!settings_active(owned, thread) && GetTickCount64() < until)
+    pump(1);
+  GUITHREADINFO state = {.cbSize = sizeof(state)};
+  BOOL described = GetGUIThreadInfo(thread, &state);
+  fprintf(stderr,
+          "Settings activation verified: owned=%p foreground=%p "
+          "active=%p focus=%p gui-ok=%d SDL-input-focus=%d\n",
+          (void *)owned, (void *)GetForegroundWindow(), (void *)state.hwndActive,
+          (void *)state.hwndFocus, described,
+          !!(SDL_GetWindowFlags(settings->backend->window) & SDL_WINDOW_INPUT_FOCUS));
+  CHECK(settings_active(owned, thread));
+}
 static void create_settings(float scale, bool hidden) {
   CHECK(pp_settings_create_scaled(&settings, app, scale, &error));
   settings->render_hidden = hidden;
   pump(50);
   CHECK(settings->editor.preview_texture);
   if (!hidden) {
-    CHECK(SetForegroundWindow(window()));
-    pump(30);
+    if (desktop_run)
+      activate_owned_settings();
+    else { /* Manual picker mode promises no synthesized input. */
+      CHECK(SetForegroundWindow(window()));
+      pump(30);
+    }
     CHECK(GetForegroundWindow() == window());
   }
 }
