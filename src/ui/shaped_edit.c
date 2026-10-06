@@ -23,6 +23,10 @@ struct PPUIShapedEdit {
   char *attempted_draft;
   float attempted_density;
   size_t attempted_budget;
+  /* The layout owns immutable fonts, size, ink and density. This signature is
+   * invalidated on every layout swap, so it includes that full configuration. */
+  char *failed_display;
+  size_t failed_display_budget;
 };
 static void clear_textures(PPUIShapedEdit *e) {
   if (e->textures)
@@ -50,6 +54,7 @@ static void dispose(PPUIBackend *ui, bool bound) {
   }
   free(e->last_draft);
   free(e->attempted_draft);
+  free(e->failed_display);
   free(e);
   ui->shaped = NULL;
 }
@@ -92,6 +97,8 @@ static void configure(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft) {
       pp_ui_text_layout_set(candidate, draft, &error)) {
     pp_ui_text_layout_destroy(e->layout);
     e->layout = candidate;
+    free(e->failed_display);
+    e->failed_display = NULL;
     clear_textures(e);
     e->configuration_error[0] = 0;
   } else {
@@ -182,23 +189,38 @@ bool pp_ui_shaped_event(PPUIBackend *ui, const PPPlatformEvent *event) {
   }
   return !pointer && !cancel;
 }
-static bool layout_display(PPUIShapedEdit *e, const char *draft, size_t *first,
-                           size_t *last, size_t *caret) {
+static bool layout_display(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft,
+                           size_t *first, size_t *last, size_t *caret) {
   *first = *last = 0;
   *caret = e->state.caret;
   if (!e->layout)
     return false;
   char *display = pp_ui_edit_display(&e->state, draft, first, last, caret);
+  size_t budget = pp_assets_raster_bytes(ui->text_assets);
+  if (display && e->failed_display && e->failed_display_budget == budget &&
+      !strcmp(display, e->failed_display)) {
+    free(display);
+    return false;
+  }
   PPError error = {0};
   bool ok = display && pp_ui_text_layout_set(e->layout, display, &error);
-  free(display);
-  if (!ok)
+  free(e->failed_display);
+  e->failed_display = NULL;
+  if (!ok) {
+    e->failed_display = display;
+    e->failed_display_budget = pp_assets_raster_bytes(ui->text_assets);
     SDL_strlcpy(e->error,
                 error.message[0] ? error.message
                                  : "Cannot allocate editor display",
                 sizeof(e->error));
-  else
+  } else {
+    free(display);
     e->error[0] = 0;
+    if (!e->state.composing) {
+      pp_ui_edit_reconcile(&e->state, pp_ui_text_layout_view(e->layout));
+      *caret = e->state.caret;
+    }
+  }
   return ok;
 }
 static PPVec2 content_point(PPUIShapedEdit *e, PPUIBackend *ui, PPVec2 point) {
@@ -257,7 +279,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   bool changed = false;
   bool reveal = false;
   bool layout_ok =
-      layout_display(e, draft, &marked_first, &marked_last, &display_caret);
+      layout_display(ui, e, draft, &marked_first, &marked_last, &display_caret);
   while (e->head) {
     EditEvent *q = e->head;
     PPPlatformEvent event = q->event;
@@ -291,7 +313,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
                        event.key == PP_KEY_Z);
       if (layout_ok || recovery)
         changed = pp_ui_edit_key(&e->state, e->layout, draft, (size_t)capacity,
-                                 event.key, event.modifiers) ||
+                                 event.key, event.modifiers, bounds.h - 12) ||
                   changed;
     } else if (event.kind == PP_EVENT_WHEEL && e->layout) {
       e->state.scroll.y =
@@ -311,7 +333,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
     free(q);
     configure(ui, e, draft);
     layout_ok =
-        layout_display(e, draft, &marked_first, &marked_last, &display_caret);
+        layout_display(ui, e, draft, &marked_first, &marked_last, &display_caret);
   }
   const PPUITextView *v = pp_ui_text_layout_view(e->layout);
   if (!v)

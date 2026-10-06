@@ -1,5 +1,6 @@
 #include "edit_state.h"
 #include <SDL3/SDL.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -121,8 +122,29 @@ static bool undo(PPUIEditState *s, char *draft, size_t capacity, bool redo) {
   s->preferred_valid = false;
   return true;
 }
+static size_t boundary(const PPUITextView *view, size_t byte, bool right) {
+  size_t previous = 0;
+  for (size_t i = 0; i < view->caret_count; i++) {
+    size_t stop = view->carets[i].byte;
+    if (stop == byte)
+      return stop;
+    if (stop > byte)
+      return right ? stop : previous;
+    previous = stop;
+  }
+  return previous;
+}
+void pp_ui_edit_reconcile(PPUIEditState *s, const PPUITextView *view) {
+  if (s->composing || !view || !view->caret_count)
+    return;
+  bool collapsed = s->caret == s->anchor;
+  bool forward = s->caret > s->anchor;
+  s->caret = boundary(view, s->caret, collapsed || forward);
+  s->anchor = boundary(view, s->anchor, collapsed || !forward);
+}
 bool pp_ui_edit_key(PPUIEditState *s, PPUITextLayout *layout, char *draft,
-                    size_t capacity, PPKey key, unsigned modifiers) {
+                    size_t capacity, PPKey key, unsigned modifiers,
+                    double viewport_height) {
   bool ctrl = (modifiers & PP_MOD_CONTROL) != 0,
        shift = (modifiers & PP_MOD_SHIFT) != 0;
   if (s->composing) {
@@ -192,8 +214,12 @@ bool pp_ui_edit_key(PPUIEditState *s, PPUITextLayout *layout, char *draft,
       s->preferred_x = caret.point.x;
       s->preferred_valid = true;
     }
-    double delta = (key == PP_KEY_UP || key == PP_KEY_PAGE_UP) ? -v->line_height
-                                                               : v->line_height;
+    double lines = (key == PP_KEY_PAGE_UP || key == PP_KEY_PAGE_DOWN)
+                       ? fmax(1, floor(viewport_height / v->line_height))
+                       : 1;
+    double delta = lines * v->line_height;
+    if (key == PP_KEY_UP || key == PP_KEY_PAGE_UP)
+      delta = -delta;
     target = pp_ui_text_layout_hit(
                  layout, (PPVec2){s->preferred_x,
                                   caret.point.y + delta + .5 * v->line_height})

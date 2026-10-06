@@ -26,6 +26,11 @@ char *pp_ui_edit_display(const PPUIEditState *state, const char *draft,
                          size_t *caret);
 bool pp_ui_edit_replace(PPUIEditState *state, char *draft, size_t capacity,
                         const char *payload);
+/* Call only after a successful layout of the committed draft, never preedit
+ * or a retained view of an older draft. Collapsed positions have right affinity;
+ * a selection expands to whole clusters without reversing its direction. */
+void pp_ui_edit_reconcile(PPUIEditState *state, const PPUITextView *view);
 bool pp_ui_edit_key(PPUIEditState *state, PPUITextLayout *layout, char *draft,
-                    size_t capacity, PPKey key, unsigned modifiers);
+                    size_t capacity, PPKey key, unsigned modifiers,
+                    double viewport_height);
 #endif
