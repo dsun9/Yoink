@@ -38,8 +38,28 @@ set(pp_ttf_new_test [=[            /* PointyPointer: if any glyph in a shaped cl
             }
             if (cluster_missing) {
                 complete = false;]=])
+set(pp_ttf_old_color_include "#include FT_OUTLINE_H")
+set(pp_ttf_new_color_include "#include FT_OUTLINE_H\n#include FT_COLOR_H")
+set(pp_ttf_old_color_metrics [=[    // Get the glyph metrics, always needed
+    if (cached->stored == 0) {]=])
+set(pp_ttf_new_color_metrics [=[    /* PointyPointer: COLR0 base outlines can be empty. Metrics must describe
+     * the composited layers or the text engine omits the glyph completely.
+     * Ask the existing FreeType compositor, only for actual COLR0 glyphs. */
+    if (cached->stored == 0) {
+        FT_LayerIterator layers = {0};
+        FT_UInt layer, palette;
+        if (FT_Get_Color_Glyph_Layer(font->face, cached->index, &layer, &palette, &layers)) {
+            error = FT_Load_Glyph(font->face, cached->index, ft_load | FT_LOAD_COLOR);
+            if (!error) error = FT_Render_Glyph(font->face->glyph, FT_RENDER_MODE_NORMAL);
+            if (error) return TTF_SetFTError("COLR0 glyph metrics failed", error);
+            slot = font->face->glyph;
+        }
+    }
+
+    // Get the glyph metrics, always needed
+    if (cached->stored == 0) {]=])
 set(pp_ttf_patched "${pp_ttf_original}")
-foreach(part end test)
+foreach(part end test color_include color_metrics)
   string(FIND "${pp_ttf_patched}" "${pp_ttf_old_${part}}" pp_ttf_position)
   if(pp_ttf_position LESS 0)
     message(FATAL_ERROR "Missing SDL_ttf cluster patch anchor ${part}")

@@ -92,6 +92,23 @@ if(BUILD_TESTING AND WIN32)
   set_tests_properties(windows_surface PROPERTIES LABELS desktop RUN_SERIAL TRUE TIMEOUT 30)
 endif()
 if(BUILD_TESTING)
+  if(WIN32 OR APPLE)
+  # Compatibility/portability are small regressions; large ladders stay opt-in.
+  add_executable(pointy_scalable_emoji_probe tests/media/probe_scalable_emoji.c)
+  target_compile_definitions(pointy_scalable_emoji_probe PRIVATE PP_SCALABLE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}")
+  target_link_libraries(pointy_scalable_emoji_probe PRIVATE pointy_app SDL3::SDL3-static miniz Freetype::Freetype harfbuzz::harfbuzz)
+  add_test(NAME scalable_emoji COMMAND pointy_scalable_emoji_probe
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf"
+    "${CMAKE_CURRENT_BINARY_DIR}/scalable-emoji-proof" compat 1)
+  add_test(NAME scalable_portable COMMAND pointy_scalable_emoji_probe
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf"
+    "${CMAKE_CURRENT_BINARY_DIR}/scalable-portable-proof" portable 1
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/licenses/Twemoji-Mozilla-NOTICE.txt")
+  add_test(NAME scalable_import COMMAND pointy_scalable_emoji_probe
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf"
+    "${CMAKE_CURRENT_BINARY_DIR}/scalable-import-proof" import 1)
+  set_tests_properties(scalable_emoji scalable_portable scalable_import PROPERTIES LABELS "media;headless" TIMEOUT 60)
+  endif()
   add_executable(pointy_bitmap_sample_test tests/media/test_bitmap_sample.c)
   target_include_directories(pointy_bitmap_sample_test PRIVATE include)
   target_link_libraries(pointy_bitmap_sample_test PRIVATE pointy_bitmap_kernel)

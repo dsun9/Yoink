@@ -45,6 +45,10 @@ below. Changing projects clears temporary sprites only after a successful load.
 
 ## Projects and supported content
 
+For sharp large emoji with Twemoji artwork, use the optional font or portable
+example described in [Optional scalable emoji](resources/optional-fonts/README.md).
+It is an explicit choice; the existing Noto default is retained.
+
 Settings provides eight shared ordered lists, default selection, enable/disable,
 text/emoji appearance, permitted font import, and PNG/GIF/SVG import. Ctrl+N,
 Ctrl+O, Ctrl+S and Ctrl+Shift+S select New, Open, Save and Save As. Invalid drafts

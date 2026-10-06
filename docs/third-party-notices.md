@@ -58,6 +58,15 @@ default text and is not bundled. The bundled Noto Color Emoji font's
 copyright and SIL Open Font License are retained in `resources/licenses/NotoEmoji-OFL.txt`.
 Portable projects embed that notice when they embed the font.
 
+The optional `resources/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf` contains
+unmodified Mozilla Twemoji COLR0 font bytes (Twemoji 14 artwork). Twemoji visual
+artwork by Twitter and other contributors is licensed CC BY 4.0. Mozilla's
+font build code is Apache-2.0. Attribution, immutable source revision, font
+digest, upstream notice and full CC BY 4.0 legal text are retained in
+`resources/licenses/Twemoji-Mozilla-NOTICE.txt`; the upstream notice and legal
+text are also supplied separately. The portable Twemoji example embeds this
+complete notice and the complete font. Noto remains the default.
+
 Dependency revisions are pinned in `cmake/Dependencies.cmake`. Upstream
 source license files remain in each fetched source tree. The distribution
 assembly must retain those license texts along with this document:
@@ -95,7 +104,9 @@ PointyPointer builds explicitly altered, hash-checked copies of SDL_image's
 GIF decoder and SDL_ttf's shaping source. `cmake/PatchSDLImage.cmake` changes
 disposal-3 snapshots/restores to copy transparent pixels exactly.
 `cmake/PatchSDLTTF.cmake` preserves complete fallback clusters, including default
-ignorables and the final cluster boundary. Upstream source trees are untouched;
+ignorables and the final cluster boundary. It also measures COLR0 glyphs using
+FreeType's existing color-layer compositor, because an empty base outline does
+not describe the visible color layers. Upstream source trees are untouched;
 the generated files preserve their original notices and mark our changes.
 
 The SVG numeric validator in `src/media/svg_validate.c` adapts PlutoSVG's

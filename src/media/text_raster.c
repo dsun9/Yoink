@@ -4,6 +4,7 @@
 #include <SDL3_ttf/SDL_textengine.h>
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_COLOR_H
 #include <math.h>
 #include <stdlib.h>
 
@@ -116,6 +117,14 @@ static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double s
     if (FT_Load_Glyph(font->base, op->glyph_index, FT_LOAD_DEFAULT) ||
         FT_Load_Glyph(font->native, op->glyph_index, FT_LOAD_DEFAULT | FT_LOAD_COLOR))
         return pp_media_error(error, PP_ERROR_FORMAT, "Could not load shaped outline glyph");
+    /* SDL_ttf measures COLR0 using the composite, whose bearings can differ
+     * from an empty or unrelated base outline. Recover that same baseline. */
+    FT_LayerIterator layers = {0};
+    FT_UInt layer, palette;
+    if (FT_Get_Color_Glyph_Layer(font->base, op->glyph_index, &layer, &palette, &layers) &&
+        (FT_Load_Glyph(font->base, op->glyph_index, FT_LOAD_COLOR) ||
+         FT_Render_Glyph(font->base->glyph, FT_RENDER_MODE_NORMAL)))
+        return pp_media_error(error, PP_ERROR_RENDER, "Could not measure shaped COLR0 glyph");
     /* Recover the shaped baseline from old bearing and crop, then apply
      * actual destination-size bearings. No outline raster is enlarged. */
     double baseline_x = op->dst.x - op->src.x - left_bearing(font->base->glyph);
