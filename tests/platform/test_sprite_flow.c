@@ -372,10 +372,16 @@ static void pump(unsigned duration) {
 typedef struct Injected {
   INPUT inputs[64];
   UINT count, sent;
+  DWORD send_error;
+  ULONGLONG started, finished;
 } Injected;
 static DWORD WINAPI inject(void *argument) {
   Injected *i = argument;
+  i->started = GetTickCount64();
+  SetLastError(ERROR_SUCCESS);
   i->sent = SendInput(i->count, i->inputs, sizeof(INPUT));
+  i->send_error = GetLastError();
+  i->finished = GetTickCount64();
   return 0;
 }
 static void send_inputs(Injected *i) {
@@ -391,17 +397,48 @@ static void send_inputs(Injected *i) {
   pump(20);
 }
 static void move(int x, int y) {
+  static unsigned sequence;
+  POINT before = {0}, actual = {0};
+  BOOL before_ok = GetCursorPos(&before);
+  ULONGLONG started = GetTickCount64();
+  int origin_x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+  int origin_y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+  int width = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  int height = GetSystemMetrics(SM_CYVIRTUALSCREEN);
   Injected i = {.count = 1};
   i.inputs[0].type = INPUT_MOUSE;
   i.inputs[0].mi.dwFlags =
       MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
-  i.inputs[0].mi.dx = MulDiv(x - GetSystemMetrics(SM_XVIRTUALSCREEN), 65535,
-                             GetSystemMetrics(SM_CXVIRTUALSCREEN) - 1);
-  i.inputs[0].mi.dy = MulDiv(y - GetSystemMetrics(SM_YVIRTUALSCREEN), 65535,
-                             GetSystemMetrics(SM_CYVIRTUALSCREEN) - 1);
+  i.inputs[0].mi.dx = MulDiv(x - origin_x, 65535, width - 1);
+  i.inputs[0].mi.dy = MulDiv(y - origin_y, 65535, height - 1);
   send_inputs(&i);
-  POINT actual;
-  CHECK(GetCursorPos(&actual));
+  SetLastError(ERROR_SUCCESS);
+  BOOL actual_ok = GetCursorPos(&actual);
+  DWORD cursor_error = GetLastError();
+  RECT clip = {0};
+  BOOL clip_ok = GetClipCursor(&clip);
+  printf("MOVE %u requested=%d,%d before=%ld,%ld before-ok=%d "
+         "actual=%ld,%ld actual-ok=%d cursor-error=%lu "
+         "virtual=%d,%d,%d,%d normalized=%ld,%ld "
+         "clip=%ld,%ld,%ld,%ld clip-ok=%d sent=%u/%u send-error=%lu "
+         "thread-ms=%llu total-ms=%llu keys=L%d/R%d/M%d/Alt%d/Ctrl%d "
+         "held=L%d/R%d/Alt%d/Ctrl%d owner=%p foreground=%p hit=%p\n",
+         ++sequence, x, y, before.x, before.y, before_ok, actual.x, actual.y,
+         actual_ok, cursor_error, origin_x, origin_y, width, height,
+         i.inputs[0].mi.dx, i.inputs[0].mi.dy, clip.left, clip.top, clip.right,
+         clip.bottom, clip_ok, i.sent, i.count, i.send_error,
+         (unsigned long long)(i.finished - i.started),
+         (unsigned long long)(GetTickCount64() - started),
+         !!(GetAsyncKeyState(VK_LBUTTON) & 0x8000),
+         !!(GetAsyncKeyState(VK_RBUTTON) & 0x8000),
+         !!(GetAsyncKeyState(VK_MBUTTON) & 0x8000),
+         !!(GetAsyncKeyState(VK_MENU) & 0x8000),
+         !!(GetAsyncKeyState(VK_CONTROL) & 0x8000), left_held, right_held,
+         alt_held, control_held, (void *)pp_windows_input_owner(),
+         (void *)GetForegroundWindow(),
+         (void *)(actual_ok ? WindowFromPoint(actual) : NULL));
+  fflush(stdout);
+  CHECK(actual_ok);
   CHECK(abs(actual.x - x) <= 1 && abs(actual.y - y) <= 1);
 }
 static void mouse(DWORD flags, DWORD data) {
