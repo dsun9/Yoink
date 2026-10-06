@@ -18,6 +18,7 @@ static bool desktop_run;
 static bool dialog_diagnostic;
 static bool manual_font;
 static bool focus_diagnostic;
+static bool caption_diagnostic, caption_exercised;
 static unsigned sprite_presses;
 static unsigned normalized_down_keys;
 static char test_directory[MAX_PATH], package[MAX_PATH], preferences[MAX_PATH];
@@ -498,9 +499,12 @@ static void activate_owned_settings(void) {
   DWORD process = 0;
   DWORD thread = GetWindowThreadProcessId(owned, &process);
   CHECK(process == GetCurrentProcessId() && IsWindowVisible(owned));
-  BOOL requested = SetForegroundWindow(owned);
+  bool force_caption = caption_diagnostic && !caption_exercised;
+  /* Fixture-only first-request denial exercises the fallback even when SDL's
+   * initial show happened to activate the window. No global API is replaced. */
+  BOOL requested = force_caption ? FALSE : SetForegroundWindow(owned);
   pump(30);
-  if (!settings_active(owned, thread)) {
+  if (force_caption || !settings_active(owned, thread)) {
     /* Windows can reject programmatic foreground requests. A real click on
      * our verified title bar activates the owned window without invoking an
      * application control or clicking whichever unrelated window has focus. */
@@ -523,9 +527,10 @@ static void activate_owned_settings(void) {
     POINT actual;
     CHECK(GetCursorPos(&actual));
     fprintf(stderr,
-            "Settings activation: owned=%p before=%p requested=%d "
+            "Settings activation: owned=%p before=%p requested=%d forced=%d "
             "caption=%ld,%ld cursor=%ld,%ld hit=%llu target=%p\n",
-            (void *)owned, (void *)before, requested, caption.x, caption.y,
+            (void *)owned, (void *)before, requested, force_caption,
+            caption.x, caption.y,
             actual.x, actual.y, (unsigned long long)hit,
             (void *)GetAncestor(WindowFromPoint(actual), GA_ROOT));
     CHECK(abs(actual.x - caption.x) <= 1 &&
@@ -536,6 +541,7 @@ static void activate_owned_settings(void) {
     click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
     click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
     send_inputs(click, 2);
+    caption_exercised = true;
   }
   ULONGLONG until = GetTickCount64() + 1000;
   while (!settings_active(owned, thread) && GetTickCount64() < until)
@@ -1235,8 +1241,10 @@ static void manual_font_smoke(void) {
 int main(int argc, char **argv) {
   manual_font = argc == 2 && !strcmp(argv[1], "--manual-font");
   dialog_diagnostic = argc == 2 && !strcmp(argv[1], "--dialog-diagnostic");
+  caption_diagnostic = argc == 2 && !strcmp(argv[1], "--desktop-caption");
   desktop_run =
-      dialog_diagnostic || (argc == 2 && !strcmp(argv[1], "--desktop"));
+      dialog_diagnostic || caption_diagnostic ||
+      (argc == 2 && !strcmp(argv[1], "--desktop"));
   CHECK(argc == 2 &&
         (desktop_run || manual_font || !strcmp(argv[1], "--render-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
@@ -1248,5 +1256,7 @@ int main(int argc, char **argv) {
     desktop_smoke();
   else
     render_only();
+  if (caption_diagnostic)
+    CHECK(caption_exercised);
   return 0;
 }
