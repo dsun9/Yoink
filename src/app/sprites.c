@@ -44,6 +44,7 @@ bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
                                      frame.width * desktop_per_pixel, frame.height * desktop_per_pixel},
                             error);
     if (ok) {
+      p->metrics.native_publications++;
       pp_assets_release_raster(p->assets, *retained);
       *retained = native_bytes;
     } else {
@@ -163,6 +164,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
            * cancel this target; other sprites continue normally. */
           s->pose = s->drawn;
           s->rotating = s->resizing = s->dragging = false;
+          s->sharp_pending = false;
           s->interaction = (PPInteraction){0};
           s->dirty = false;
           s->next_frame = HUGE_VAL;
@@ -180,6 +182,15 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
         continue;
       }
       s->next_frame = instance->animation_start + next;
+      if (s->sharp_pending && !s->resizing && s->pose.longest_dip == s->ease_target.longest_dip) {
+        p->metrics.sharp_publications++;
+        p->metrics.last_sharp_input_timestamp = s->resize_start;
+        p->metrics.last_sharp_instance_id = s->id;
+        p->metrics.last_sharp_content_revision = pp_item_snapshot_revision(instance->snapshot);
+        p->metrics.last_sharp_longest_dip = s->pose.longest_dip;
+        p->metrics.last_sharp_drawable_density = display->drawable_pixels_per_dip;
+        s->sharp_pending = false;
+      }
       s->dirty = false;
       s->replaced = false;
       s->drawn = s->pose;
@@ -223,8 +234,10 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
       s->dirty = true;
     }
   }
-  if (event->kind == PP_EVENT_CANCEL)
+  if (event->kind == PP_EVENT_CANCEL) {
     s->dragging = false;
+    s->sharp_pending = false;
+  }
   if (result.command == PP_COMMAND_ROTATE) {
     s->ease_from.angle_deg = s->pose.angle_deg;
     s->ease_target.angle_deg = result.pose.angle_deg;
@@ -236,6 +249,7 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     s->ease_target.longest_dip = result.pose.longest_dip;
     s->resize_start = event->timestamp;
     s->resizing = true;
+    s->sharp_pending = true;
   }
   if (result.command == PP_COMMAND_OPEN_DRAWER)
     p->drawer_request = s->id;
@@ -292,6 +306,7 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
       s->pose = instance->pose;
       s->interaction = (PPInteraction){0};
       s->rotating = s->resizing = s->dragging = false;
+      s->sharp_pending = false;
       s->dirty = true;
     }
     i++;

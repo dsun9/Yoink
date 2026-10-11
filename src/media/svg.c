@@ -24,5 +24,5 @@ bool pp_svg_raster(PPAsset *a,int w,int h,PPError *e) {
     unsigned char *data=plutovg_surface_get_data(surface);int stride=plutovg_surface_get_stride(surface);
     for(int y=0;y<h;y++) for(int x=0;x<w;x++) { uint32_t argb;memcpy(&argb,data+(size_t)y*stride+x*4,4);size_t i=(size_t)y*w+x;
         f->pixels[i*4]=(uint8_t)(argb>>16);f->pixels[i*4+1]=(uint8_t)(argb>>8);f->pixels[i*4+2]=(uint8_t)argb;f->pixels[i*4+3]=f->content_alpha[i]=(uint8_t)(argb>>24); }
-    plutovg_surface_destroy(surface);pp_media_clear(a);a->frames=f;a->cache_bytes=bytes;a->owner->cache_bytes+=bytes;return true;
+    plutovg_surface_destroy(surface);pp_media_clear(a);a->frames=f;a->cache_bytes=bytes;a->owner->cache_bytes+=bytes;a->owner->metrics.raster_builds++;return true;
 }

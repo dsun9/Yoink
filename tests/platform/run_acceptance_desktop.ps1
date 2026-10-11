@@ -1,11 +1,17 @@
 param(
     [ValidateSet('Debug', 'Release')][string]$Configuration = 'Debug',
     [ValidateRange(-1, 255)][int]$ProbeExitCode = -1,
+    [ValidateRange(0, 10000)][int]$ProbeDelayMilliseconds = 0,
+    [ValidateRange(100, 180000)][int]$ProcessTimeoutMilliseconds = 180000,
+    [string]$BuildDirectory = '',
+    [switch]$Performance,
+    [ValidateSet('', 'success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'timeout')][string]$PerformanceControl = '',
     [string]$TestRegex = '',
     [ValidatePattern('^[a-zA-Z0-9-]+$')][string]$LogPrefix = 'task11'
 )
 $ErrorActionPreference = 'Stop'
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+if (-not (Test-Path -LiteralPath (Join-Path $root 'build'))) { New-Item -ItemType Directory -Path (Join-Path $root 'build') | Out-Null }
 function Invoke-PointyBoundedProcess($FilePath, $Arguments, $Log, $ErrorLog, $Timeout = 180000) {
     $run = $null
     try {
@@ -27,10 +33,25 @@ function Invoke-PointyBoundedProcess($FilePath, $Arguments, $Log, $ErrorLog, $Ti
 # Controlled launcher regression. This exits before loading or calling any
 # desktop API, and uses the same bounded child-launch path as the suite.
 if ($ProbeExitCode -ge 0) {
-    $probe = Invoke-PointyBoundedProcess (Get-Command powershell).Source @('-NoProfile', '-NonInteractive', '-Command', "exit $ProbeExitCode") (Join-Path $root 'build/task11-exit-probe.log') (Join-Path $root 'build/task11-exit-probe-stderr.log') 10000
+    $probe = Invoke-PointyBoundedProcess (Get-Command powershell).Source @('-NoProfile', '-NonInteractive', '-Command', "Start-Sleep -Milliseconds $ProbeDelayMilliseconds; exit $ProbeExitCode") (Join-Path $root 'build/task11-exit-probe.log') (Join-Path $root 'build/task11-exit-probe-stderr.log') $ProcessTimeoutMilliseconds
     Write-Output "Controlled child expected=$ProbeExitCode actual=$probe"
     exit $probe
 }
+if (-not $BuildDirectory) {
+    $BuildDirectory = Join-Path $root $(if ($Configuration -eq 'Release') { 'build/windows-release' } else { 'build/windows-dev' })
+}
+$BuildDirectory = [IO.Path]::GetFullPath($BuildDirectory)
+$log = Join-Path $root "build/$LogPrefix-desktop.log"
+$stderr = Join-Path $root "build/$LogPrefix-desktop-stderr.log"
+if ($PerformanceControl) {
+    if (-not $Performance) { throw 'PerformanceControl requires Performance.' }
+    $probePath = Join-Path $BuildDirectory "$Configuration/pointy_performance_test.exe"
+    $result = Invoke-PointyBoundedProcess $probePath @('--acceptance-control', $PerformanceControl) $log $stderr $ProcessTimeoutMilliseconds
+    Get-Content -LiteralPath $log
+    Get-Content -LiteralPath $stderr
+    exit $result
+}
+if ($Performance -and $Configuration -ne 'Release') { throw 'Performance acceptance requires a Release build.' }
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -77,19 +98,28 @@ if (-not [PointyDesktopRecovery]::Released()) { throw 'Desktop input is held; no
 $savedPoint = New-Object PointyDesktopRecovery+Point
 if (-not [PointyDesktopRecovery]::GetCursorPos([ref]$savedPoint)) { throw 'Cannot record cursor position.' }
 $savedForeground = [PointyDesktopRecovery]::GetForegroundWindow()
-$log = Join-Path $root "build/$LogPrefix-desktop.log"
-$stderr = Join-Path $root "build/$LogPrefix-desktop-stderr.log"
+$desktopLock = New-Object System.Threading.Mutex($false, 'Local\PointyPointerDesktopAcceptance')
+if (-not $desktopLock.WaitOne(0)) { $desktopLock.Dispose(); throw 'Another supervised desktop acceptance command is running.' }
 $exitCode = 1
 try {
-    $ctest = (Get-Command ctest).Source
-    $preset = if ($Configuration -eq 'Release') { 'windows-release' } else { 'windows-dev' }
-    $arguments = @('--preset', $preset, '-C', $Configuration, '-L', 'desktop', '--stop-on-failure', '--output-on-failure')
-    if ($TestRegex) { $arguments += @('-R', $TestRegex) }
-    $exitCode = Invoke-PointyBoundedProcess $ctest $arguments $log $stderr
+    if ($Performance) {
+        $probePath = Join-Path $BuildDirectory "$Configuration/pointy_performance_test.exe"
+        $exitCode = Invoke-PointyBoundedProcess $probePath @('--acceptance') $log $stderr $ProcessTimeoutMilliseconds
+    } else {
+        $ctest = (Get-Command ctest).Source
+        $arguments = @('--test-dir', $BuildDirectory, '-C', $Configuration, '-L', 'desktop', '--stop-on-failure', '--output-on-failure')
+        if ($TestRegex) { $arguments += @('-R', $TestRegex) }
+        $exitCode = Invoke-PointyBoundedProcess $ctest $arguments $log $stderr $ProcessTimeoutMilliseconds
+    }
 } finally {
-    $restored = [PointyDesktopRecovery]::Restore($savedPoint, $savedForeground)
-    if (-not $restored) { $exitCode = 3 }
-    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
-    if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+    try {
+        $restored = [PointyDesktopRecovery]::Restore($savedPoint, $savedForeground)
+        if (-not $restored) { $exitCode = 3 }
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+        if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+    } finally {
+        $desktopLock.ReleaseMutex()
+        $desktopLock.Dispose()
+    }
 }
 exit $exitCode

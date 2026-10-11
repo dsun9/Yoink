@@ -74,6 +74,8 @@ if (-not [PointyDesktopRecovery]::Released()) { throw 'Desktop input is held; no
 $savedPoint = New-Object PointyDesktopRecovery+Point
 if (-not [PointyDesktopRecovery]::GetCursorPos([ref]$savedPoint)) { throw 'Cannot record cursor position.' }
 $savedForeground = [PointyDesktopRecovery]::GetForegroundWindow()
+$desktopLock = New-Object System.Threading.Mutex($false, 'Local\PointyPointerDesktopAcceptance')
+if (-not $desktopLock.WaitOne(0)) { $desktopLock.Dispose(); throw 'Another supervised desktop acceptance command is running.' }
 $log = Join-Path $root 'build/task9-desktop.log'
 $stderr = Join-Path $root 'build/task9-desktop-stderr.log'
 $exitCode = 1
@@ -82,9 +84,14 @@ try {
     $arguments = @('--preset', 'windows-dev', '-C', $Configuration, '-R', '"^(runtime|windows_surface|windows_capture|windows_anchors|sprite_flow)$"', '--stop-on-failure', '--output-on-failure')
     $exitCode = Invoke-PointyBoundedProcess $ctest $arguments $log $stderr
 } finally {
-    $restored = [PointyDesktopRecovery]::Restore($savedPoint, $savedForeground)
-    if (-not $restored) { $exitCode = 3 }
-    if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
-    if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+    try {
+        $restored = [PointyDesktopRecovery]::Restore($savedPoint, $savedForeground)
+        if (-not $restored) { $exitCode = 3 }
+        if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log }
+        if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr }
+    } finally {
+        $desktopLock.ReleaseMutex()
+        $desktopLock.Dispose()
+    }
 }
 exit $exitCode

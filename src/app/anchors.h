@@ -2,7 +2,9 @@
 #define POINTY_APP_ANCHORS_H
 #include "pointy/interaction.h"
 #include "pointy/scene.h"
+#include "pointy/presentation_metrics.h"
 typedef struct PPAnchorPresenter PPAnchorPresenter;
+PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *presenter);
 /* Renderer and shared project are borrowed and outlive the presenter. Content
  * is acquired at drawable resolution, consumed before another SVG request,
  * then transformed for native desktop presentation. Active display selection
