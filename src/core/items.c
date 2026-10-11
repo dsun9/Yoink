@@ -7,6 +7,7 @@
 struct PPItemSnapshot {
     PPAssets *assets;
     size_t references;
+    uint64_t revision;
     PPItem item;
     PPAsset *image, *primary, *fallback;
     PPVec2 size;
@@ -111,6 +112,8 @@ bool pp_item_snapshot_create(PPAssets *assets, const PPItem *item, PPItemSnapsho
                 &snapshot->fallback, error) || !render_text(snapshot, 1, error)) goto failed;
         snapshot->size = (PPVec2){snapshot->text_frame.width, snapshot->text_frame.height};
     }
+    static uint64_t next_revision;
+    snapshot->revision = ++next_revision;
     *out = snapshot;
     return true;
 failed:
@@ -143,6 +146,9 @@ PPVec2 pp_item_snapshot_size(const PPItemSnapshot *snapshot) {
 }
 PPAssets *pp_item_snapshot_assets(const PPItemSnapshot *snapshot) {
     return snapshot ? snapshot->assets : NULL;
+}
+uint64_t pp_item_snapshot_revision(const PPItemSnapshot *snapshot) {
+    return snapshot ? snapshot->revision : 0;
 }
 
 bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double scale,

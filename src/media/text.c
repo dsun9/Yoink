@@ -214,5 +214,6 @@ done:
     if (initialized) TTF_Quit();
     pp_asset_release(primary_asset);
     pp_asset_release(fallback_asset);
+    if (ok) assets->metrics.raster_builds++;
     return ok;
 }

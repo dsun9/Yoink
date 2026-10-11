@@ -7,6 +7,11 @@ typedef enum PPAssetKind { PP_ASSET_PNG, PP_ASSET_GIF, PP_ASSET_SVG, PP_ASSET_FO
 enum { PP_ERROR_FORMAT = 5, PP_ERROR_RESOURCE_LIMIT };
 typedef struct PPAssets PPAssets;
 typedef struct PPAsset PPAsset;
+typedef struct PPSourceMetrics { uint64_t raster_builds; } PPSourceMetrics;
+/* Successful text/SVG raster generations and PNG/GIF cache decodes, accumulated
+ * for this manager's lifetime. Cache hits, frame selection and failed requests
+ * do not increment it. This observation does not allocate or retain content. */
+PPSourceMetrics pp_assets_source_metrics(const PPAssets *assets);
 /* Single-threaded manager; it must outlive every retained asset. Projects borrow
  * the app-owned manager. Imports copy the source bytes; IDs hash only those bytes.
  * Limits: 8192 per axis, 4096 GIF frames, 256 MiB decoded per resource, 512 MiB

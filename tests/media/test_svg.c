@@ -2,6 +2,20 @@
 #include "../test.h"
 #include <string.h>
 static bool import(PPAssets *assets,const char *s,PPAssetId *id,PPError *e) { return pp_asset_import(assets,(PPBytes){(const uint8_t *)s,strlen(s)},PP_ASSET_SVG,id,e); }
+static void test_source_rebuild_observations(void) {
+    PPAssets *assets=NULL; PPError e={0}; PPAssetId id;
+    CHECK(pp_assets_create(&assets,&e));
+    CHECK(import(assets,"<svg width='8' height='4'><rect width='8' height='4' fill='red'/></svg>",&id,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    PPAsset *a=pp_asset_retain(assets,id); const PPFrame *f; double next;
+    CHECK(pp_asset_frame(a,0,8,4,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    CHECK(pp_asset_frame(a,0,32,16,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==2);
+    CHECK(!pp_asset_frame(a,0,8193,16,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==2);
+    pp_asset_release(a); pp_assets_destroy(assets);
+}
 static void test_svg_validation(void) {
     PPAssets *assets; PPError e={0}; PPAssetId id; CHECK(pp_assets_create(&assets,&e));
     const char *valid="<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><metadata><note>owned</note></metadata><defs><linearGradient id='paint'><stop offset='0' stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient><path id='p' d='M0 0L4 0L4 4L0 4Z'/></defs><g transform='translate(2 2)'><use href='#p' fill='url(#paint)'/><rect x='8' y='0' width='2' height='2'/><circle cx='8' cy='8' r='2'/><ellipse cx='2' cy='8' rx='1' ry='2'/><polygon points='0,12 4,12 2,14'/><polyline points='6,12 8,14 10,12' fill='none' stroke='black'/><line x1='12' y1='8' x2='12' y2='12' stroke='black'/></g></svg>";
@@ -75,6 +89,6 @@ int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"--opacity")) test_svg_opacity_semantics();
     else if(argc==2 && !strcmp(argv[1],"--paint")) test_svg_paint_value_grammar();
     else if(argc==2 && !strcmp(argv[1],"--numeric")) test_svg_numeric_paint_grammar();
-    else { test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
+    else { test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
     puts("PASS SVG: supported rendering and paint grammar; unsupported opacity compositing and paint values rejected."); return 0;
 }

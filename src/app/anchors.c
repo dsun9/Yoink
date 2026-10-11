@@ -494,6 +494,9 @@ void pp_anchor_presenter_enable(PPAnchorPresenter *p, PPAnchor a,
 size_t pp_anchor_presenter_instance_count(const PPAnchorPresenter *p) {
   return p ? p->instance_count : 0;
 }
+PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *p) {
+  return p ? p->metrics : (PPPresentationMetrics){0};
+}
 bool pp_anchor_presenter_instance_pose(const PPAnchorPresenter *p, size_t i,
                                        PPPose *out) {
   if (!p || !out || i >= p->instance_count)

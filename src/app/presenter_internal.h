@@ -28,6 +28,7 @@ typedef struct PPSprite {
   PPPose ease_from, ease_target;
   double rotate_start, resize_start;
   bool rotating, resizing;
+  bool sharp_pending;
 } PPSprite;
 struct PPAnchorPresenter {
   PPRenderer *renderer;
@@ -47,6 +48,7 @@ struct PPAnchorPresenter {
   uint64_t drawer_request;
   PPSurface *failed_surface;
   PPError notice;
+  PPPresentationMetrics metrics;
 };
 
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);

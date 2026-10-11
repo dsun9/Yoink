@@ -64,6 +64,10 @@ The wrapper has a 180-second outer timeout and kills only its owned test tree.
 Focused diagnostics can select `-TestRegex '^sprite_flow$'` and a distinct
 `-LogPrefix`; preserve original failed-run evidence instead of overwriting logs.
 No test restarts or terminates the user's Explorer process.
+
+The opt-in [bounded Release rendering acceptance protocol](rendering-performance.md)
+measures repeated complete presentation, native input arrival, and sharp
+publication separately. Its initial failing baseline is recorded there.
 `-Configuration Release` selects `windows-release`; Debug selects `windows-dev`.
 
 ## Task 11 evidence before the final fix wave

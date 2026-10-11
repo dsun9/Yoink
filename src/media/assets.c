@@ -31,7 +31,18 @@ bool pp_media_allocate(PPAsset *a,size_t count,PPError *error) {
 }
 bool pp_assets_create(PPAssets **out,PPError *error) { if(!out) return pp_media_error(error,PP_ERROR_ARGUMENT,"Missing asset manager output"); *out=calloc(1,sizeof(**out)); return *out!=NULL || pp_media_error(error,PP_ERROR_MEMORY,"Could not allocate asset manager"); }
 void pp_assets_destroy(PPAssets *assets) { if(!assets) return; PPAsset *a=assets->first; while(a) { PPAsset *next=a->next; pp_media_clear(a); free(a->source); free(a); a=next; } free(assets); }
-static bool decode(PPAsset *a,PPError *e) { switch(a->kind) { case PP_ASSET_PNG:return pp_image_decode(a,e); case PP_ASSET_GIF:return pp_gif_decode(a,e); case PP_ASSET_SVG:return pp_svg_raster(a,a->info.width,a->info.height,e); default:return true; } }
+static bool decode(PPAsset *a,PPError *e) {
+    bool ok;
+    switch(a->kind) {
+    case PP_ASSET_PNG: ok=pp_image_decode(a,e); break;
+    case PP_ASSET_GIF: ok=pp_gif_decode(a,e); break;
+    case PP_ASSET_SVG: return pp_svg_raster(a,a->info.width,a->info.height,e);
+    default: return true;
+    }
+    if(ok) a->owner->metrics.raster_builds++;
+    return ok;
+}
+PPSourceMetrics pp_assets_source_metrics(const PPAssets *assets) { return assets ? assets->metrics : (PPSourceMetrics){0}; }
 bool pp_asset_import(PPAssets *assets,PPBytes b,PPAssetKind kind,PPAssetId *out,PPError *e) {
     if(!assets || !out || !b.data || !b.size || kind<PP_ASSET_PNG || kind>PP_ASSET_FONT) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid asset import arguments");
     if(b.size>PP_MEDIA_RESOURCE_BYTES) return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"Source resource exceeds 256 MiB");

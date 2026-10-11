@@ -146,7 +146,30 @@ static void test_native_retention_contract(void) {
     pp_assets_destroy(assets);
     native_planes = 4;
 }
+static void test_latest_resize_sharp_observation(void) {
+    PPAssets *assets=NULL; PPError error={0}; CHECK(pp_assets_create(&assets,&error));
+    PPProject *project=test_arrow_project(assets); PPAnchorPresenter *p=NULL;
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};
+    p->displays=malloc(sizeof(d)); *p->displays=d; p->display_count=1;
+    PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error); CHECK(s);
+    CHECK(pp_sprites_update(p,1,&error));
+    PPPlatformEvent resize={.kind=PP_EVENT_WHEEL,.surface=s->surface,.instance_id=s->id,.modifiers=PP_MOD_ALT,.wheel_delta=1,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&resize,&error));
+    resize.timestamp=2.01; CHECK(pp_anchor_presenter_event(p,&resize,&error));
+    CHECK(pp_sprites_update(p,2.02,&error));
+    CHECK(pp_anchor_presenter_metrics(p).sharp_publications==0);
+    CHECK(pp_sprites_update(p,2.2,&error));
+    PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
+    CHECK(metrics.sharp_publications==1 && metrics.last_sharp_input_timestamp==2.01);
+    CHECK(metrics.last_sharp_instance_id==s->id && metrics.last_sharp_drawable_density==1);
+    CHECK(metrics.last_sharp_longest_dip>96);
+    CHECK(pp_sprites_update(p,2.21,&error));
+    CHECK(pp_anchor_presenter_metrics(p).sharp_publications==1);
+    pp_anchor_presenter_destroy(p); pp_project_destroy(project); pp_assets_destroy(assets);
+}
 int main(void) {
+    test_latest_resize_sharp_observation();
     test_native_retention_contract();
     test_unavailable_source_finishes_pull();
     PPDisplay d[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};

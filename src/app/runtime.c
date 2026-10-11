@@ -23,6 +23,9 @@ PPSchedule pp_runtime_schedule(const PPRuntime *r, double now) {
   if(r->drawer) s.ui=now+1.0/60;
   return s;
 }
+PPPresentationMetrics pp_runtime_presentation_metrics(const PPRuntime *r) {
+  return pp_anchor_presenter_metrics(r ? r->presenter : NULL);
+}
 
 static void failure(PPRuntime *r) {
   r->failed = true;

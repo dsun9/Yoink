@@ -66,6 +66,9 @@ void pp_item_snapshot_release(PPItemSnapshot *snapshot);
 const PPItem *pp_item_snapshot_item(const PPItemSnapshot *snapshot);
 PPVec2 pp_item_snapshot_size(const PPItemSnapshot *snapshot);
 PPAssets *pp_item_snapshot_assets(const PPItemSnapshot *snapshot);
+/* Process-local immutable content revision. Retains preserve it; a freshly
+ * created snapshot has a distinct revision, including after same-item edits. */
+uint64_t pp_item_snapshot_revision(const PPItemSnapshot *snapshot);
 /* Cached pixels are borrowed until the next request on this snapshot or asset.
  * SVG calls on ANY snapshot of the same asset may invalidate the frame. Consume
  * immediately or request again. Text cache bytes include RGBA plus coverage and

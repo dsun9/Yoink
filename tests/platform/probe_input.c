@@ -1,6 +1,7 @@
 #include "performance_probe.h"
 static HOOKPROC original_hook;
 unsigned pp_probe_hook_count, pp_probe_hook_max_wait;
+unsigned pp_probe_injected_hook_count, pp_probe_injected_max_wait, pp_probe_wheel_count;
 double pp_probe_hook_max_ms;
 static LRESULT CALLBACK timed_hook(int code,WPARAM w,LPARAM l) {
   double start=pp_probe_clock();
@@ -9,6 +10,11 @@ static LRESULT CALLBACK timed_hook(int code,WPARAM w,LPARAM l) {
     DWORD wait=GetTickCount()-mouse->time;
     if(wait>pp_probe_hook_max_wait) pp_probe_hook_max_wait=wait;
     pp_probe_hook_count++;
+    if(mouse->dwExtraInfo==PP_PROBE_INPUT_TAG) {
+      pp_probe_injected_hook_count++;
+      if(wait>pp_probe_injected_max_wait) pp_probe_injected_max_wait=wait;
+      if(w==WM_MOUSEWHEEL) pp_probe_wheel_count++;
+    }
   }
   LRESULT result=original_hook(code,w,l);
   double elapsed=pp_probe_clock()-start;
