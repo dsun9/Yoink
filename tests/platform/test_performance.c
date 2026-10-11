@@ -47,13 +47,15 @@ static int acceptance_result(const Acceptance *a) {
   GATE(a->native_input_cases==ACCEPTANCE_CASES,"missing native injected input observations in required cases");
   GATE(a->sharp_observations>=ACCEPTANCE_SAMPLES,"missing native resize-input-to-sharp-publication observations");
   GATE(a->required_timing_cases==2,"missing required default Segoe complete-path timing cases");
-  if(a->required_timing_cases==2) GATE(isfinite(a->required_p95_ms) && a->required_p95_ms<=16.7,"required default Segoe complete warm path p95 exceeds 16.7 ms");
+  if(a->required_timing_cases) GATE(isfinite(a->required_p95_ms) && a->required_p95_ms<=16.7,"required default Segoe complete warm path p95 exceeds 16.7 ms");
   GATE(isfinite(a->max_input_wait_ms) && a->max_input_wait_ms<=50,"maximum native input-arrival wait exceeds 50 ms");
   GATE(isfinite(a->max_sharp_ms) && a->max_sharp_ms<=200,"latest resize-input-to-sharp publication exceeds 200 ms");
 #undef GATE
-  char required[32]="unavailable"; if(a->required_timing_cases==2) snprintf(required,sizeof(required),"%.3f",a->required_p95_ms);
-  printf("RESULT acceptance=%s cases=%u/%u samples=%u/%u required_p95_ms=%s regression_worst_p95_ms=%.3f input_max_ms=%.3f native_sharp_samples=%u sharp_max_ms=%.3f\n",
-    failed?"FAIL":"PASS",a->completed_cases,ACCEPTANCE_CASES,a->samples,ACCEPTANCE_CASES*ACCEPTANCE_SAMPLES,required,a->regression_p95_ms,a->max_input_wait_ms,a->sharp_observations,a->max_sharp_ms);
+  char required[32]="unavailable",sharp[32]="unavailable";
+  if(a->required_timing_cases) snprintf(required,sizeof(required),"%.3f",a->required_p95_ms);
+  if(a->sharp_observations) snprintf(sharp,sizeof(sharp),"%.3f",a->max_sharp_ms);
+  printf("RESULT acceptance=%s cases=%u/%u samples=%u/%u required_timing_cases=%u/2 required_p95_ms=%s regression_worst_p95_ms=%.3f input_max_ms=%.3f native_sharp_samples=%u sharp_max_ms=%s\n",
+    failed?"FAIL":"PASS",a->completed_cases,ACCEPTANCE_CASES,a->samples,ACCEPTANCE_CASES*ACCEPTANCE_SAMPLES,a->required_timing_cases,required,a->regression_p95_ms,a->max_input_wait_ms,a->sharp_observations,sharp);
   fflush(stdout); return failed?1:0;
 }
 static int acceptance_control(const char *control) {
@@ -463,8 +465,9 @@ static int native_acceptance(PPApp *app) {
       PPSurface *surface=NULL; size_t retained=0; double next;
       PPAnchorPresenter p={.renderer=renderer,.assets=pp_app_assets(app)};
       PPDisplay display={1,{-20000,-20000,10000,10000},densities[density],densities[density]};
-      double values[7][ACCEPTANCE_SAMPLES]={{0}}; unsigned observed=0; PPProbeMetric totals[PROBE_COUNT]={{0}};
+      double values[7][ACCEPTANCE_SAMPLES]={{0}}; unsigned observed=0,observed_gpu=0;
       unsigned input_before=pp_probe_injected_hook_count; uint64_t builds_before=pp_assets_source_metrics(p.assets).raster_builds;
+      PPRendererMetrics renderer_before=pp_renderer_metrics(renderer);
       if(!pp_surface_create(&surface,&error)) {printf("UNSUPPORTED native source=%s error=\"%s\"\n",names[kind],error.message);continue;}
       printf("CASE source=%s dip=%.0f drawable_density=%.2f rotation=%.2f backend=layered-gl-readback build=%s\n",names[kind],sizes[size],densities[density],angles[angle],PP_PROBE_CONFIGURATION);
       for(int frame=-1;frame<ACCEPTANCE_WARMUP+ACCEPTANCE_SAMPLES;frame++) {
@@ -480,8 +483,7 @@ static int native_acceptance(PPApp *app) {
           values[2][observed]=pp_probe_metrics[PROBE_GPU_SUBMIT].ms; values[3][observed]=pp_probe_metrics[PROBE_GPU_EXECUTION].ms;
           values[4][observed]=pp_probe_metrics[PROBE_GPU_COMPLETE].ms; values[5][observed]=pp_probe_metrics[PROBE_SURFACE].ms;
           values[6][observed]=pp_probe_metrics[PROBE_READBACK].ms;
-          for(int i=0;i<PROBE_COUNT;i++) {totals[i].count+=pp_probe_metrics[i].count;totals[i].ms+=pp_probe_metrics[i].ms;totals[i].max_ms=fmax(totals[i].max_ms,pp_probe_metrics[i].max_ms);}
-          if(pp_probe_metrics[PROBE_GPU_EXECUTION].count==1 && pp_probe_metrics[PROBE_GPU_COMPLETE].count==1) a.gpu_observations++;
+          if(pp_probe_metrics[PROBE_GPU_EXECUTION].count==1 && pp_probe_metrics[PROBE_GPU_COMPLETE].count==1) {a.gpu_observations++;observed_gpu++;}
           observed++; a.samples++;
         }
         if(elapsed>250 || pp_probe_injected_max_wait>100) {a.stopped=true;printf("STOP protective frame_ms=%.3f input_wait_ms=%u\n",elapsed,pp_probe_injected_max_wait);break;}
@@ -492,10 +494,18 @@ static int native_acceptance(PPApp *app) {
       if(observed==ACCEPTANCE_SAMPLES) {
         a.completed_cases++; double p95=statistics("complete",values[0]); a.regression_p95_ms=fmax(a.regression_p95_ms,p95);
         if(kind==0 && size==3 && density==1 && a.default_segoe) {a.required_timing_cases++;a.required_p95_ms=fmax(a.required_p95_ms,p95);}
-        statistics("source_request",values[1]); statistics("cpu_draw_submission",values[2]); statistics("gpu_execution",values[3]);
+        statistics("source_request",values[1]); statistics("cpu_draw_submission",values[2]);
+        if(observed_gpu==ACCEPTANCE_SAMPLES) statistics("gpu_execution",values[3]);
+        else printf("UNAVAILABLE gpu_execution observations=%u/%u\n",observed_gpu,ACCEPTANCE_SAMPLES);
         statistics("cpu_wait_gpu_completion",values[4]);statistics("native_publication",values[5]);statistics("gpu_readback",values[6]);
       }
-      printf("OBSERVATIONS warm_samples=%u source_raster_builds=%llu transform_redraws=%u source_uploads=%u native_publications=%llu injected_hooks=%u\n",observed,(unsigned long long)(pp_assets_source_metrics(p.assets).raster_builds-builds_before),totals[PROBE_TRANSFORM].count,totals[PROBE_TEXTURE].count/4,(unsigned long long)p.metrics.native_publications,pp_probe_injected_hook_count-input_before);
+      PPRendererMetrics renderer_after=pp_renderer_metrics(renderer);
+      printf("OBSERVATIONS phases=cold-warmup-samples warm_samples=%u source_raster_builds=%llu transform_redraws=%llu source_uploads=%llu readbacks=%llu native_publications=%llu injected_hooks=%u\n",observed,
+        (unsigned long long)(pp_assets_source_metrics(p.assets).raster_builds-builds_before),
+        (unsigned long long)(renderer_after.transform_draws-renderer_before.transform_draws),
+        (unsigned long long)(renderer_after.source_uploads-renderer_before.source_uploads),
+        (unsigned long long)(renderer_after.readbacks-renderer_before.readbacks),
+        (unsigned long long)p.metrics.native_publications,pp_probe_injected_hook_count-input_before);
       pp_surface_destroy(surface); pp_assets_release_raster(p.assets,retained); fflush(stdout);
     }
     pp_item_snapshot_release(snapshot);

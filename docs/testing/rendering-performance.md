@@ -50,6 +50,8 @@ The tracked `performance_runner` CTest invokes synthetic protocol controls throu
 
 For later reuse tests, `pp_assets_source_metrics` exposes successful source raster builds. Text/SVG generation and PNG/GIF cache decode increment it; cache hits, GIF frame selection, and rejected requests do not. Immutable `pp_item_snapshot_revision` values identify a snapshot through retained references. A replacement snapshot receives a new process-local revision.
 
+`pp_renderer_metrics` exposes semantic source uploads, transform draws, and readbacks. One source upload counts the content operation, including any associated coverage, rather than a particular number of GL calls. Compatibility and direct draw APIs both report these counters. Translation-only and static reuse checks can compare these counts without depending on texture allocation or shader implementation details.
+
 `pp_anchor_presenter_metrics` and `pp_runtime_presentation_metrics` expose native publication and sharp publication counts, plus the latest matching resize input timestamp, sprite ID, source revision, logical endpoint size, and drawable density. Observing a counter requires the caller to timestamp after explicit completion. Counters do not imply compositor visibility. Presenter counts reset with presenter lifetime. Worker publication must preserve the same latest-input/revision/density contract when asynchronous raster preparation is added.
 
 ## Initial Windows observation
