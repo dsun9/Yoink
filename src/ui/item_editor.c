@@ -42,12 +42,15 @@ static void text_diagnostics(PPSettings *settings) {
                     editor->draft.text_style.fallback_face, &info, NULL);
   snprintf(editor->diagnostics, sizeof(editor->diagnostics),
            "Requested: %.100s. Fallback: %.100s. Used fallback runs: %zu. "
-           "Missing glyphs: %zu.%s",
+           "Missing glyphs: %zu.%s%s",
            editor->draft.text_style.requested_family,
            fallback ? info.family : "none", diagnostics.fallback_runs,
            diagnostics.missing_glyphs,
            diagnostics.missing_requested_families
                ? " Requested family is unavailable."
+               : "",
+           diagnostics.default_emoji_fallback
+               ? " Bundled Noto is selected because Segoe UI Emoji was unavailable."
                : "");
   pp_asset_release(fallback);
 }

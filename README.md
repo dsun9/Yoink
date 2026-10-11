@@ -21,10 +21,20 @@ retained editor. A persistent failure offers native Retry/Cancel/shutdown choice
 without silently losing drafts; saving is offered only when pending input and
 fields have been validated.
 
-First launch gives each list the hand `👉`, requested Aptos family, Noto Color
-Emoji fallback, 96 logical-pixel font size, full opacity and zero rotation.
-Aptos is discovered locally if installed; the distribution bundles only the
-permitted Noto emoji font and its OFL. Plain text defaults to black.
+First launch gives each list the hand `👉`, installed Segoe UI Emoji artwork,
+96 logical-pixel font size, full opacity and zero rotation. The ordinary text
+family remains Aptos and is discovered independently. Font lookup checks the
+actual family and collection face metadata. If Segoe UI Emoji is unavailable,
+the bundled Noto Color Emoji keeps the hand usable and the item preview names
+that fallback. Anchor, Settings and drawer previews use the same chosen font
+bytes as pulled sprites. Plain text defaults to black.
+
+The renderer uses supported scalable color layers when the selected font has
+them. It inspects the actual installed font's capabilities and version; exact
+native COLRv1 paint parity is outside the current implementation. Regional
+indicator sequences follow the font's coverage and may appear as separate
+letters. The application package contains Noto and its OFL, and never includes
+installed Segoe UI Emoji or Aptos bytes.
 
 | Gesture | Result |
 | --- | --- |
@@ -47,7 +57,7 @@ below. Changing projects clears temporary sprites only after a successful load.
 
 For sharp large emoji with Twemoji artwork, use the optional font or portable
 example described in [Optional scalable emoji](resources/optional-fonts/README.md).
-It is an explicit choice; the existing Noto default is retained.
+It is an explicit choice; installed Segoe UI Emoji remains the default artwork.
 
 Settings provides eight shared ordered lists, default selection, enable/disable,
 text/emoji appearance, permitted font import, and PNG/GIF/SVG import. Ctrl+N,
@@ -79,7 +89,7 @@ An import accepts at most 256 MiB of source bytes; portable packages are stricte
 4096 ZIP entries/items. Project names are 1–255 UTF-8 bytes. Font embedding must
 be installable/editable for every face; unavailable families or missing glyphs
 can block portable saving. When Aptos is absent, text fully covered by embedded
-permitted Noto Color Emoji remains portable, including multiple or multiline
+permitted Segoe UI Emoji or Noto Color Emoji remains portable, including multiple or multiline
 emoji. See [project format](docs/project-format.md) for the
 complete schema and validation rules.
 
@@ -141,4 +151,4 @@ follow-up instructions in [Windows testing](docs/testing/windows.md) and
 PointyPointer uses AGPL-3.0-or-later adapted BongoCat runtime/UI code. Preserve
 [LICENSE](LICENSE), [third-party notices](docs/third-party-notices.md), the packaged
 license texts and corresponding source when redistributing. The Noto font is
-under SIL OFL. No Aptos or Segoe UI font is shipped in the application package.
+under SIL OFL. No Aptos, Segoe UI or Segoe UI Emoji font is shipped in the application package.

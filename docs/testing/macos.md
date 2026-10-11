@@ -185,3 +185,11 @@ tiny-alpha first-click and changing-frame selection, background drag capture and
 capture-wheel behavior remain **NOT RUN** on the Windows implementation host.
 The source/CI configuration is best effort; no hosted CI run was triggered here.
 Task 10 candidate-routing risks remain functional acceptance gates.
+
+The shared default-font path now searches actual family and collection metadata
+for Segoe UI Emoji independently from Aptos. Without installed Segoe it selects
+bundled Noto and retains the item-preview fallback diagnostic in portable
+projects. The deterministic `default_fonts` test uses original OFL fixtures and
+is part of the headless suite. The native Segoe production probe is Windows
+only. Apple compilation, local font acquisition and preview/runtime behavior
+for this change remain **NOT RUN** until checked on a Mac.

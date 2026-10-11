@@ -58,6 +58,24 @@ bool pp_project_create(PPAssets *assets, PPProject **out, PPError *error) {
     return true;
 }
 
+static bool local_font_notice(PPProject *project, PPAssetId id, int face, PPError *error) {
+    PPAssetId absent = {0};
+    if (!memcmp(&id, &absent, sizeof(id))) return true;
+    PPAsset *font = pp_asset_retain(project->assets, id);
+    PPFontInfo info;
+    bool ok = font && pp_font_inspect(pp_asset_source(font), face, &info, error);
+    pp_asset_release(font);
+    if (!ok) return false;
+    char notice[1600];
+    snprintf(notice, sizeof(notice), "Font: %s\nVersion: %s\n%s\nLicense information: %s\n"
+        "Complete local font bytes retained for this project, including original license metadata. "
+        "Use remains subject to the font's terms. Document embedding is separate from application redistribution.\n",
+        info.family, *info.version ? info.version : "unspecified",
+        *info.copyright ? info.copyright : "Copyright metadata unavailable",
+        *info.license_url ? info.license_url : "See the original font metadata and host font terms");
+    return pp_project_set_notice(project, id, notice, error);
+}
+
 bool pp_project_default(PPAssets *assets, PPProject **out, PPError *error) {
     if (out) *out = NULL;
     if (!out) return project_error(error, PP_ERROR_ARGUMENT, "Missing project output");
@@ -68,11 +86,17 @@ bool pp_project_default(PPAssets *assets, PPProject **out, PPError *error) {
     item.text = "\xf0\x9f\x91\x89";
     item.opacity = 1;
     if (!pp_text_default_style(assets, &item.text_style, error)) goto failed;
-    char *notice = pp_resource_load("licenses/NotoEmoji-OFL.txt", NULL);
-    if (!notice) { project_error(error, PP_ERROR_PLATFORM, "Cannot load bundled Noto font notice"); goto failed; }
-    bool notice_ok = pp_project_set_notice(project, item.text_style.fallback_asset, notice, error);
-    SDL_free(notice);
-    if (!notice_ok) goto failed;
+    if (item.text_style.default_emoji_fallback) {
+        char *notice = pp_resource_load("licenses/NotoEmoji-OFL.txt", NULL);
+        if (!notice) { project_error(error, PP_ERROR_PLATFORM, "Cannot load bundled Noto font notice"); goto failed; }
+        bool notice_ok = pp_project_set_notice(project, item.text_style.fallback_asset, notice, error);
+        SDL_free(notice);
+        if (!notice_ok) goto failed;
+    } else if (!local_font_notice(project, item.text_style.fallback_asset,
+                                  item.text_style.fallback_face, error)) goto failed;
+    if (memcmp(&item.text_style.primary_asset, &item.text_style.fallback_asset, sizeof(PPAssetId)) &&
+        !local_font_notice(project, item.text_style.primary_asset,
+                           item.text_style.primary_face, error)) goto failed;
     for (int a = 0; a < PP_ANCHOR_COUNT; a++)
         if (!pp_project_add_item(project, (PPAnchor)a, &item, NULL, error)) goto failed;
     *out = project;

@@ -7,10 +7,13 @@ typedef enum PPFontEmbedding {
 } PPFontEmbedding;
 typedef struct PPFontInfo {
     char family[128], style[128];
+    char version[128], copyright[512], license_url[256];
     int face_index;
     size_t face_count; /* Complete source collection, including unselected faces. */
     PPFontEmbedding embedding;
-    bool embeddable, no_subsetting, bitmap_only;
+    bool embeddable, no_subsetting, bitmap_only; /* OS/2 embedding restrictions only. */
+    bool scalable, bitmap_strikes, color_layers; /* Actual artwork capabilities. */
+    unsigned colr_version; /* Table version, meaningful when color_layers is true. */
     size_t unicode_glyphs;
     bool covers_latin_a, covers_hand, color;
     double bitmap_em_size; /* Last fixed strike's em size, zero for scalable fonts. */
@@ -21,12 +24,16 @@ typedef struct PPTextStyle {
     int primary_face, fallback_face;
     double font_size_dip;
     uint8_t color[4];
+    bool default_emoji_fallback; /* This item selected bundled Noto when Segoe was unavailable. */
 } PPTextStyle;
 typedef struct PPTextDiagnostics {
     size_t fallback_runs, missing_glyphs, missing_requested_families;
+    bool default_emoji_fallback; /* Selected Noto default, independent of requested text family. */
 } PPTextDiagnostics;
 bool pp_font_inspect(PPBytes font, int face_index, PPFontInfo *out, PPError *error);
-/* Loads owned bundled fallback and optional local Aptos bytes into assets. */
+/* Copies installed Segoe UI Emoji and optional Aptos into owned assets. If
+ * Segoe is unavailable, selects bundled Noto and records that choice. Ordinary
+ * text-family selection remains independent. Never installs/bundles local fonts. */
 bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error);
 /* Single-threaded. Assets must outlive rendering. Fonts borrow retained source
  * bytes until closed, including fallback fonts. out must be empty and becomes
