@@ -10,4 +10,8 @@ SHA-256 font: `72a635cb3d2f3524c51620cdde406b217204e8a6a06c6a096ff8ed4b5fd6e27b`
 SHA-256 license: `6a73f9541c2de74158c0e7cf6b0a58ef774f5a780bf191f2d7ec9cc53efe2bf2`.
 
 License: SIL Open Font License 1.1, retained at `resources/licenses/NotoEmoji-OFL.txt`.
-Aptos is looked up locally or imported explicitly; it is not bundled.
+Installed Segoe UI Emoji is the default emoji artwork. This bundled Noto font
+is used when Segoe is unavailable, with a visible item-preview diagnostic.
+Aptos is looked up independently for ordinary text. Neither Segoe UI Emoji nor
+Aptos is bundled; permitted complete bytes can be retained privately in a
+portable project under the existing embedding checks and font terms.

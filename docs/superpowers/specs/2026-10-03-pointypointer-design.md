@@ -247,10 +247,16 @@ for portable project appearance. Multiline text retains explicit line breaks.
 Color emoji retains its intrinsic colors; the text color applies to monochrome
 glyphs.
 
-Aptos remains the requested default family. Inspection of the seven Aptos font
-files available locally found editable-embedding flags but no U+1F449 glyph.
-Use Noto Color Emoji as the explicit fallback for the default hand and other
-covered emoji. Show fallback use in the item preview.
+Aptos remains the requested ordinary text family. Select installed Segoe UI
+Emoji independently for default emoji, matching actual family metadata and the
+collection face. Inspect each font's scalable outlines, bitmap strikes and
+supported color layers separately from its embedding permissions. Use the
+scalable color layers supported by the current FreeType pipeline; exact native
+COLRv1 paint parity is outside this implementation. If Segoe is unavailable,
+use bundled Noto Color Emoji and identify that choice in the item preview.
+Anchor, Settings, drawer and sprite content use the same selected font bytes.
+Preserve the font's actual sequence coverage, including regional indicators
+that can render as separate letters without missing-glyph diagnostics.
 
 Embed the actual permitted font files used by a project, including fallback
 fonts. Use embedded fonts privately within the project without installing them
@@ -260,11 +266,15 @@ Do not silently produce a supposedly portable project with unresolved fonts.
 
 Application font redistribution is separate from document embedding. Noto's
 font license permits the proposed bundled emoji fallback with its notices.
-Aptos is obtained from the user's available font files, not copied from this
-development machine into the application distribution. If Aptos is unavailable,
-the default hand still renders through the bundled emoji fallback. Settings
-identifies Aptos as unavailable; other text requiring it needs an available font
-before it can be saved as a complete portable project.
+Segoe UI Emoji and Aptos are obtained from the user's available font files and
+are never copied into application redistributable resources. Default projects
+own complete permitted local bytes privately and attach notices identifying the
+actual selected fonts. If Aptos is unavailable, the default hand still renders
+through the chosen Segoe or Noto emoji font. Text completely resolved by that
+embedded permitted font remains portable. Other unresolved text needs a covering
+font before it can be saved. The missing-Segoe Noto choice has its own diagnostic,
+separate from an unavailable requested Aptos family. See ADR-0001 and
+[the implementation specification](https://github.com/dsun9/Yoink/issues/1).
 
 Original asset files are retained inside the project. Decoded frames, GPU
 textures, and raster caches are disposable runtime data. Hash-based storage

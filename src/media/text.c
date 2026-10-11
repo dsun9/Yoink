@@ -154,6 +154,8 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
     PPFontInfo info;
     if (fallback_asset) {
         if (!pp_font_inspect(pp_asset_source(fallback_asset), style->fallback_face, &info, error)) goto done;
+        diagnostics->default_emoji_fallback = style->default_emoji_fallback &&
+            !SDL_strcasecmp(info.family, "Noto Color Emoji");
         if (info.bitmap_em_size > 0) render_size = info.bitmap_em_size;
     }
     if (primary_asset) {

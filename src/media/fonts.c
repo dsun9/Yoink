@@ -3,6 +3,8 @@
 #include "pointy/platform.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_COLOR_H
+#include FT_TRUETYPE_TABLES_H
 #include <hb.h>
 #include <hb-ot.h>
 #include <limits.h>
@@ -67,6 +69,25 @@ void pp_font_embedding_flags(uint16_t flags, PPFontInfo *info) {
         (info->embedding == PP_FONT_INSTALLABLE || info->embedding == PP_FONT_EDITABLE);
 }
 
+static void font_names(PPBytes bytes, int index, PPFontInfo *info) {
+    hb_blob_t *blob = hb_blob_create((const char *)bytes.data, (unsigned)bytes.size,
+                                    HB_MEMORY_MODE_READONLY, NULL, NULL);
+    hb_face_t *face = hb_face_create(blob, (unsigned)index);
+    struct FontName { hb_ot_name_id_t id; char *text; unsigned size; } names[] = {
+        {HB_OT_NAME_ID_VERSION_STRING, info->version, sizeof(info->version)},
+        {HB_OT_NAME_ID_COPYRIGHT, info->copyright, sizeof(info->copyright)},
+        {HB_OT_NAME_ID_LICENSE_URL, info->license_url, sizeof(info->license_url)}
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        unsigned length = names[i].size;
+        hb_ot_name_get_utf8(face, names[i].id, hb_language_from_string("en", -1),
+                           &length, names[i].text);
+        names[i].text[names[i].size - 1] = 0;
+    }
+    hb_face_destroy(face);
+    hb_blob_destroy(blob);
+}
+
 bool pp_font_inspect(PPBytes bytes, int face_index, PPFontInfo *out, PPError *error) {
     if (out) memset(out, 0, sizeof(*out));
     if (!out || !bytes.data || !bytes.size || bytes.size > LONG_MAX || face_index < 0)
@@ -84,8 +105,24 @@ bool pp_font_inspect(PPBytes bytes, int face_index, PPFontInfo *out, PPError *er
     out->face_count = (size_t)face->num_faces;
     snprintf(out->family, sizeof(out->family), "%s", face->family_name ? face->family_name : "Unknown");
     snprintf(out->style, sizeof(out->style), "%s", face->style_name ? face->style_name : "Unknown");
+    font_names(bytes, face_index, out);
     pp_font_embedding_flags(FT_Get_FSType_Flags(face), out);
     out->color = FT_HAS_COLOR(face) != 0;
+    out->scalable = FT_IS_SCALABLE(face) != 0;
+    out->bitmap_strikes = face->num_fixed_sizes > 0;
+    FT_Byte colr[2];
+    FT_ULong colr_length = sizeof(colr);
+    if (!FT_Load_Sfnt_Table(face, FT_MAKE_TAG('C', 'O', 'L', 'R'), 0, colr, &colr_length) &&
+        colr_length == sizeof(colr)) {
+        out->colr_version = ((unsigned)colr[0] << 8) | colr[1];
+        /* Include unencoded glyphs that shaping can select. A COLRv1 table
+         * alone does not imply that the current rasterizer has v0 layers. */
+        for (FT_UInt glyph = 0; !out->color_layers && glyph < (FT_ULong)face->num_glyphs; glyph++) {
+            FT_LayerIterator iterator = {0};
+            FT_UInt layer, color;
+            out->color_layers = FT_Get_Color_Glyph_Layer(face, glyph, &layer, &color, &iterator) != 0;
+        }
+    }
     if (!FT_IS_SCALABLE(face) && face->num_fixed_sizes > 0)
         out->bitmap_em_size = face->available_sizes[face->num_fixed_sizes - 1].y_ppem / 64.0;
     if (FT_Select_Charmap(face, FT_ENCODING_UNICODE)) {

@@ -1,5 +1,46 @@
 # Windows acceptance
 
+## Default emoji font checks for issue 2
+
+`default_fonts` controls only installed-font acquisition at the production
+font/content boundary. Its original OFL collection has synthetic Aptos and
+Segoe UI Emoji family names at different face indices. The test checks selected
+artwork, independent text selection, the missing-Segoe Noto diagnostic, actual
+artwork capabilities, selected-font notices and portable ownership. It does
+not require a Windows font in hosted CI.
+
+`default_emoji` runs the same pipeline against an installed Segoe UI Emoji.
+It skips with code 77 when the family is unavailable. Native Windows acceptance
+requires the explicit command below, which fails when Segoe is unavailable:
+
+```powershell
+build/windows-release/Release/pointy_default_emoji_probe.exe --require-installed
+```
+
+The probe uses actual default-project acquisition and renders the pointing hand,
+skin-tone hand, VS16 heart, joined woman technologist, keycap, mixed multiline
+text and regional indicators at 96 DIP and 150% drawable density. It reports
+the font version, selected collection face, outline/bitmap/color-layer
+capabilities and embedding permissions, then saves BMP evidence in the build
+directory. It also saves and reopens a project into fresh assets and compares
+the default-hand raster exactly. Its temporary project is removed afterward;
+font bytes remain private document data and never enter application resources.
+
+On the 2026-10-11 Windows host, production checks selected Segoe UI Emoji
+Version 1.70, face 0 of 1, with scalable outlines, no fixed bitmap strikes,
+supported color layers and a COLR version 1 table. The font permits editable
+embedding. All six colored scenarios rendered through the production pipeline
+with zero missing glyphs. The US regional-indicator sequence shaped to two
+glyphs, IDs 293 and 291, and rendered separate monochrome letters without a
+missing-glyph diagnostic. No sequence-specific fallback was added. A default
+hand reopened with identical premultiplied pixels from privately owned embedded
+bytes. Exact native COLRv1 paint parity remains unverified.
+
+These checks perform font acquisition, source rendering and portable storage.
+They do not initialize SDL video, draw to GL windows, manipulate desktop input
+or establish presentation latency, large-size quality or compositor frame rate.
+The complete presentation/performance gates are recorded separately for issue 1.
+
 Task 11 was validated on Windows 11 Pro build 26200, Ryzen 7 7800X3D
 (8 cores / 16 logical processors), RTX 5090 driver 32.0.16.1062, and one
 3840×2160 display at 150%. No second physical display or Mac is available.

@@ -106,7 +106,7 @@ static bool portable_text(PPAssets *assets, const PPItem *item, PPError *error) 
             !strcmp(style->requested_family, "Aptos") &&
             fallback &&
             pp_font_inspect(pp_asset_source(fallback), style->fallback_face, &info, error) &&
-            !strcmp(info.family, "Noto Color Emoji") &&
+            (!strcmp(info.family, "Noto Color Emoji") || !strcmp(info.family, "Segoe UI Emoji")) &&
             pp_font_resolves_text(pp_asset_source(fallback), style->fallback_face, item->text, error);
         pp_asset_release(fallback);
         if (!covered_emoji)
@@ -267,6 +267,7 @@ bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPMa
                 ADD(yyjson_mut_obj_add_str(doc, value, "text", item->text));
                 ADD(yyjson_mut_obj_add_str(doc, value, "requested_family",
                                            style->requested_family ? style->requested_family : ""));
+                ADD(yyjson_mut_obj_add_bool(doc, value, "default_emoji_fallback", style->default_emoji_fallback));
                 ADD(yyjson_mut_obj_add_real(doc, value, "font_size_dip", style->font_size_dip));
                 ADD(yyjson_mut_obj_add_val(
                     doc, value, "primary",
@@ -540,8 +541,12 @@ bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out
                 PPTextStyle *style = &item.text_style;
                 item.text = string_value(yyjson_obj_get(value, "text"));
                 style->requested_family = string_value(yyjson_obj_get(value, "requested_family"));
+                yyjson_val *default_fallback = yyjson_obj_get(value, "default_emoji_fallback");
+                style->default_emoji_fallback = yyjson_get_bool(default_fallback);
                 yyjson_val *color = yyjson_obj_get(value, "color");
-                if (yyjson_obj_size(value) != 10 || !item.text || !style->requested_family ||
+                if (yyjson_obj_size(value) != (default_fallback ? 11 : 10) ||
+                    (default_fallback && !yyjson_is_bool(default_fallback)) ||
+                    !item.text || !style->requested_family ||
                     !number(value, "font_size_dip", &style->font_size_dip) ||
                     !yyjson_is_arr(color) || yyjson_arr_size(color) != 4 ||
                     !font_reference(manifest, yyjson_obj_get(value, "primary"),

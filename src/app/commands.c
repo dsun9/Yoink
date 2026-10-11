@@ -42,6 +42,7 @@ static bool same_item(const PPItem *a, const PPItem *b) {
                  sizeof(PPAssetId)) &&
          a->text_style.primary_face == b->text_style.primary_face &&
          a->text_style.fallback_face == b->text_style.fallback_face &&
+         a->text_style.default_emoji_fallback == b->text_style.default_emoji_fallback &&
          a->text_style.font_size_dip == b->text_style.font_size_dip &&
          !memcmp(a->text_style.color, b->text_style.color, 4);
 }
@@ -299,7 +300,7 @@ bool pp_app_create(PPApp **out, const PPAppOptions *options, PPError *error) {
   if (!app->default_notice) {
     pp_app_destroy(app);
     return pp_app_error(error, PP_ERROR_MEMORY,
-                        "Cannot retain the bundled font notice");
+                        "Cannot retain the default emoji font notice");
   }
   app->saved_revision = pp_project_revision(app->project);
   reset_selection(app);
