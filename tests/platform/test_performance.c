@@ -9,9 +9,6 @@
 #include <miniz.h>
 #include <math.h>
 #include <string.h>
-#include <ft2build.h>
-#include FT_FREETYPE_H
-#include FT_SFNT_NAMES_H
 PPProbeMetric pp_probe_metrics[PROBE_COUNT];
 bool pp_probe_completion_enabled;
 static struct {const char *family; bool found; size_t bytes; double ms;} font_events[32];
@@ -337,24 +334,14 @@ static double statistics(const char *name,double values[ACCEPTANCE_SAMPLES]) {
   printf("DISTRIBUTION metric=%s samples=%u median_ms=%.3f p95_ms=%.3f max_ms=%.3f\n",name,ACCEPTANCE_SAMPLES,median,p95,values[19]);
   return p95;
 }
-static void selected_font(PPAssets *assets,PPAssetId id,int face_index,PPFontInfo *info) {
+static void selected_font(PPAssets *assets,PPAssetId id,int face_index,const char *role,PPFontInfo *info) {
   PPError error={0}; PPAsset *font=pp_asset_retain(assets,id);
   memset(info,0,sizeof(*info));
   if(!font || !pp_font_inspect(pp_asset_source(font),face_index,info,&error)) {
-    printf("FONT unavailable error=%s\n",error.message); pp_asset_release(font); return;
+    printf("FONT role=%s unavailable error=%s\n",role,error.message); pp_asset_release(font); return;
   }
-  char version[128]="unavailable"; FT_Library library=NULL; FT_Face face=NULL; PPBytes bytes=pp_asset_source(font);
-  if(!FT_Init_FreeType(&library) && !FT_New_Memory_Face(library,bytes.data,(FT_Long)bytes.size,face_index,&face)) {
-    for(FT_UInt i=0;i<FT_Get_Sfnt_Name_Count(face);i++) {
-      FT_SfntName name;
-      if(FT_Get_Sfnt_Name(face,i,&name) || name.name_id!=5 || name.platform_id!=3) continue;
-      size_t count=name.string_len/2; if(count>=sizeof(version)) count=sizeof(version)-1;
-      for(size_t j=0;j<count;j++) version[j]=(name.string[j*2]==0 && name.string[j*2+1]<128)?name.string[j*2+1]:'?';
-      version[count]=0; break;
-    }
-  }
-  if(face) FT_Done_Face(face); if(library) FT_Done_FreeType(library);
-  printf("FONT family=\"%s\" style=\"%s\" version=\"%s\" color=%d bitmap_em=%.1f\n",info->family,info->style,version,info->color,info->bitmap_em_size);
+  printf("FONT role=%s family=\"%s\" style=\"%s\" version=\"%s\" color=%d scalable=%d bitmap_strikes=%d color_layers=%d colr_version=%u bitmap_em=%.1f\n",
+    role,info->family,info->style,info->version[0]?info->version:"unavailable",info->color,info->scalable,info->bitmap_strikes,info->color_layers,info->colr_version,info->bitmap_em_size);
   pp_asset_release(font);
 }
 static bool acceptance_source(PPApp *app,int kind,PPItemSnapshot **out,PPFontInfo *font,PPError *error) {
@@ -376,7 +363,13 @@ static bool acceptance_source(PPApp *app,int kind,PPItemSnapshot **out,PPFontInf
     if(!pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,error)) return false;
     item.kind=PP_ITEM_IMAGE; item.image_longest_dip=96;
   } else if(kind==5) item.text="A\xf0\x9f\x91\x89\nB";
-  if(item.kind==PP_ITEM_TEXT) selected_font(assets,item.text_style.fallback_asset,item.text_style.fallback_face,font);
+  if(item.kind==PP_ITEM_TEXT) {
+    if(kind==5) {
+      PPFontInfo primary;
+      selected_font(assets,item.text_style.primary_asset,item.text_style.primary_face,"primary",&primary);
+    }
+    selected_font(assets,item.text_style.fallback_asset,item.text_style.fallback_face,"emoji-fallback",font);
+  }
   return pp_item_snapshot_create(assets,&item,out,error);
 }
 static bool stop_injector(HANDLE thread) {
