@@ -1,5 +1,7 @@
 # Windows overlay foundation observations
 
+The opt-in transparent OpenGL feasibility gate and its rectangular input contract are recorded in [direct-gl-feasibility.md](direct-gl-feasibility.md). The observations below describe the retained CPU-frame compatibility path.
+
 Observed on 2026-10-03: Windows 10.0.26200, MSVC 19.44, one 2560 × 1440 display,
 NVIDIA RTX 5090. SDL revision `829a65d769d935c4852f8159e964312c0957260a`.
 
