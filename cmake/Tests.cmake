@@ -34,6 +34,11 @@ if(BUILD_TESTING AND WIN32)
   target_link_libraries(pointy_default_emoji_probe PRIVATE pointy_store SDL3::SDL3-static harfbuzz::harfbuzz)
   add_test(NAME default_emoji COMMAND pointy_default_emoji_probe)
   set_tests_properties(default_emoji PROPERTIES LABELS "media;headless" TIMEOUT 60 SKIP_RETURN_CODE 77)
+  add_executable(pointy_direct_gl_test tests/platform/test_direct_gl.c)
+  target_link_libraries(pointy_direct_gl_test PRIVATE pointy_render pointy_platform SDL3::SDL3-static OpenGL::GL user32 gdi32)
+  add_dependencies(pointy_direct_gl_test pointy_input_receiver)
+  add_test(NAME direct_gl COMMAND pointy_direct_gl_test $<TARGET_FILE:pointy_input_receiver>)
+  set_tests_properties(direct_gl PROPERTIES LABELS desktop RUN_SERIAL TRUE TIMEOUT 60)
   add_executable(pointy_performance_test tests/platform/test_performance.c
     tests/platform/probe_text.c tests/platform/probe_raster.c tests/platform/probe_fonts.c
     tests/platform/probe_frame.c tests/platform/probe_backend.c tests/platform/probe_surface.c tests/platform/probe_input.c src/ui/drawer.c)

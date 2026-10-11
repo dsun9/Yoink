@@ -26,8 +26,10 @@ static PPButton button(UINT message) {
 }
 static PPSurface *target(POINT point) {
     HWND top=WindowFromPoint(point);
-    for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==top && s->bits) {
+    for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==top && IsWindowVisible(s->window)) {
         LONG x=point.x-s->origin.x,y=point.y-s->origin.y;
+        if(s->gl_window) return s->gl_interactive && x>=0 && y>=0 && x<s->width && y<s->height?s:NULL;
+        if(!s->bits) return NULL;
         if(x>=0 && y>=0 && x<s->width && y<s->height && s->bits[((size_t)y*s->width+x)*4+3]) return s;
         return NULL;
     }
