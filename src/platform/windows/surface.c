@@ -91,7 +91,8 @@ bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds,
 void pp_surface_destroy(PPSurface *surface) {
     if (!surface) return;
     pp_windows_input_remove(surface);
-    if (surface->window) DestroyWindow(surface->window);
+    if(surface->gl_video_initialized) pp_windows_gl_destroy(surface);
+    else if (surface->window) DestroyWindow(surface->window);
     pp_windows_forget(surface); release_bitmap(surface);
     if (surface->dc) DeleteDC(surface->dc);
     free(surface);
@@ -99,5 +100,6 @@ void pp_surface_destroy(PPSurface *surface) {
 void pp_surface_hide(PPSurface *surface) {
     if(!surface) return;
     pp_windows_input_cancel(surface);
+    surface->gl_interactive=false;
     if(surface->window) ShowWindow(surface->window,SW_HIDE);
 }
