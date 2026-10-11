@@ -418,6 +418,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   }
   nk_push_scissor(canvas, clip);
 done:
+  ; /* A C11 label must precede a statement. */
   const char *diagnostic =
       e->configuration_error[0] ? e->configuration_error : e->error;
   if (diagnostic[0]) {
