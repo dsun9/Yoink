@@ -30,7 +30,7 @@ static void test_project_defaults(void) {
         PPAsset *font = pp_asset_retain(assets, item->text_style.fallback_asset);
         PPFontInfo info;
         CHECK(font && pp_font_inspect(pp_asset_source(font), item->text_style.fallback_face, &info, &error));
-        CHECK(!strcmp(info.family, "Noto Color Emoji"));
+        CHECK(!strcmp(info.family, item->text_style.default_emoji_fallback ? "Noto Color Emoji" : "Segoe UI Emoji"));
         pp_asset_release(font);
     }
     PPAnchor anchor = PP_ANCHOR_TOP_LEFT;

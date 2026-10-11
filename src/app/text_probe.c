@@ -3,19 +3,6 @@
 #include <SDL3/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include "../media/resources.h"
-
-static bool import_file(PPAssets *assets, const char *path, PPAssetId *id, PPError *error) {
-    size_t size = 0;
-    void *data = pp_resource_load(path, &size);
-    if (!data) {
-        snprintf(error->message, sizeof(error->message), "%s", SDL_GetError());
-        return false;
-    }
-    bool ok = pp_asset_import(assets, (PPBytes){data, size}, PP_ASSET_FONT, id, error);
-    SDL_free(data);
-    return ok;
-}
 
 int pp_text_probe(unsigned duration_ms) {
     PPAssets *assets = NULL;
@@ -24,19 +11,10 @@ int pp_text_probe(unsigned duration_ms) {
     size_t display_count = 0;
     PPFrame frame = {0};
     PPError error = {0};
-    PPBlob aptos = {0};
     PPTextStyle style = {0};
-    style.requested_family = "Aptos";
-    style.font_size_dip = 96;
-    style.color[3] = 255;
     int result = 1;
     if (!pp_assets_create(&assets, &error) ||
-        !import_file(assets, "fonts/NotoColorEmoji.ttf", &style.fallback_asset, &error)) goto done;
-    if (pp_platform_find_font("Aptos", &aptos, NULL)) {
-        if (!pp_asset_import(assets, (PPBytes){aptos.data, aptos.size}, PP_ASSET_FONT,
-                &style.primary_asset, &error)) goto done;
-        pp_blob_destroy(&aptos);
-    }
+        !pp_text_default_style(assets, &style, &error)) goto done;
     if (!pp_platform_displays(&displays, &display_count, &error) || !display_count) goto done;
     double scale = displays[0].drawable_pixels_per_dip;
     PPTextDiagnostics diagnostics;
@@ -51,9 +29,14 @@ int pp_text_probe(unsigned duration_ms) {
         goto done;
     }
     SDL_DestroySurface(image);
-    printf("Default hand: Aptos requested, Noto fallback runs=%zu missing glyphs=%zu missing families=%zu; font=96 DIP scale=%.2f raster=%dx%d zero rotation full opacity\n",
+    PPAsset *emoji = pp_asset_retain(assets, style.fallback_asset);
+    PPFontInfo info = {0};
+    if (emoji) pp_font_inspect(pp_asset_source(emoji), style.fallback_face, &info, NULL);
+    printf("Default hand: text=%s emoji=%s version=%s bundled fallback=%d fallback runs=%zu missing glyphs=%zu missing families=%zu; font=96 DIP scale=%.2f raster=%dx%d zero rotation full opacity\n",
+        style.requested_family, info.family, info.version, diagnostics.default_emoji_fallback,
         diagnostics.fallback_runs, diagnostics.missing_glyphs, diagnostics.missing_requested_families,
         scale, frame.width, frame.height);
+    pp_asset_release(emoji);
     Uint64 start = SDL_GetTicks();
     while (SDL_GetTicks() - start < (duration_ms ? duration_ms : 1500)) {
         PPPlatformEvent event;
@@ -65,7 +48,6 @@ int pp_text_probe(unsigned duration_ms) {
     result = 0;
 done:
     if (result) fprintf(stderr, "Default hand probe failed: %s\n", error.message);
-    pp_blob_destroy(&aptos);
     pp_displays_free(displays);
     pp_surface_destroy(surface);
     pp_frame_destroy(&frame);

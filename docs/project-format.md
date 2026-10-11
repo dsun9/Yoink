@@ -70,6 +70,7 @@ Each text item contains exactly:
   "opacity": 1,
   "text": "A",
   "requested_family": "Pointy Fixture",
+  "default_emoji_fallback": false,
   "font_size_dip": 96,
   "color": [0, 0, 0, 255],
   "primary": {"resource": "<64-character font digest>", "face": 0},
@@ -79,11 +80,40 @@ Each text item contains exactly:
 
 `primary` and `fallback` are either null or font-resource/collection-face pairs. The selected face is a nonnegative integer smaller than the actual collection face count. FreeType's encoded named-instance selectors are not collection indices and are rejected. Color channels are bytes. Text has one canonical font size; images have one canonical longest-side size. There are no competing size fields. Rotation, opacity, and size retain the validated project's values.
 
+`default_emoji_fallback` records that default-font acquisition selected bundled
+Noto because installed Segoe UI Emoji was unavailable. It preserves the item
+preview diagnostic after reopening, even on a host that has Segoe installed.
+The diagnostic checks the actual retained Noto family. Older development
+manifests without this boolean are read with false; new saves always write it.
+This field is separate from an unavailable requested ordinary text family.
+
 ## Fonts and portability
 
 Save and load inspect actual font bytes, including every face in a collection, through FreeType. Every embedded face must permit installable or editable full-font embedding. Restricted, preview-only, and bitmap-only embedding permissions are rejected. A no-subsetting flag is respected by preserving the complete original source file. Font name/license tables, complete collection bytes, and selected face indices are preserved; manifest metadata cannot override embedding permissions.
 
-The actual rendered text must have no missing glyphs, and requested families must resolve. Requested-family metadata may remain `Aptos` when the primary font is absent, the embedded fallback is permitted Noto Color Emoji, and every shaped glyph resolves. This includes the default hand `👉`, multiple emoji, multiline emoji and covered clusters. Coverage also checks shaped glyph indices because an empty missing-glyph bitmap may not appear in renderer draw diagnostics. Other missing families or uncovered glyphs prevent portable save/load. The application bundle contains Noto Color Emoji and its OFL notice; it does not bundle the development machine's Aptos. A user-selected, permitted installed font can be embedded in that user's project. Default-project construction attaches the bundled Noto OFL, and explicit imports can attach their notices using `pp_project_set_notice`.
+The actual rendered text must have no missing glyphs, and requested families
+must resolve. Requested-family metadata may remain `Aptos` when the primary
+font is absent, the embedded fallback is permitted Segoe UI Emoji or Noto Color
+Emoji, and every shaped glyph resolves. This includes the default hand `👉`,
+multiple emoji, multiline emoji and covered clusters. Coverage also checks
+shaped glyph indices because an empty missing-glyph bitmap may not appear in
+renderer draw diagnostics. Other missing families or uncovered glyphs prevent
+portable save/load. No new per-sequence font fallback is applied.
+
+Default projects privately own the complete installed Segoe UI Emoji bytes and
+their selected collection face. They reopen from embedded bytes without the
+original font path or any system font installation. The renderer inspects
+scalable outlines, fixed bitmap strikes and supported color layers separately
+from OS/2 embedding restrictions. A bitmap artwork font can permit editable
+embedding; the OS/2 bitmap-only embedding flag still prevents portable saving.
+
+Default-project notices identify the actual selected local family, version,
+copyright and available license URL. Complete font bytes preserve their original
+license metadata. Bundled Noto receives its complete OFL notice. Explicit imports
+can attach project notices with `pp_project_set_notice`. The application bundle
+contains Noto Color Emoji and its OFL, and never redistributes installed Segoe UI
+Emoji or Aptos. Permitted document embedding is separate from application font
+redistribution, as described in [Microsoft's font FAQ](https://learn.microsoft.com/en-us/typography/fonts/font-faq).
 
 ## Transactions, native I/O, and ownership
 
