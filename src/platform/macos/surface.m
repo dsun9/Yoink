@@ -2,6 +2,15 @@
 #include <math.h>
 #include <stdlib.h>
 PPSurface *pp_mac_surfaces;
+bool pp_surface_create_gl(PPSurface **out,PPError *error) {
+    if(out) *out=NULL;
+    return pp_mac_error(error,PP_ERROR_PLATFORM,"Direct OpenGL native behavior is unverified on macOS; use the compatibility surface");
+}
+uint32_t pp_surface_window_id(const PPSurface *surface) {(void)surface;return 0;}
+bool pp_surface_place_gl(PPSurface *surface,PPRect bounds,bool interactive,PPError *error) {
+    (void)bounds;(void)interactive;pp_surface_hide(surface);
+    return pp_mac_error(error,PP_ERROR_PLATFORM,"Direct OpenGL native behavior is unverified on macOS");
+}
 @implementation PPFrameView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isOpaque { return NO; }

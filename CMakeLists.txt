@@ -46,6 +46,7 @@ target_link_libraries(pointy_model PUBLIC pointy_assets pointy_render PRIVATE SD
 if(WIN32)
   configure_file(cmake/windows.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/windows.manifest @ONLY)
   add_library(pointy_platform STATIC src/platform/windows/surface.c src/platform/windows/events.c src/platform/windows/input.c src/platform/windows/displays.c)
+  target_sources(pointy_platform PRIVATE src/platform/windows/direct_gl.c)
   target_sources(pointy_platform PRIVATE src/platform/windows/fonts.c)
   target_sources(pointy_platform PRIVATE src/platform/windows/files.c)
   target_sources(pointy_platform PRIVATE src/platform/windows/dialogs.c)

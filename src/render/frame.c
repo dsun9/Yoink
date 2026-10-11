@@ -8,6 +8,11 @@
 struct PPRenderer {
     SDL_Window *window; SDL_GLContext context; PPGL gl;
     GLuint program, vao, fbo, textures[4];
+    uint32_t window_id;
+    bool owns_window;
+    int source_width, source_height;
+    uint64_t content_id, revision;
+    PPRendererMetrics metrics;
 };
 static bool error_set(PPError *error, int code, const char *message) {
     if (error) { error->code = code; snprintf(error->message, sizeof(error->message), "%s", message); }
@@ -25,7 +30,7 @@ static const char *fragment_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform sampler2D alpha;"
     "uniform vec2 destination_size; uniform vec2 source_size;"
-    "uniform vec2 rotation; uniform float scale; uniform float opacity;"
+    "uniform vec2 rotation; uniform vec2 scale; uniform float opacity;"
     "out vec4 color; out vec4 coverage;"
     "void main() {"
     "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
@@ -33,16 +38,20 @@ static const char *fragment_shader =
     "vec2 uv=s/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
-bool pp_renderer_create(PPRenderer **out, PPError *error) {
+static bool create(PPRenderer **out, uint32_t window_id, PPError *error) {
     if (!out) return error_set(error, PP_ERROR_ARGUMENT, "Missing renderer output");
     *out = NULL;
-    if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) return error_set(error, PP_ERROR_RENDER, SDL_GetError());
+    if (!window_id && !SDL_InitSubSystem(SDL_INIT_VIDEO)) return error_set(error, PP_ERROR_RENDER, SDL_GetError());
     PPRenderer *renderer = calloc(1, sizeof(*renderer));
-    if (!renderer) { SDL_QuitSubSystem(SDL_INIT_VIDEO); return error_set(error, PP_ERROR_MEMORY, "Cannot allocate renderer"); }
+    if (!renderer) { if(!window_id) SDL_QuitSubSystem(SDL_INIT_VIDEO); return error_set(error, PP_ERROR_MEMORY, "Cannot allocate renderer"); }
+    renderer->owns_window=!window_id;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
-    renderer->window = SDL_CreateWindow("PointyPointer renderer", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+    if(!window_id) {
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
+        renderer->window = SDL_CreateWindow("PointyPointer renderer", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+    } else renderer->window=SDL_GetWindowFromID(window_id);
+    if(renderer->window) renderer->window_id=SDL_GetWindowID(renderer->window);
     if (renderer->window) renderer->context = SDL_GL_CreateContext(renderer->window);
     if (!renderer->context || !SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
         error_set(error, PP_ERROR_RENDER, SDL_GetError()); pp_renderer_destroy(renderer); return false;
@@ -56,15 +65,88 @@ bool pp_renderer_create(PPRenderer **out, PPError *error) {
     if (glGetError() != GL_NO_ERROR) { error_set(error,PP_ERROR_RENDER,"Cannot allocate GL frame resources"); pp_renderer_destroy(renderer); return false; }
     *out = renderer; return true;
 }
+bool pp_renderer_create(PPRenderer **out, PPError *error) {return create(out,0,error);}
+bool pp_renderer_create_for_window(PPRenderer **out, uint32_t id, PPError *error) {
+    if(out) *out=NULL;
+    if(!id || !SDL_GetWindowFromID(id)) return error_set(error,PP_ERROR_ARGUMENT,"Missing direct OpenGL window");
+    return create(out,id,error);
+}
+PPRendererMetrics pp_renderer_metrics(const PPRenderer *renderer) {
+    return renderer?renderer->metrics:(PPRendererMetrics){0};
+}
+static bool current(PPRenderer *renderer,PPError *error) {
+    SDL_Window *window=renderer?SDL_GetWindowFromID(renderer->window_id):NULL;
+    if(!window || !renderer->context || !SDL_GL_MakeCurrent(window,renderer->context))
+        return error_set(error,PP_ERROR_RENDER,"Renderer window or OpenGL context is unavailable");
+    return true;
+}
+bool pp_renderer_complete(PPRenderer *renderer,PPError *error) {
+    if(!current(renderer,error)) return false;
+    glFinish();
+    return glGetError()==GL_NO_ERROR || error_set(error,PP_ERROR_RENDER,"OpenGL completion failed");
+}
 static void texture(GLuint texture, GLint format, GLenum data_format, int w, int h, const void *data) {
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, data_format, GL_UNSIGNED_BYTE, data);
 }
+bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
+    uint64_t content_id,uint64_t revision,PPError *error) {
+    if(!renderer || renderer->owns_window || !source || !source->pixels || !content_id ||
+        source->width<=0 || source->height<=0 || source->width>16384 || source->height>16384 ||
+        source->stride<(size_t)source->width*4 || source->stride%4 || source->stride/4>2147483647)
+        return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct source");
+    if(renderer->content_id==content_id && renderer->revision==revision &&
+        renderer->source_width==source->width && renderer->source_height==source->height) return true;
+    if(!current(renderer,error)) return false;
+    PPGL *gl=&renderer->gl; gl->ActiveTexture(GL_TEXTURE0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1); glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(source->stride/4));
+    if(renderer->source_width==source->width && renderer->source_height==source->height) {
+        glBindTexture(GL_TEXTURE_2D,renderer->textures[0]);
+        glTexSubImage2D(GL_TEXTURE_2D,0,0,0,source->width,source->height,GL_RGBA,GL_UNSIGNED_BYTE,source->pixels);
+    } else texture(renderer->textures[0],GL_RGBA8,GL_RGBA,source->width,source->height,source->pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    if(glGetError()!=GL_NO_ERROR) return error_set(error,PP_ERROR_RENDER,"Cannot upload direct source texture");
+    renderer->source_width=source->width;renderer->source_height=source->height;
+    renderer->content_id=content_id;renderer->revision=revision;renderer->metrics.source_uploads++;
+    return true;
+}
+bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
+    double angle_deg,double opacity,double density,PPError *error) {
+    if(!renderer || renderer->owns_window || !renderer->content_id || !isfinite(layout.x) || !isfinite(layout.y) ||
+        layout.x<=0 || layout.y<=0 || !isfinite(longest) || longest<=0 || !isfinite(angle_deg) ||
+        !isfinite(opacity) || opacity<0 || opacity>1 || !isfinite(density) || density<=0)
+        return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct transform");
+    double scale=longest*density/fmax(layout.x,layout.y);
+    double angle=fmod(angle_deg,360)*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
+    double extent_w=ceil(scale*(fabs(c)*layout.x+fabs(s)*layout.y)-1e-9);
+    double extent_h=ceil(scale*(fabs(s)*layout.x+fabs(c)*layout.y)-1e-9);
+    if(!isfinite(extent_w) || !isfinite(extent_h) || extent_w<1 || extent_h<1 || extent_w>16384 || extent_h>16384)
+        return error_set(error,PP_ERROR_ARGUMENT,"Direct transform exceeds drawable limits");
+    if(!current(renderer,error)) return false;
+    int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w!=(int)extent_w || h!=(int)extent_h)
+        return error_set(error,PP_ERROR_ARGUMENT,"Direct window drawable does not match canonical transform bounds");
+    PPGL *gl=&renderer->gl;gl->BindFramebuffer(GL_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);
+    gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->textures[0]);
+    gl->UseProgram(renderer->program);
+#define LOCATION(name) gl->GetUniformLocation(renderer->program,name)
+    gl->Uniform1i(LOCATION("image"),0);gl->Uniform1i(LOCATION("alpha"),1);
+    gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
+    gl->Uniform2f(LOCATION("source_size"),(float)renderer->source_width,(float)renderer->source_height);
+    gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
+    gl->Uniform2f(LOCATION("scale"),(float)(scale*layout.x/renderer->source_width),(float)(scale*layout.y/renderer->source_height));
+    gl->Uniform1f(LOCATION("opacity"),(float)opacity);
+#undef LOCATION
+    glDisable(GL_BLEND);glDisable(GL_DITHER);glViewport(0,0,w,h);
+    gl->BindVertexArray(renderer->vao);glDrawArrays(GL_TRIANGLES,0,3);
+    if(glGetError()!=GL_NO_ERROR) return error_set(error,PP_ERROR_RENDER,"Direct OpenGL rendering failed");
+    if(!SDL_GL_SwapWindow(renderer->window)) return error_set(error,PP_ERROR_RENDER,SDL_GetError());
+    renderer->metrics.transform_draws++;return true;
+}
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest_dip,
     double angle_deg, double opacity, double pixels_per_dip, PPFrame *out, PPError *error) {
-    if (!renderer || !source || !source->pixels || !source->content_alpha || !out || out->pixels || out->content_alpha ||
+    if (!renderer || !renderer->owns_window || !source || !source->pixels || !source->content_alpha || !out || out->pixels || out->content_alpha ||
         source->width <= 0 || source->height <= 0 || source->width > 16384 || source->height > 16384 ||
         source->stride < (size_t)source->width*4 || source->stride % 4 || source->stride/4 > 2147483647 ||
         !isfinite(longest_dip) || longest_dip <= 0 || !isfinite(angle_deg) || !isfinite(opacity) || opacity < 0 || opacity > 1 ||
@@ -83,7 +165,7 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     if (!frame.pixels || !frame.content_alpha || !readback) {
         pp_frame_destroy(&frame); free(readback); return error_set(error, PP_ERROR_MEMORY, "Cannot allocate transformed pixels");
     }
-    if (!SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
+    if (!current(renderer,error)) {
         pp_frame_destroy(&frame); free(readback); return error_set(error, PP_ERROR_RENDER, SDL_GetError());
     }
     PPGL *gl = &renderer->gl;
@@ -108,7 +190,7 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
     gl->Uniform2f(LOCATION("source_size"),(float)source->width,(float)source->height);
     gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
-    gl->Uniform1f(LOCATION("scale"),(float)scale); gl->Uniform1f(LOCATION("opacity"),(float)opacity);
+    gl->Uniform2f(LOCATION("scale"),(float)scale,(float)scale); gl->Uniform1f(LOCATION("opacity"),(float)opacity);
 #undef LOCATION
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
@@ -118,11 +200,13 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     for (int y = 0; y < frame.height; y++) memcpy(frame.content_alpha+(size_t)y*frame.width,readback+(size_t)(frame.height-1-y)*frame.width,frame.width);
     free(readback);
     if (glGetError() != GL_NO_ERROR) { pp_frame_destroy(&frame); return error_set(error,PP_ERROR_RENDER,"OpenGL frame rendering failed"); }
+    renderer->metrics.source_uploads++;renderer->metrics.transform_draws++;renderer->metrics.readbacks+=2;
     *out = frame; return true;
 }
 void pp_renderer_destroy(PPRenderer *renderer) {
     if (!renderer) return;
-    if (renderer->context && SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
+    SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
+    if (window && renderer->context && SDL_GL_MakeCurrent(window, renderer->context)) {
         PPGL *gl = &renderer->gl;
         if (renderer->program) gl->DeleteProgram(renderer->program);
         if (renderer->vao) gl->DeleteVertexArrays(1,&renderer->vao);
@@ -130,6 +214,7 @@ void pp_renderer_destroy(PPRenderer *renderer) {
         glDeleteTextures(4,renderer->textures);
     }
     if (renderer->context) SDL_GL_DestroyContext(renderer->context);
-    if (renderer->window) SDL_DestroyWindow(renderer->window);
-    free(renderer); SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    if (window && renderer->owns_window) SDL_DestroyWindow(window);
+    bool owns_window=renderer->owns_window;
+    free(renderer); if(owns_window) SDL_QuitSubSystem(SDL_INIT_VIDEO);
 }
