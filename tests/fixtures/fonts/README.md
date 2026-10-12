@@ -35,3 +35,11 @@ embedding metadata, and detects color layers on unencoded glyphs that shaping
 could select. Font-level capabilities do not classify every drawn glyph. It is
 test data and is never copied into application
 resources or distribution packages.
+
+`PointyHybrid.ttf` contains an original outline A and a 16-pixel alpha bitmap
+box mapped to B in the same scalable face. The bitmap has a transparent center
+and half-alpha border. It uses EBDT/EBLC so pinned FreeType preserves the
+outlines; FreeType deliberately ignores glyf outlines in CBDT/CBLC fonts.
+`generate_hybrid.py` reproduces it with fontTools 4.66.1. This tests per-drawn-glyph
+classification rather than font-wide capabilities or embedding flags. It shares
+the original copyright and OFL terms and is never packaged with the application.

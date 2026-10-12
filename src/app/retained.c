@@ -111,7 +111,7 @@ native_failure:
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {
 #if defined(_WIN32)
-  bool direct=pp_snapshot_is_png(instance->snapshot) || pp_snapshot_is_gif(instance->snapshot);
+  bool direct=pp_snapshot_is_png(instance->snapshot) || pp_snapshot_is_gif(instance->snapshot) || pp_snapshot_is_bitmap_text(instance->snapshot);
 #else
   bool direct=false;
 #endif
@@ -126,8 +126,11 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
     uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
     PPSourcePresentation source={NULL,identity,1,pp_item_snapshot_size(instance->snapshot)};
     bool gif=pp_snapshot_is_gif(instance->snapshot);struct PPGifEntry *candidate=NULL;
-    if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
-    else if(!gif && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
+    bool bitmap=pp_snapshot_is_bitmap_text(instance->snapshot);
+    if(bitmap && identity==s->retained.content_id) source.source_rect=s->retained.source_rect;
+    if(bitmap && identity!=s->retained.content_id && !pp_retained_bitmap_text_source(instance->snapshot,&source,error))ok=false;
+    else if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
+    else if(!gif && !bitmap && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
       if(!gif && source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
       ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);if(!gif)*next=HUGE_VAL;

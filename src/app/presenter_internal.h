@@ -87,6 +87,8 @@ bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed
 void pp_gif_release(PPAnchorPresenter *p,struct PPGifEntry *entry);
 void pp_gif_clear(PPAnchorPresenter *p);
 bool pp_snapshot_is_png(const PPItemSnapshot *snapshot);
+bool pp_snapshot_is_bitmap_text(const PPItemSnapshot *snapshot);
+bool pp_retained_bitmap_text_source(PPItemSnapshot *snapshot,PPSourcePresentation *source,PPError *error);
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
     const PPSceneInstance *instance,const PPDisplay *display,double elapsed,
     double *next,PPError *error);

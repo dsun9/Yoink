@@ -521,6 +521,49 @@ static void test_canonical_source_mapping(void) {
     pp_retained_release(&p,&retained);pp_surface_destroy(surface);
     puts("PASS source origin mapping preserves canonical center/aspect and includes overhang without reupload");
 }
+static void test_bitmap_text_transform_reuses_useful_source(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    FILE *file=fopen(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf","rb");CHECK(file);
+    CHECK(!fseek(file,0,SEEK_END));long length=ftell(file);CHECK(length>0);rewind(file);
+    uint8_t *bytes=malloc((size_t)length);CHECK(bytes);CHECK(fread(bytes,1,(size_t)length,file)==(size_t)length);fclose(file);
+    PPItem item={.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,
+        .text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)length},PP_ASSET_FONT,&item.text_style.fallback_asset,&error));free(bytes);
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    PPSprite *created=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400,300},1536,0,1},1,&error);CHECK(created);uint64_t id=created->id;
+    PPPose pose=pp_scene_get(scene,id)->pose;pose.longest_dip=1536;CHECK(pp_scene_set_pose(scene,id,pose,&error));
+    uint64_t prepared=pp_assets_source_metrics(assets).raster_builds;update(p,displays,400,300,1);
+    PPSurface *sprite=surface_for(id);CHECK(sprite&&sprite->window_id&&sprite->source_width==136);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==prepared+1);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==69632);
+    CHECK(pp_assets_external_raster_bytes(assets)==137437); /* Snapshot, useful RGBA and presenter's five-byte anchor target. */
+    CHECK(fabs(drawn_source_rect.w-119.77981651376147)<1e-9&&fabs(drawn_source_rect.h-112.73394495412845)<1e-9);
+    PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(p);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
+    update(p,displays,400,300,1.1);
+    pose.center.x+=10;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,410,300,1.2);
+    PPRendererMetrics moved=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(moved.source_uploads==warm.source_uploads&&moved.transform_draws==warm.transform_draws&&moved.readbacks==warm.readbacks);
+    PPPlatformEvent wheel={.surface=sprite,.instance_id=id,.kind=PP_EVENT_WHEEL,.modifiers=PP_MOD_ALT,.wheel_delta=1,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    for(int i=1;i<=14;i++) update(p,displays,410,300,2+i*.01);
+    CHECK(pp_scene_get(scene,id)->pose.longest_dip>1536&&sprite->source_width==136);
+    PPRendererMetrics eased=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(eased.source_uploads==warm.source_uploads&&eased.transform_draws>warm.transform_draws&&eased.readbacks==warm.readbacks);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_assets_external_raster_bytes(assets)==137437);
+    event(p,sprite,PP_EVENT_BUTTON_DOWN,430,300,3);CHECK(capture_owner==sprite);
+    event(p,sprite,PP_EVENT_POINTER_MOVE,600,300,3.01);displays[1].desktop_units_per_dip=1.5;displays[1].drawable_pixels_per_dip=1.5;
+    update(p,displays,600,300,3.02);CHECK(fabs(pp_scene_get(scene,id)->pose.center.x-570)<1e-8);
+    event(p,sprite,PP_EVENT_BUTTON_UP,600,300,3.03);CHECK(!capture_owner);
+    pose=pp_scene_get(scene,id)->pose;pose.angle_deg=23.5;pose.opacity=.5;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,4);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads);
+    PPVec2 canonical=pp_item_snapshot_size(pp_scene_get(scene,id)->snapshot);CHECK(canonical.x==120&&canonical.y==113);
+    CHECK(pp_scene_get(scene,id)->pose.angle_deg==23.5&&pp_scene_get(scene,id)->pose.opacity==.5);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
+}
 int main(void) {
 #if defined(_WIN32)
     test_gif_budget_sharing_and_png_transitions();
@@ -531,6 +574,7 @@ int main(void) {
 #endif
     test_canonical_source_mapping();
 #if defined(_WIN32)
+    test_bitmap_text_transform_reuses_useful_source();
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();
     test_png_gpu_limit_and_overlap();

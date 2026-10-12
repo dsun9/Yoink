@@ -12,8 +12,9 @@ struct PPItemSnapshot {
     PPAsset *image, *primary, *fallback;
     PPVec2 size;
     PPTextResult text_result;
+    PPTextResult bitmap_source;
     double text_scale;
-    size_t raster_bytes;
+    size_t raster_bytes, bitmap_bytes;
 };
 
 static bool item_error(PPError *error, int code, const char *message) {
@@ -129,7 +130,9 @@ PPItemSnapshot *pp_item_snapshot_retain(PPItemSnapshot *snapshot) {
 void pp_item_snapshot_release(PPItemSnapshot *snapshot) {
     if (!snapshot || --snapshot->references) return;
     pp_frame_destroy(&snapshot->text_result.frame);
+    pp_frame_destroy(&snapshot->bitmap_source.frame);
     pp_assets_release_raster(snapshot->assets, snapshot->raster_bytes);
+    pp_assets_release_raster(snapshot->assets, snapshot->bitmap_bytes);
     pp_asset_release(snapshot->image);
     pp_asset_release(snapshot->primary);
     pp_asset_release(snapshot->fallback);
@@ -152,6 +155,32 @@ uint64_t pp_item_snapshot_revision(const PPItemSnapshot *snapshot) {
 }
 const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot) {
     return snapshot && snapshot->item.kind==PP_ITEM_TEXT?&snapshot->text_result:NULL;
+}
+bool pp_item_snapshot_bitmap_source(PPItemSnapshot *snapshot,const PPTextResult **out,PPError *error) {
+    if(out) *out=NULL;
+    if(!snapshot || !out || snapshot->item.kind!=PP_ITEM_TEXT || !snapshot->text_result.artwork.bitmap_only)
+        return item_error(error,PP_ERROR_ARGUMENT,"Useful bitmap source requires completely bitmap text artwork");
+    if(!snapshot->bitmap_source.frame.pixels) {
+        const size_t total_limit=512u*1024u*1024u,resource_limit=256u*1024u*1024u;
+        size_t retained=pp_assets_raster_bytes(snapshot->assets);
+        if(retained>=total_limit)
+            return item_error(error,PP_ERROR_RESOURCE_LIMIT,"Active rasters exceed 512 MiB including bitmap candidate");
+        size_t available=total_limit-retained;
+        if(available>resource_limit) available=resource_limit;
+        PPTextResult candidate={0};
+        /* Preflight includes temporary source coverage and keeps every old
+         * retained frame charged. The text pipeline validates visible alpha
+         * before this presentation-only source drops its coverage plane. */
+        if(!pp_text_render_result_bounded(snapshot->assets,snapshot->item.text,&snapshot->item.text_style,
+            snapshot->text_result.artwork.useful_pixels_per_dip,available,&candidate,NULL,error)) return false;
+        free(candidate.frame.content_alpha);candidate.frame.content_alpha=NULL;
+        size_t bytes=candidate.frame.stride*(size_t)candidate.frame.height;
+        if(!pp_assets_reserve_raster(snapshot->assets,bytes,error)) {
+            pp_frame_destroy(&candidate.frame);return false;
+        }
+        snapshot->bitmap_source=candidate;snapshot->bitmap_bytes=bytes;
+    }
+    *out=&snapshot->bitmap_source;return true;
 }
 
 bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double scale,
