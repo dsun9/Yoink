@@ -85,6 +85,13 @@ PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id) {
 }
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                             double now, PPError *error) {
+  const PPItem *item=pp_project_target(p->project,anchor);
+  PPItemSnapshot *snapshot=item?pp_project_snapshot(p->project,item->id):NULL;
+  PPSprite *sprite=pp_sprites_create_snapshot(p,snapshot,anchor,pose,now,error);
+  pp_item_snapshot_release(snapshot);return sprite;
+}
+PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapshot,
+    PPAnchor anchor,PPPose pose,double now,PPError *error) {
   PPSprite *items =
       realloc(p->instances, (p->instance_count + 1) * sizeof(*items));
   if (!items) {
@@ -97,7 +104,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
   memset(s, 0, sizeof(*s));
   s->pose = pose;
   s->dirty = true;
-  if (!pp_scene_spawn(p->scene, p->project, anchor, pose.center, now, &s->id,
+  if (!pp_scene_spawn_snapshot(p->scene, snapshot, anchor, pose.center, now, &s->id,
                       error))
     return NULL;
   bool direct=false;

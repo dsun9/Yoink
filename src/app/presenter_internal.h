@@ -34,7 +34,7 @@ typedef struct AnchorSurface {
   bool shown, failed;
   PPRetainedPresentation retained, target_retained;
   PPContentConsumer *content;
-  PPItemSnapshot *snapshot;
+  PPItemSnapshot *snapshot,*pull_snapshot;
   PPSourcePresentation source;
 } AnchorSurface;
 typedef struct PPSprite {
@@ -128,6 +128,8 @@ void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *retained);
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                             double now, PPError *error);
+PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapshot,
+    PPAnchor anchor,PPPose pose,double now,PPError *error);
 bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
                 PPPose pose, const PPDisplay *display, size_t *retained, PPError *error);
 bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,

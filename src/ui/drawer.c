@@ -99,9 +99,9 @@ bool pp_drawer_select(PPDrawer *d, uint64_t item_id, double now,
       pp_project_anchor(pp_app_project(d->app), d->anchor);
   for (size_t i = 0; i < list->count; i++)
     if (list->item_ids[i] == item_id) {
-      bool ok = pp_scene_replace(
-          pp_app_scene(d->app), d->instance_id,
-          pp_project_item(pp_app_project(d->app), item_id), now, error);
+      PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(d->app),item_id);
+      bool ok=pp_scene_replace_snapshot(pp_app_scene(d->app),d->instance_id,snapshot,now,error);
+      pp_item_snapshot_release(snapshot);
       if (ok)
         d->dismissed = true;
       return ok;

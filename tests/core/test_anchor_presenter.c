@@ -1145,11 +1145,17 @@ static void test_scalable_anchor_pull_reuses_prepared_content(void) {
     /* This is transparent padding inside the native preview rectangle, beyond
      * the16x16activation region. Its logical offset remains the grab. */
     event(p,preview,PP_EVENT_BUTTON_DOWN,8,24,1.01);
+    PPItemSnapshot *pressed=pp_item_snapshot_retain(p->anchors[0].snapshot);
+    const char *replacement_svg="<svg width='7' height='13'><rect width='7' height='13' fill='red'/></svg>";
+    PPItem replacement=*pp_project_target(project,PP_ANCHOR_TOP_LEFT);
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)replacement_svg,strlen(replacement_svg)},PP_ASSET_SVG,&replacement.image_asset,&error));
+    CHECK(pp_project_edit_item(project,replacement.id,&replacement,&error));
     event(p,preview,PP_EVENT_POINTER_MOVE,400,300,1.02);
     event(p,preview,PP_EVENT_BUTTON_UP,400,300,1.03);
-    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){400,300},1.04,&error));
+    CHECK(pp_sprites_update(p,1.04,&error));
     CHECK(pp_scene_count(p->scene)==1);const PPSceneInstance *sprite=pp_scene_at(p->scene,0);
     CHECK(sprite->pose.center.x==440&&sprite->pose.center.y==324&&sprite->pose.longest_dip==96);
+    CHECK(sprite->snapshot==pressed);pp_item_snapshot_release(pressed);
     CHECK(surface_for(sprite->id)->shown&&surface_for(sprite->id)->bounds.w==96&&surface_for(sprite->id)->bounds.h==54);
     CHECK(pp_anchor_presenter_metrics(p).worker_requests==prepared.worker_requests&&pp_anchor_presenter_metrics(p).worker_source_builds==1);
     CHECK(pp_anchor_presenter_renderer_metrics(p).readbacks==0);

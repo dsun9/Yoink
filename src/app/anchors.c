@@ -13,6 +13,7 @@ static void finish_anchor_pull(PPAnchorPresenter *p, AnchorSurface *anchor,
   if (reveal)
     reveal->held = false;
   anchor->pulled_id = 0;
+  pp_item_snapshot_release(anchor->pull_snapshot);anchor->pull_snapshot=NULL;
 }
 
 static bool anchor_source_available(const PPAnchorPresenter *p,
@@ -93,6 +94,7 @@ bool pp_anchor_presenter_create_shared(PPAnchorPresenter **out,
   return true;
 }
 static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
+  pp_item_snapshot_release(a->pull_snapshot);a->pull_snapshot=NULL;
   pp_content_consumer_destroy(a->content);a->content=NULL;
   pp_item_snapshot_release(a->snapshot);a->snapshot=NULL;a->source=(PPSourcePresentation){0};
   pp_retained_release(p,&a->retained);
@@ -449,8 +451,8 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
       a->interaction = (PPInteraction){0};
       return true;
     }
-    const PPItem *item = pp_project_target(p->project, a->anchor);
-    a->interaction.displayed_pose =
+    const PPItem *item = pp_item_snapshot_item(a->pull_snapshot?a->pull_snapshot:a->snapshot);
+    if(!a->pull_snapshot)a->interaction.displayed_pose =
         (PPPose){{bounds.x + bounds.w * .5, bounds.y + bounds.h * .5},
                  p->runtime.preview_dip[a->anchor],
                  item->angle_deg,
@@ -475,6 +477,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
                 a->display.desktop_units_per_dip};
       reveal->held = true;
       a->pulled_id = 0;
+      pp_item_snapshot_release(a->pull_snapshot);a->pull_snapshot=pp_item_snapshot_retain(a->snapshot);
       /* A completed queued gesture can have already released its native
        * accepted press. Its remaining queued trajectory still runs. */
       pp_platform_capture(event->surface, NULL);
@@ -502,7 +505,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
           pp_platform_release_capture();
           return true;
         }
-        s = pp_sprites_create(p, a->anchor, pose, event->timestamp, error);
+        s = pp_sprites_create_snapshot(p,a->pull_snapshot,a->anchor,pose,event->timestamp,error);
         if (!s) {
           if (error)
             p->notice = *error;
