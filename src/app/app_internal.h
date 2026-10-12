@@ -11,6 +11,7 @@ struct PPApp {
   char diagnostic[512];
   PPTextStyle default_style;
   char *default_notice;
+  PPContentSources *sources;
 };
 char *pp_app_copy(const char *text);
 bool pp_app_error(PPError *error, int code, const char *message);

@@ -25,8 +25,8 @@ void pp_lifecycle_stop(PPLifecycle *life) {
   if(!life) return;
   pp_tray_destroy(life->tray);
   pp_platform_release_capture();
-  pp_runtime_destroy(life->runtime);
   pp_settings_destroy(life->settings); /* Detaches copied dialog results. */
+  pp_runtime_destroy(life->runtime);
   pp_app_destroy(life->app);
   *life=(PPLifecycle){0};
 }

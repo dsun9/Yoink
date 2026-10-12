@@ -1,4 +1,5 @@
 #include "app_internal.h"
+#include "pointy/content.h"
 #include "pointy/platform.h"
 #include "pointy/project_store.h"
 #include <SDL3/SDL.h>
@@ -15,6 +16,11 @@ char *pp_app_copy(const char *text) {
   if (copy)
     memcpy(copy, text, size);
   return copy;
+}
+PPContentSources *pp_app_content_sources(PPApp *app,PPError *error) {
+  if(!app)return NULL;
+  if(!app->sources&&!pp_content_sources_create(&app->sources,app->assets,error))return NULL;
+  return app->sources;
 }
 bool pp_app_error(PPError *error, int code, const char *message) {
   if (error) {
@@ -324,6 +330,7 @@ bool pp_app_create(PPApp **out, const PPAppOptions *options, PPError *error) {
 void pp_app_destroy(PPApp *app) {
   if (!app)
     return;
+  pp_content_sources_destroy(app->sources);
   pp_scene_destroy(app->scene);
   pp_project_destroy(app->project);
   pp_assets_destroy(app->assets);

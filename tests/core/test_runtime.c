@@ -427,9 +427,10 @@ static void test_failure_isolation(void) {
   pp_runtime_tick(r, 23);
   CHECK(!memcmp(&pp_scene_get(pp_app_scene(app), a)->pose, &before,
                 sizeof(before)));
-  /* Distinct native failure after candidate allocation: remove only the
-   * failed sprite and release both candidate and previous DIB charges. */
+  /* Native failure removes only this sprite's GPU/input ownership. The other
+   * sprite still retains their shared, once-charged CPU source. */
   size_t charged = pp_assets_external_raster_bytes(pp_app_assets(app));
+  size_t gpu_charged=pp_runtime_gpu_resources(r).retained_bytes;
   fail_surface = sa;
   pp_runtime_event(r, &(PPPlatformEvent){.surface = sa,
                                          .instance_id = a,
@@ -441,7 +442,8 @@ static void test_failure_isolation(void) {
   CHECK(!r->failed && !sprite(a) && sprite(b) == sb);
   CHECK(!pp_scene_get(pp_app_scene(app), a) &&
         pp_scene_get(pp_app_scene(app), b));
-  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app)) < charged);
+  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==charged);
+  CHECK(pp_runtime_gpu_resources(r).retained_bytes<gpu_charged);
   CHECK(strstr(pp_app_diagnostic(app), "presentation failure"));
   pointer = (PPVec2){8, 8};
   pp_runtime_tick(r, 25);
@@ -575,7 +577,27 @@ static void test_svg_runtime_generation_cleanup(void) {
   pp_runtime_destroy(r);CHECK(!surfaces&&!capture_owner);pp_app_destroy(app);
   puts("PASS SVG runtime translation reuse, immediate bounded targets and project-generation cancellation keep one service and release owner CPU/GPU/input");
 }
+static void test_app_source_owner_survives_runtime_and_project_epochs(void) {
+  PPApp *app=NULL;PPRuntime *runtime=NULL;PPError error={0};
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  PPContentSources *sources=pp_app_content_sources(app,&error);CHECK(sources);
+  PPContentConsumer *preview=NULL;CHECK(pp_content_consumer_create(sources,&preview,&error));
+  const PPItem *item=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT);
+  PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(app),item->id);uint64_t revision=pp_item_snapshot_revision(snapshot);
+  PPContentFrame source={0};double next;
+  CHECK(pp_content_frame(preview,snapshot,48,1,0,&source,&next,&error));CHECK(source.content_id==revision&&source.frame);
+  CHECK(pp_runtime_create(&runtime,app,&error));pointer=(PPVec2){500,500};pp_runtime_tick(runtime,1);CHECK(!runtime->failed);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));pp_runtime_tick(runtime,2);CHECK(!runtime->failed);
+  CHECK(pp_app_content_sources(app,&error)==sources);pp_runtime_destroy(runtime);runtime=NULL;
+  CHECK(pp_app_content_sources(app,&error)==sources);
+  for(int i=0;i<2000&&pp_raster_worker_status(pp_content_sources_worker(sources)).pending_jobs;i++){SDL_Delay(1);pp_content_sources_poll(sources);}
+  pp_content_sources_poll(sources);CHECK(pp_content_frame(preview,snapshot,48,1,0,&source,&next,&error));
+  CHECK(source.content_id==revision&&source.frame&&source.layout.x==pp_item_snapshot_size(snapshot).x);
+  pp_content_accept(preview);pp_content_consumer_destroy(preview);pp_item_snapshot_release(snapshot);pp_app_destroy(app);CHECK(!surfaces);
+  puts("PASS standalone preview source owner survives runtime closure and project replacement until app shutdown");
+}
 int main(int argc,char **argv) {
+  test_app_source_owner_survives_runtime_and_project_epochs();
 #if defined(_WIN32)
   if(argc==2&&!strcmp(argv[1],"--svg")){test_svg_runtime_generation_cleanup();return 0;}
   test_svg_runtime_generation_cleanup();
