@@ -78,7 +78,49 @@ static void test_restore_failure_preserves_usable_output(void) {
   pp_ui_preview_release(&preview);CHECK(!pp_content_gpu_resources(pp_app_content_sources(app,&error)).retained_bytes);
   cleanup();puts("PASS failed final UI context restore preserves the usable output and exact old GPU charge");
 }
+static PPItemSnapshot *png_snapshot(const char *path,uint64_t id,double longest) {
+  PPError error={0};size_t bytes=0;void *png=SDL_LoadFile(path,&bytes);CHECK(png);
+  PPItem item={.id=id,.kind=PP_ITEM_IMAGE,.image_longest_dip=longest,.opacity=1};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){png,bytes},PP_ASSET_PNG,&item.image_asset,&error));SDL_free(png);
+  PPItemSnapshot *result=NULL;CHECK(pp_item_snapshot_create(pp_app_assets(app),&item,&result,&error));return result;
+}
+static void test_budget_rollback_and_selection(void) {
+  PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  PPUIWindowOptions options={.title="Preview admission",.geometry={0,0,160,120},.scale=1,.compact=true};
+  CHECK(pp_ui_backend_create(&ui,&options,&error));double next;
+  snapshot=png_snapshot(PP_MEDIA_FIXTURES "/alpha.png",1,96);
+  CHECK(pp_ui_preview_update(ui,app,&preview,snapshot,96,0,1,1,0,&next,&error));
+  PPContentSources *sources=pp_app_content_sources(app,&error);
+  unsigned usable=preview.texture;CHECK(preview.width==96&&preview.height==32);
+  CHECK(pp_content_gpu_resources(sources).retained_bytes==12300);
+  /* Admission pressure has no external allocation: the ledger is the agreed
+   * resource seam. A same-item replacement must keep its last usable pixels. */
+  size_t pressure=pp_content_gpu_resources(sources).limit_bytes-12300;
+  CHECK(pp_content_gpu_reserve(sources,pressure,&error));
+  PPItemSnapshot *changed=png_snapshot(PP_MEDIA_FIXTURES "/retained-blue.png",1,144);
+  CHECK(!pp_ui_preview_update(ui,app,&preview,changed,144,0,1,1,0,&next,&error));
+  CHECK(error.code==PP_ERROR_RESOURCE_LIMIT&&preview.texture==usable&&glIsTexture(usable));
+  CHECK(preview.width==96&&preview.height==32&&preview.snapshot==snapshot);
+  CHECK(pp_content_gpu_resources(sources).retained_bytes==pressure+12300);
+  uint8_t pixels[96*32*4];glBindTexture(GL_TEXTURE_2D,usable);glGetTexImage(GL_TEXTURE_2D,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+  CHECK(glGetError()==GL_NO_ERROR);size_t red=0;for(size_t i=0;i<96*32;i++)red+=pixels[i*4]>pixels[i*4+2];CHECK(red>0);
+  pp_item_snapshot_release(changed);
+  changed=png_snapshot(PP_MEDIA_FIXTURES "/retained-blue.png",2,144);
+  CHECK(!pp_ui_preview_update(ui,app,&preview,changed,144,0,1,1,0,&next,&error));
+  CHECK(error.code==PP_ERROR_RESOURCE_LIMIT&&!preview.texture&&!preview.width&&!preview.height&&!preview.snapshot);
+  CHECK(!glIsTexture(usable));CHECK(pp_content_gpu_resources(sources).retained_bytes==pressure);
+  pp_content_gpu_release(sources,pressure);
+  CHECK(pp_ui_preview_update(ui,app,&preview,changed,144,0,1,1,0,&next,&error));
+  CHECK(preview.texture&&preview.snapshot==changed);
+  PPRendererMetrics before=pp_renderer_metrics(preview.renderer);
+  CHECK(pp_ui_preview_update(ui,app,&preview,changed,144,0,1,1,0,&next,&error));
+  PPRendererMetrics after=pp_renderer_metrics(preview.renderer);
+  CHECK(before.source_uploads==after.source_uploads&&before.transform_draws==after.transform_draws&&after.readbacks==0);
+  pp_item_snapshot_release(changed);pp_ui_preview_release(&preview);CHECK(!pp_content_gpu_resources(sources).retained_bytes);
+  cleanup();puts("PASS rejected same-item replacement keeps usable pixels; rejected new selection clears stale pixels; retry and unchanged reuse release exact GPU charges");
+}
 int main(void) {
+  test_budget_rollback_and_selection();
   test_restore_failure_preserves_usable_output();
   PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
   PPUIWindowOptions options={.title="Preview quality",.geometry={0,0,96,96},.scale=1.25f,.compact=true};
