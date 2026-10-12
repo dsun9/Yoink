@@ -140,3 +140,37 @@ focused compatibility fixture on Windows twice. Counter probes showed the
 exact native-copy release with unchanged shared source bytes. This corrects
 the backend-specific fixture expectation; no production accounting change
 was needed. Native Cocoa window/input/compositor acceptance remains separate.
+
+## Bitmap rejection recovery for issue 13
+
+[Issue #13](https://github.com/dsun9/Yoink/issues/13) follows the PR #12 review
+at `5e358c4167f71f73529499ce41c556d2c69e6fbb`. Rejection previously cleared a
+shared bitmap seed's borrowed frame descriptor, although its snapshot still
+owned and charged the pixels. A fresh consumer then reused the empty seed.
+Rejection now retains borrowed pixels and suppresses retries only on the
+rejecting consumer. Owned worker results and SVG seeds retain their existing
+release policy.
+
+The deterministic `anchor_presenter` regression uses production content-source
+and snapshot APIs with the bundled Noto pointing hand. A fresh consumer gets
+visible, byte-identical bitmap pixels without cancellation. It stays usable
+after the rejecting consumer is destroyed. Another rejection leaves accepted
+artwork usable, and cancellation/teardown releases the affected references
+without duplicating the snapshot's CPU charge.
+
+The hidden `ui_preview` regression uses the production preview adapter and real
+OpenGL contexts/textures. Controlled GPU ledger pressure rejects a bitmap
+allocation before upload. After releasing that reservation, a fresh preview
+gets visible alpha in its output texture. The original consumer remains
+suppressed; any previously accepted PNG retains its exact output pixels.
+Destroying the rejecting preview leaves the recovered preview usable, and
+teardown returns CPU/GPU accounting to its prior values. This exercises the
+adapter shared by Settings and drawer previews, without desktop input or
+compositor-visible presentation.
+
+On 2026-10-12, both new regressions failed with the original rejection logic.
+The fixed all-target Windows Release build passed. The focused `ui_preview`
+test passed 1/1 in 2.65 seconds, and `ctest --preset windows-release -LE desktop
+--output-on-failure` passed all 36 tests in 47.41 seconds. Logs are retained as
+`build/issue13-*`. Native macOS and visible desktop acceptance were not run for
+this follow-up.

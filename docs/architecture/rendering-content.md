@@ -29,9 +29,12 @@ at the same target.
 results per owner call. Worker keys identify stable content entries, never
 project items or manufactured sprites. Consumer observations do not consume
 results. Equal requests share one preparation and one CPU charge. Cancellation,
-acceptance and rejection belong to each consumer. If every owner rejects a
-candidate, its pixels are released; the rejecting owner suppresses repeated
+acceptance and rejection belong to each consumer. If every owner rejects an
+owned candidate, its pixels are released; the rejecting owner suppresses repeated
 attempts, while a fresh consumer can prepare the same endpoint again.
+Borrowed snapshot-backed pixels, including useful bitmap text, remain available
+to other consumers after rejection. The snapshot keeps their CPU charge until
+its last reference is released; rejection cannot reclaim that storage.
 
 Each consumer holds at most desired, accepted and seed entries. An entry with
 no references is released, so cache growth is bounded by three references per

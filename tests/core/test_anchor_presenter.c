@@ -1376,7 +1376,53 @@ static void test_hidden_obsolete_source_releases_its_reference(void) {
   }
   puts("PASS hidden removed/replaced artwork releases obsolete ownership while a live sibling keeps its shared source");
 }
+static void test_bitmap_consumers_recover_after_shared_rejection(void) {
+  for(int destroy_first=0;destroy_first<2;destroy_first++) {
+    PPError error={0};PPAssets *assets=NULL;PPContentSources *sources=NULL;PPItemSnapshot *snapshot=NULL;
+    PPContentConsumer *rejecting=NULL,*fresh=NULL,*sibling=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_content_sources_create(&sources,assets,&error));
+    size_t length=0;void *bytes=SDL_LoadFile(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf",&length);CHECK(bytes);
+    PPItem item={.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,
+      .text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.fallback_asset,&error));SDL_free(bytes);
+    CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
+    CHECK(pp_item_snapshot_text_result(snapshot)->artwork.bitmap_only);
+    CHECK(pp_content_consumer_create(sources,&rejecting,&error));PPContentFrame frame={0};double next;
+    CHECK(pp_content_frame(rejecting,snapshot,96,1,0,&frame,&next,&error));
+    CHECK(frame.frame&&frame.visual_alpha&&frame.frame->width==136&&frame.frame->height==128);
+    size_t pixels=frame.frame->stride*(size_t)frame.frame->height,retained=pp_assets_external_raster_bytes(assets);
+    uint8_t *expected=malloc(pixels);CHECK(expected);memcpy(expected,frame.frame->pixels,pixels);
+    pp_content_reject(rejecting);
+    for(int tick=0;tick<3;tick++) {
+      CHECK(pp_content_frame(rejecting,snapshot,96,1,0,&frame,&next,&error));CHECK(!frame.frame&&!error.code);
+    }
+    if(destroy_first){pp_content_consumer_destroy(rejecting);rejecting=NULL;}
+    CHECK(pp_content_consumer_create(sources,&fresh,&error));
+    CHECK(pp_content_frame(fresh,snapshot,96,1,0,&frame,&next,&error));
+    CHECK(frame.frame&&frame.visual_alpha&&frame.frame->width==136&&frame.frame->height==128);
+    CHECK(!memcmp(frame.frame->pixels,expected,pixels));pp_content_accept(fresh);
+    if(rejecting) {
+      CHECK(pp_content_frame(rejecting,snapshot,96,1,0,&frame,&next,&error));CHECK(!frame.frame);
+      pp_content_consumer_destroy(rejecting);rejecting=NULL;
+    }
+    CHECK(pp_content_frame(fresh,snapshot,96,1,0,&frame,&next,&error));
+    CHECK(frame.frame&&frame.visual_alpha&&!memcmp(frame.frame->pixels,expected,pixels));
+    CHECK(pp_content_consumer_create(sources,&sibling,&error));
+    CHECK(pp_content_frame(sibling,snapshot,96,1,0,&frame,&next,&error));CHECK(frame.frame);pp_content_reject(sibling);
+    CHECK(pp_content_frame(sibling,snapshot,96,1,0,&frame,&next,&error));CHECK(!frame.frame);
+    CHECK(pp_content_frame(fresh,snapshot,96,1,0,&frame,&next,&error));
+    CHECK(frame.frame&&frame.visual_alpha&&!memcmp(frame.frame->pixels,expected,pixels));
+    CHECK(pp_assets_external_raster_bytes(assets)==retained&&pp_content_sources_raster_bytes(sources)==0);
+    pp_content_cancel(sibling);CHECK(pp_content_frame(sibling,snapshot,96,1,0,&frame,&next,&error));CHECK(frame.frame);
+    pp_content_cancel(fresh);CHECK(pp_content_current(fresh,NULL,NULL)->frame.pixels);
+    pp_content_consumer_destroy(sibling);pp_content_consumer_destroy(fresh);pp_content_sources_destroy(sources);
+    CHECK(pp_assets_external_raster_bytes(assets)==retained);pp_item_snapshot_release(snapshot);
+    CHECK(!pp_assets_external_raster_bytes(assets));free(expected);pp_assets_destroy(assets);
+  }
+  puts("PASS fresh bitmap consumers recover after shared rejection and rejecting-owner teardown, with local suppression and bounded snapshot ownership");
+}
 int main(void) {
+    test_bitmap_consumers_recover_after_shared_rejection();
     test_bitmap_replacement_matches_fresh_canonical_source();
     test_hidden_obsolete_source_releases_its_reference();
     test_removed_pressed_anchor_cancels_pending_pull();

@@ -243,9 +243,10 @@ void pp_content_reject(PPContentConsumer *c) {
   bool useful=false;
   for(PPContentConsumer *other=c->sources->consumers;other;other=other->next)
     if(other->current==e||((other->desired==e||other->seed==e)&&other->rejected!=e->key.instance_id)){useful=true;break;}
-  /* A publication rejected by every owner has no useful CPU candidate. Keep
-   * the failed target identity to avoid resubmitting it on every UI tick. */
-  if(!useful){if(e->owns_frame)pp_frame_destroy(&e->result.frame);e->result.frame=(PPFrame){0};pp_assets_release_raster(c->sources->assets,e->bytes);e->bytes=0;}
+  /* Release owned candidates rejected by every consumer, keeping their target
+   * identity for attempt suppression. Snapshot-backed pixels remain available
+   * to other consumers; clearing a borrowed frame would not release storage. */
+  if(!useful&&e->owns_frame){pp_frame_destroy(&e->result.frame);pp_assets_release_raster(c->sources->assets,e->bytes);e->bytes=0;}
 }
 size_t pp_content_sources_raster_bytes(const PPContentSources *s) {
   size_t bytes=0;for(ContentEntry *e=s?s->entries:NULL;e;e=e->next)bytes+=e->bytes;return bytes;

@@ -7,7 +7,9 @@ static PPApp *app;
 static PPUIBackend *ui;
 static PPUIBackend *other_ui;
 static PPItemSnapshot *snapshot;
+static PPItemSnapshot *bitmap_snapshot;
 static PPUIContentPreview preview;
+static PPUIContentPreview fresh_preview;
 static int restore_failure_countdown,restore_failures;
 bool SDLCALL pp_test_ui_make_current(SDL_Window *window,SDL_GLContext context) {
   if(restore_failure_countdown&&window==ui->window&&context==ui->gl_context&&--restore_failure_countdown==0) {
@@ -16,7 +18,9 @@ bool SDLCALL pp_test_ui_make_current(SDL_Window *window,SDL_GLContext context) {
   return SDL_GL_MakeCurrent(window,context);
 }
 static void cleanup(void) {
-  pp_ui_preview_release(&preview);pp_item_snapshot_release(snapshot);snapshot=NULL;
+  pp_ui_preview_release(&fresh_preview);pp_ui_preview_release(&preview);
+  pp_item_snapshot_release(bitmap_snapshot);bitmap_snapshot=NULL;
+  pp_item_snapshot_release(snapshot);snapshot=NULL;
   pp_ui_backend_destroy(other_ui);other_ui=NULL;
   pp_ui_backend_destroy(ui);ui=NULL;pp_app_destroy(app);app=NULL;
 }
@@ -119,7 +123,65 @@ static void test_budget_rollback_and_selection(void) {
   pp_item_snapshot_release(changed);pp_ui_preview_release(&preview);CHECK(!pp_content_gpu_resources(sources).retained_bytes);
   cleanup();puts("PASS rejected same-item replacement keeps usable pixels; rejected new selection clears stale pixels; retry and unchanged reuse release exact GPU charges");
 }
+static void test_new_bitmap_preview_recovers_after_gpu_rejection(void) {
+  for(int preserve_old=0;preserve_old<2;preserve_old++) {
+    PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+    PPUIWindowOptions options={.title="Bitmap preview recovery",.geometry={0,0,160,120},.scale=1,.compact=true};
+    CHECK(pp_ui_backend_create(&ui,&options,&error));double next;
+    PPContentSources *sources=pp_app_content_sources(app,&error);CHECK(sources);
+    size_t baseline=pp_assets_external_raster_bytes(pp_app_assets(app));
+    GLuint usable=0;uint8_t old_pixels[96*32*4];
+    if(preserve_old) {
+      snapshot=png_snapshot(PP_MEDIA_FIXTURES "/alpha.png",1,96);
+      CHECK(pp_ui_preview_update(ui,app,&preview,snapshot,96,0,1,1,0,&next,&error));
+      usable=preview.texture;glBindTexture(GL_TEXTURE_2D,usable);
+      glGetTexImage(GL_TEXTURE_2D,0,GL_RGBA,GL_UNSIGNED_BYTE,old_pixels);CHECK(glGetError()==GL_NO_ERROR);
+    }
+    size_t old_charge=pp_content_gpu_resources(sources).retained_bytes;
+    size_t length=0;void *font=SDL_LoadFile(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf",&length);CHECK(font);
+    PPItem item={.id=1,.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,
+      .text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){font,length},PP_ASSET_FONT,&item.text_style.fallback_asset,&error));SDL_free(font);
+    CHECK(pp_item_snapshot_create(pp_app_assets(app),&item,&bitmap_snapshot,&error));
+    CHECK(pp_item_snapshot_text_result(bitmap_snapshot)->artwork.bitmap_only);
+    size_t pressure=pp_content_gpu_resources(sources).limit_bytes-old_charge;
+    CHECK(pp_content_gpu_reserve(sources,pressure,&error));
+    CHECK(!pp_ui_preview_update(ui,app,&preview,bitmap_snapshot,96,0,1,1,0,&next,&error));
+    CHECK(error.code==PP_ERROR_RESOURCE_LIMIT&&preview.texture==usable);
+    CHECK(pp_content_gpu_resources(sources).retained_bytes==old_charge+pressure);
+    pp_content_gpu_release(sources,pressure);error=(PPError){0};
+    size_t retained=pp_assets_external_raster_bytes(pp_app_assets(app));
+    CHECK(pp_ui_preview_update(ui,app,&fresh_preview,bitmap_snapshot,96,0,1,1,0,&next,&error));
+    CHECK(fresh_preview.valid&&fresh_preview.texture&&fresh_preview.snapshot==bitmap_snapshot);
+    CHECK(fresh_preview.source_width==136&&fresh_preview.source_height==128);
+    size_t output_bytes=(size_t)fresh_preview.width*fresh_preview.height*4;
+    uint8_t *pixels=malloc(output_bytes);CHECK(pixels);glBindTexture(GL_TEXTURE_2D,fresh_preview.texture);
+    glGetTexImage(GL_TEXTURE_2D,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels);CHECK(glGetError()==GL_NO_ERROR);
+    size_t visible=0;for(size_t i=0;i<output_bytes;i+=4)visible+=pixels[i+3]>0;free(pixels);CHECK(visible>0);
+    size_t recovered_charge=pp_content_gpu_resources(sources).retained_bytes;
+    CHECK(recovered_charge==old_charge+69632+output_bytes);
+    CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==retained&&pp_content_sources_raster_bytes(sources)==0);
+    for(int tick=0;tick<3;tick++) {
+      CHECK(pp_ui_preview_update(ui,app,&preview,bitmap_snapshot,96,0,1,1,0,&next,&error));
+      CHECK(preview.texture==usable&&pp_content_gpu_resources(sources).retained_bytes==recovered_charge);
+    }
+    if(preserve_old) {
+      uint8_t pixels_after[sizeof(old_pixels)];glBindTexture(GL_TEXTURE_2D,usable);
+      glGetTexImage(GL_TEXTURE_2D,0,GL_RGBA,GL_UNSIGNED_BYTE,pixels_after);CHECK(glGetError()==GL_NO_ERROR);
+      CHECK(preview.snapshot==snapshot&&preview.width==96&&preview.height==32&&!memcmp(old_pixels,pixels_after,sizeof(old_pixels)));
+    }
+    pp_ui_preview_release(&preview);CHECK(pp_content_gpu_resources(sources).retained_bytes==recovered_charge-old_charge);
+    CHECK(pp_ui_preview_update(ui,app,&fresh_preview,bitmap_snapshot,96,0,1,1,0,&next,&error));
+    CHECK(fresh_preview.valid&&fresh_preview.texture&&pp_renderer_metrics(fresh_preview.renderer).readbacks==0);
+    pp_ui_preview_release(&fresh_preview);CHECK(!pp_content_gpu_resources(sources).retained_bytes);
+    pp_item_snapshot_release(bitmap_snapshot);bitmap_snapshot=NULL;pp_item_snapshot_release(snapshot);snapshot=NULL;
+    CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==baseline);
+    cleanup();
+  }
+  puts("PASS a new bitmap preview displays pixels after another preview's GPU admission failure, preserving old artwork and releasing exact CPU/GPU charges");
+}
 int main(void) {
+  test_new_bitmap_preview_recovers_after_gpu_rejection();
   test_budget_rollback_and_selection();
   test_restore_failure_preserves_usable_output();
   PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
