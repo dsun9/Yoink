@@ -59,7 +59,14 @@ set(pp_ttf_new_color_metrics [=[    /* PointyPointer: COLR0 base outlines can be
     // Get the glyph metrics, always needed
     if (cached->stored == 0) {]=])
 set(pp_ttf_patched "${pp_ttf_original}")
-foreach(part end test color_include color_metrics)
+set(pp_ttf_old_face_close "        FT_Done_Face(font->face);")
+set(pp_ttf_new_face_close [=[        /* PointyPointer: FreeType permits separate faces to render on separate
+         * threads, but creation/destruction in its shared library must use the
+         * same lock as FT_Open_Face. Never lock a complete text render. */
+        SDL_LockMutex(TTF_state.lock);
+        FT_Done_Face(font->face);
+        SDL_UnlockMutex(TTF_state.lock);]=])
+foreach(part end test color_include color_metrics face_close)
   string(FIND "${pp_ttf_patched}" "${pp_ttf_old_${part}}" pp_ttf_position)
   if(pp_ttf_position LESS 0)
     message(FATAL_ERROR "Missing SDL_ttf cluster patch anchor ${part}")

@@ -7,6 +7,9 @@ param(
     [switch]$Performance,
     [switch]$PngRetained,
     [switch]$GifRetained,
+    [switch]$ScalableRetained,
+    [switch]$ScalableSharp,
+    [switch]$ScalableWorkerInput,
     [ValidateSet('', 'success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'timeout')][string]$PerformanceControl = '',
     [string]$TestRegex = '',
     [ValidatePattern('^[a-zA-Z0-9-]+$')][string]$LogPrefix = 'task11'
@@ -56,6 +59,12 @@ if ($PerformanceControl) {
 if ($Performance -and $Configuration -ne 'Release') { throw 'Performance acceptance requires a Release build.' }
 if ($PngRetained -and -not $Performance) { throw 'PngRetained requires Performance.' }
 if ($GifRetained -and -not $Performance) { throw 'GifRetained requires Performance.' }
+if ($ScalableRetained -and -not $Performance) { throw 'ScalableRetained requires Performance.' }
+if ($ScalableSharp -and -not $Performance) { throw 'ScalableSharp requires Performance.' }
+if ($ScalableSharp -and ($ScalableRetained -or $GifRetained -or $PngRetained)) { throw 'Choose one source diagnostic.' }
+if ($ScalableWorkerInput -and -not $Performance) { throw 'ScalableWorkerInput requires Performance.' }
+if ($ScalableWorkerInput -and ($ScalableSharp -or $ScalableRetained -or $GifRetained -or $PngRetained)) { throw 'Choose one source diagnostic.' }
+if ($ScalableRetained -and ($GifRetained -or $PngRetained)) { throw 'Choose one source diagnostic.' }
 if ($GifRetained -and $PngRetained) { throw 'Choose one source diagnostic.' }
 Add-Type -TypeDefinition @'
 using System;
@@ -111,7 +120,7 @@ $exitCode = 1
 try {
     if ($Performance) {
         $probePath = Join-Path $BuildDirectory "$Configuration/pointy_performance_test.exe"
-        $probeMode = if ($PngRetained) { '--png-retained' } elseif ($GifRetained) { '--gif-retained' } else { '--acceptance' }
+        $probeMode = if ($PngRetained) { '--png-retained' } elseif ($GifRetained) { '--gif-retained' } elseif ($ScalableRetained) { '--scalable-retained' } elseif ($ScalableSharp) { '--scalable-sharp' } elseif ($ScalableWorkerInput) { '--scalable-worker-input' } else { '--acceptance' }
         $exitCode = Invoke-PointyBoundedProcess $probePath @($probeMode) $log $stderr $ProcessTimeoutMilliseconds
     } else {
         $ctest = (Get-Command ctest).Source

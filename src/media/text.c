@@ -10,14 +10,24 @@
 typedef struct PPTextInspection {
     TTF_Font *fallback;
     PPTextDiagnostics *diagnostics;
+    size_t max_glyph_bytes;
+    bool scratch_rejected;
 } PPTextInspection;
 
 static bool SDLCALL inspect_operations(void *userdata, TTF_Text *text) {
     PPTextInspection *inspection = userdata;
     bool previous_fallback = false;
+    size_t glyph_bytes=0;
     for (int i = 0; i < text->internal->num_ops; i++) {
         const TTF_DrawOperation *op = &text->internal->ops[i];
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
+        if(op->copy.src.w>0&&op->copy.src.h>0) {
+            size_t bytes=(size_t)op->copy.src.w*op->copy.src.h*4;
+            if(bytes>inspection->max_glyph_bytes || glyph_bytes>inspection->max_glyph_bytes-bytes) {
+                inspection->scratch_rejected=true;return SDL_SetError("Bounded text exceeds 16 MiB of shaped glyph scratch");
+            }
+            glyph_bytes+=bytes;
+        }
         bool fallback = op->copy.glyph_font == inspection->fallback;
         if (fallback && !previous_fallback) inspection->diagnostics->fallback_runs++;
         if (op->copy.glyph_index == 0) inspection->diagnostics->missing_glyphs++;
@@ -179,7 +189,7 @@ static bool render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
         (!primary || SDL_strcasecmp(style->requested_family, TTF_GetFontFamilyName(primary))))
         diagnostics->missing_requested_families = 1;
     /* Hand the full string to HarfBuzz/SDL_ttf: do not split clusters or ZWJ. */
-    PPTextInspection inspection = {fallback, diagnostics};
+    PPTextInspection inspection = {fallback, diagnostics, max_bytes==SIZE_MAX?SIZE_MAX:16u*1024*1024};
     TTF_TextEngine engine;
     SDL_INIT_INTERFACE(&engine);
     engine.userdata = &inspection;
@@ -188,7 +198,7 @@ static bool render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
     text = TTF_CreateText(&engine, font, utf8, 0);
     int width = 0, height = 0;
     if (!text || !TTF_GetTextSize(text, &width, &height) || !TTF_UpdateText(text)) {
-        pp_media_error(error, PP_ERROR_RENDER, SDL_GetError());
+        pp_media_error(error, inspection.scratch_rejected?PP_ERROR_RESOURCE_LIMIT:PP_ERROR_RENDER, SDL_GetError());
         goto done;
     }
     PPTextRasterFont fonts[2] = {
@@ -196,7 +206,7 @@ static bool render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
         {fallback, pp_asset_source(fallback_asset), style->fallback_face}
     };
     if(!pp_text_artwork(text,fonts,render_size,style->font_size_dip,&diagnostics->artwork,error)) goto done;
-    if(result && !pp_text_raster_measure(text,fonts,render_size,style->font_size_dip,
+    if(result && !pp_text_raster_measure_bounded(text,fonts,render_size,style->font_size_dip,max_bytes,
         &result->layout_size,&result->layout_origin,error)) goto done;
     if (!pp_text_raster_bounded(text,fonts,render_size,size,style->color,max_bytes,out,
         result?&result->raster_origin_px:NULL,error)) goto done;

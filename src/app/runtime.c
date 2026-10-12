@@ -81,7 +81,9 @@ bool pp_runtime_create(PPRuntime **out, PPApp *app, PPError *error) {
   }
   r->app = app;
   r->generation = pp_app_generation(app);
+  if(!pp_raster_worker_create(&r->worker,error)) {free(r);return false;}
   if (!pp_renderer_create(&r->renderer, error)) {
+    pp_raster_worker_destroy(r->worker);
     free(r);
     return false;
   }
@@ -136,6 +138,7 @@ void pp_runtime_tick(PPRuntime *r, double now) {
     failure(r);
     return;
   }
+  r->presenter->worker=r->worker;r->presenter->borrowed_worker=true;
   PPDisplay *displays = NULL;
   size_t count = 0;
   PPVec2 pointer = {0};
@@ -174,6 +177,7 @@ void pp_runtime_destroy(PPRuntime *r) {
   pp_drawer_close(r->drawer);
   pp_drawer_cache_destroy(&r->drawer_cache);
   pp_anchor_presenter_destroy(r->presenter);
+  pp_raster_worker_destroy(r->worker);
   pp_renderer_destroy(r->renderer);
   free(r);
 }

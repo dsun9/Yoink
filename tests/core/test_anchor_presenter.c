@@ -6,6 +6,24 @@
 #include "../../src/core/geometry_internal.h"
 #include "../../src/app/presenter_internal.h"
 #include <math.h>
+#include <SDL3/SDL.h>
+#undef pp_text_render_result_bounded
+bool pp_text_render_result_bounded(PPAssets *,const char *,const PPTextStyle *,double,size_t,PPTextResult *,PPTextDiagnostics *,PPError *);
+static SDL_AtomicInt block_next_worker, fail_next_worker;
+static SDL_Semaphore *worker_entered, *worker_continue;
+/* Controls scheduling at the agreed font/content boundary; generation still
+ * uses the production renderer and isolated worker manager. */
+bool pp_test_worker_text(PPAssets *assets,const char *text,const PPTextStyle *style,double scale,size_t limit,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    if(SDL_CompareAndSwapAtomicInt(&block_next_worker,1,0)) {SDL_SignalSemaphore(worker_entered);CHECK(SDL_WaitSemaphoreTimeout(worker_continue,5000));}
+    if(SDL_CompareAndSwapAtomicInt(&fail_next_worker,1,0)) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Injected candidate generation failure"};return false;}
+    return pp_text_render_result_bounded(assets,text,style,scale,limit,out,diagnostics,error);
+}
+static void hold_next_worker(void) {
+    worker_entered=SDL_CreateSemaphore(0);worker_continue=SDL_CreateSemaphore(0);CHECK(worker_entered&&worker_continue);
+    SDL_SetAtomicInt(&block_next_worker,1);
+}
+static void release_worker(void) {SDL_SignalSemaphore(worker_continue);}
+static void finish_worker_control(void) {SDL_DestroySemaphore(worker_entered);SDL_DestroySemaphore(worker_continue);worker_entered=worker_continue=NULL;}
 struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;};
 struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
 struct PPSharedTexture {const PPFrame *frame;};
@@ -527,6 +545,202 @@ static void test_canonical_source_mapping(void) {
     pp_retained_release(&p,&retained);pp_surface_destroy(surface);
     puts("PASS source origin mapping preserves canonical center/aspect and includes overhang without reupload");
 }
+static PPItem scalable_item(PPAssets *assets) {
+    FILE *file=fopen(PP_FONT_FIXTURES "/PointyOverhang.ttf","rb");CHECK(file);
+    CHECK(!fseek(file,0,SEEK_END));long length=ftell(file);CHECK(length>0);rewind(file);
+    uint8_t *bytes=malloc((size_t)length);CHECK(bytes);CHECK(fread(bytes,1,(size_t)length,file)==(size_t)length);fclose(file);
+    PPError error={0};PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81\nAj",.text_style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}},.opacity=1};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));free(bytes);return item;
+}
+static void test_async_latest_text_resize(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);PPSurface *sprite=surface_for(id);CHECK(sprite&&sprite->shown);
+    PPSourceMetrics before=pp_assets_source_metrics(assets);PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
+    PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(p);
+    PPPlatformEvent wheel={.surface=sprite,.instance_id=id,.kind=PP_EVENT_WHEEL,.desktop_point={400,300},.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));wheel.timestamp=2.01;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==metrics.worker_requests+2);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==before.raster_builds);
+    update(p,displays,400,300,2.015);
+    for(int i=0;i<1000 && pp_anchor_presenter_metrics(p).sharp_publications==metrics.sharp_publications;i++) {SDL_Delay(1);update(p,displays,400,300,2.015);}
+    PPPresentationMetrics sharp=pp_anchor_presenter_metrics(p);CHECK(sharp.sharp_publications==metrics.sharp_publications+1);
+    CHECK(sharp.last_sharp_input_timestamp==2.01 && sharp.last_sharp_instance_id==id && sharp.last_sharp_drawable_density==1);
+    CHECK(pp_scene_get(scene,id)->pose.longest_dip<sharp.last_sharp_longest_dip);
+    CHECK(sharp.worker_source_builds>metrics.worker_source_builds && sharp.worker_pending_jobs==0);
+    CHECK(sprite==surface_for(id) && sprite->shown && sharp.scalable_retained_bytes>0);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).readbacks==renderer_before.readbacks);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(pp_assets_external_raster_bytes(assets)==0);pp_assets_destroy(assets);
+    puts("PASS latest resize starts during input, uses isolated source work and publishes before easing settles");
+}
+static void wait_worker_idle(PPAnchorPresenter *p,PPDisplay *displays,double now) {
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++) {SDL_Delay(1);update(p,displays,400,300,now);}
+    update(p,displays,400,300,now);CHECK(!pp_anchor_presenter_metrics(p).worker_pending_jobs);
+}
+static void test_cached_source_survives_compatibility_request(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));hold_next_worker();
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPSprite *s=pp_sprites_find(p,id);PPRect mapping=s->retained.source_rect;PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+    const PPFrame *frame=NULL;double next;CHECK(pp_item_snapshot_frame(pp_scene_get(scene,id)->snapshot,0,3,&frame,&next,&error));
+    PPPose pose=pp_scene_get(scene,id)->pose;pose.angle_deg=23.5;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2);
+    CHECK(!memcmp(&mapping,&s->retained.source_rect,sizeof(mapping)));
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads);
+    release_worker();wait_worker_idle(p,displays,2);finish_worker_control();
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS available scalable raster keeps its own mapping after compatibility snapshot raster changes");
+}
+static void test_completed_target_is_revalidated_after_external_resize(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
+    hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));release_worker();
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++)SDL_Delay(1);
+    CHECK(!pp_anchor_presenter_metrics(p).worker_pending_jobs);
+    PPPose pose=pp_scene_get(scene,id)->pose;pose.longest_dip=64;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2.01);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads);
+    CHECK(pp_anchor_presenter_metrics(p).worker_stale_results==metrics.worker_stale_results+1);
+    wait_worker_idle(p,displays,2.01);finish_worker_control();
+    CHECK(pp_scene_get(scene,id)->pose.longest_dip==64);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS completed raster cannot publish after an externally replaced endpoint");
+}
+static void test_scalable_rapid_resize_drag_density_and_cancellation(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    PPRasterStatus initial=pp_raster_worker_status(p->worker);PPRendererMetrics renderer=pp_anchor_presenter_renderer_metrics(p);
+    uint64_t owner_builds=pp_assets_source_metrics(assets).raster_builds;
+    hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    for(int i=1;i<20;i++) {wheel.timestamp=2+i*.001;CHECK(pp_anchor_presenter_event(p,&wheel,&error));}
+    PPRasterStatus blocked=pp_raster_worker_status(p->worker);CHECK(blocked.pending_jobs==2&&blocked.requests==initial.requests+20&&blocked.capture_bytes<=64u*1024*1024);
+    event(p,surface,PP_EVENT_BUTTON_DOWN,pp_scene_get(scene,id)->pose.center.x+10,pp_scene_get(scene,id)->pose.center.y,2.02);event(p,surface,PP_EVENT_POINTER_MOVE,430,320,2.025);
+    update(p,displays,430,320,2.04);PPSprite *s=pp_sprites_find(p,id);double logical_grab=10*s->pose.longest_dip/s->ease_from.longest_dip;
+    CHECK(fabs(s->pose.center.x+logical_grab-430)<1e-7&&capture_owner==surface);
+    displays[1].desktop_units_per_dip=1.5;displays[1].drawable_pixels_per_dip=1.5;update(p,displays,430,320,2.04);
+    CHECK(fabs(s->pose.center.x+logical_grab*1.5-430)<1e-7&&capture_owner==surface);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==owner_builds);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==renderer.source_uploads);
+    release_worker();wait_worker_idle(p,displays,2.04);finish_worker_control();
+    PPPresentationMetrics ready=pp_anchor_presenter_metrics(p);CHECK(ready.last_sharp_drawable_density==1.5&&ready.last_sharp_input_timestamp==2.019);
+    CHECK(ready.worker_stale_results>=1&&ready.worker_source_builds==initial.source_builds+2&&ready.worker_reserved_bytes==0);
+    event(p,surface,PP_EVENT_BUTTON_UP,430,320,2.05);CHECK(!capture_owner);
+    /* Replacement invalidates an executing capture without sharing the edited
+     * snapshot, and deletion releases every queued owner reservation. */
+    hold_next_worker();wheel.timestamp=3;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPItem replacement=scalable_item(assets);replacement.text="jA";replacement.text_style.color[0]=220;
+    CHECK(pp_scene_replace(scene,id,&replacement,3.01,&error));update(p,displays,430,320,3.01);
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot);
+    release_worker();wait_worker_idle(p,displays,3.01);finish_worker_control();
+    CHECK(pp_sprites_find(p,id)->retained.content_id==revision);
+    CHECK(pp_anchor_presenter_metrics(p).worker_source_builds==ready.worker_source_builds+2);
+    hold_next_worker();wheel.timestamp=4;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPPlatformEvent remove={.surface=surface,.instance_id=id,.kind=PP_EVENT_BUTTON_DOWN,.button=PP_BUTTON_RIGHT,.timestamp=4.01};CHECK(pp_anchor_presenter_event(p,&remove,&error));
+    CHECK(!pp_scene_count(scene)&&!pp_anchor_presenter_gpu_resources(p).retained_bytes&&pp_raster_worker_status(p->worker).reserved_bytes==0);
+    release_worker();wait_worker_idle(p,displays,4.01);finish_worker_control();
+    CHECK(pp_anchor_presenter_metrics(p).worker_source_builds==ready.worker_source_builds+3);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS twenty immediate wheel targets coalesce while dragging/density changes, stale success counts survive replacement/deletion, and reservations release");
+}
+static void test_scalable_budget_failure_and_project_teardown(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);PPSprite *s=pp_sprites_find(p,id);
+    size_t retained=s->scalable_bytes,baseline=pp_assets_external_raster_bytes(assets);PPPose usable=s->pose;PPRendererMetrics renderer=pp_anchor_presenter_renderer_metrics(p);
+    /* Fill the combined retained CPU budget using valid reservations. */
+    size_t fill=512u*1024*1024-pp_assets_raster_bytes(assets);CHECK(fill>256u*1024*1024);
+    CHECK(pp_assets_reserve_raster(assets,256u*1024*1024,&error));CHECK(pp_assets_reserve_raster(assets,fill-256u*1024*1024,&error));
+    PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(p->notice.code==PP_ERROR_RESOURCE_LIMIT);
+    update(p,displays,400,300,2.01);CHECK(surface->shown&&!memcmp(&usable,&s->pose,sizeof(usable))&&s->scalable_bytes==retained);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==renderer.source_uploads&&pp_raster_worker_status(p->worker).reserved_bytes==0);
+    pp_assets_release_raster(assets,fill);CHECK(pp_assets_external_raster_bytes(assets)==baseline);
+    /* Failed source generation preserves the usable CPU/GPU source and does
+     * not turn an existing visible sprite into an interceptor without pixels. */
+    SDL_SetAtomicInt(&fail_next_worker,1);wheel.timestamp=3;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    CHECK(fabs(s->raster_target.longest_dip-usable.longest_dip*1.1)<1e-7);wait_worker_idle(p,displays,3.2);
+    CHECK(p->notice.code==PP_ERROR_MEMORY&&surface->shown&&s->scalable_bytes==retained);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==renderer.source_uploads&&pp_raster_worker_status(p->worker).reserved_bytes==0);
+    /* Runtime ownership survives a project change. Presenter teardown cancels
+     * and releases its owner state while a detached immutable capture is held. */
+    hold_next_worker();wheel.timestamp=4;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPRasterWorker *service=p->worker;p->borrowed_worker=true;
+    event(p,surface,PP_EVENT_BUTTON_DOWN,400,300,4.01);CHECK(capture_owner==surface);
+    pp_anchor_presenter_destroy(p);p=NULL;CHECK(!capture_owner&&!surfaces&&pp_raster_worker_status(service).reserved_bytes==0);
+    pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);assets=NULL;
+    release_worker();pp_raster_worker_destroy(service);finish_worker_control();
+    puts("PASS candidate pressure and generation failure preserve usable source, project teardown releases capture and assets before worker completion");
+}
+static void test_scalable_publication_failure_releases_interceptor(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    event(p,surface,PP_EVENT_BUTTON_DOWN,400,300,2.01);CHECK(capture_owner==surface);fail_gl_context=true;
+    release_worker();wait_worker_idle(p,displays,2.01);finish_worker_control();fail_gl_context=false;
+    CHECK(!capture_owner&&!pp_scene_get(scene,id)&&!pp_anchor_presenter_instance_count(p)&&!pp_anchor_presenter_gpu_resources(p).retained_bytes);
+    CHECK(pp_raster_worker_status(p->worker).reserved_bytes==0);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS failed asynchronous GL publication deletes the failed interceptor and releases input, source and candidate budgets");
+}
+static PPAssetId font_asset(PPAssets *assets,const char *path) {
+    size_t length=0;void *bytes=SDL_LoadFile(path,&length);CHECK(bytes&&length);PPAssetId id={0};PPError error={0};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&id,&error));SDL_free(bytes);return id;
+}
+static void test_settled_worker_matches_fresh_text(void) {
+    for(int kind=0;kind<3;kind++) {
+        PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+        CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+        PPItem item=scalable_item(assets);
+        if(kind==0) {item.text="\xf0\x9f\x91\x89\xf0\x9f\x8f\xbd\n\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb";item.text_style.requested_family="Twemoji Mozilla";
+            item.text_style.primary_asset=font_asset(assets,PP_MEDIA_FIXTURES "/../../../resources/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf");}
+        if(kind==1) {item.text="A\xcc\x81j\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb\nA";
+            item.text_style.fallback_asset=font_asset(assets,PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf");}
+        if(kind==2) {item.text="AB\nA";item.text_style.requested_family="Pointy Hybrid";item.text_style.font_size_dip=16;
+            item.text_style.primary_asset=font_asset(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");}
+        CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+        PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1.5}};
+        uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
+        PPPose pose=pp_scene_get(scene,id)->pose;pose.longest_dip=768;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2);wait_worker_idle(p,displays,2);
+        const PPSceneInstance *instance=pp_scene_get(scene,id);PPSprite *sprite=pp_sprites_find(p,id);PPVec2 canonical=pp_item_snapshot_size(instance->snapshot);
+        PPTextResult fresh={0};CHECK(pp_text_render_result(assets,item.text,&item.text_style,768*1.5/fmax(canonical.x,canonical.y),&fresh,NULL,&error));
+        const PPTextResult *cached=&sprite->scalable;CHECK(cached->frame.width==fresh.frame.width&&cached->frame.height==fresh.frame.height);
+        CHECK(!memcmp(cached->frame.pixels,fresh.frame.pixels,fresh.frame.stride*fresh.frame.height));CHECK(!memcmp(cached->frame.content_alpha,fresh.frame.content_alpha,(size_t)fresh.frame.width*fresh.frame.height));
+        CHECK(!memcmp(&cached->layout_size,&canonical,sizeof(canonical))&&!memcmp(&cached->layout_origin,&fresh.layout_origin,sizeof(fresh.layout_origin))&&!memcmp(&cached->raster_origin_px,&fresh.raster_origin_px,sizeof(fresh.raster_origin_px)));
+        CHECK(cached->artwork.scalable_glyphs&&((kind==0)==(cached->artwork.bitmap_glyphs==0)));
+        size_t edge=0;for(size_t i=0;i<(size_t)fresh.frame.width*fresh.frame.height;i++) {const uint8_t *pixel=fresh.frame.pixels+i*4;CHECK(pixel[0]<=pixel[3]&&pixel[1]<=pixel[3]&&pixel[2]<=pixel[3]&&pixel[3]==fresh.frame.content_alpha[i]);edge+=pixel[3]>0&&pixel[3]<item.text_style.color[3];}CHECK(edge);
+        PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);PPRasterStatus worker=pp_raster_worker_status(p->worker);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
+        pose.angle_deg=17.25;pose.opacity=.63;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,3);
+        pose.center.x+=37;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,437,300,4);update(p,displays,437,300,5);
+        PPRendererMetrics after=pp_anchor_presenter_renderer_metrics(p);CHECK(after.source_uploads==before.source_uploads&&after.transform_draws==before.transform_draws+1&&after.readbacks==before.readbacks);
+        CHECK(pp_raster_worker_status(p->worker).source_builds==worker.source_builds&&pp_assets_source_metrics(assets).raster_builds==builds);
+        CHECK(pp_scene_get(scene,id)->pose.center.x==pose.center.x&&pp_item_snapshot_size(instance->snapshot).y==canonical.y);
+        pp_frame_destroy(&fresh.frame);pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    }
+    puts("PASS settled isolated color, mixed cluster/overhang and hybrid outline/bitmap sources exactly match fresh requested-resolution RGBA/coverage and reuse rotation/opacity/translation");
+}
 static void test_bitmap_text_transform_reuses_useful_source(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -610,6 +824,13 @@ static void test_bitmap_candidate_context_preserves_usable_source(void) {
     puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
 }
 int main(void) {
+    test_settled_worker_matches_fresh_text();
+    test_scalable_publication_failure_releases_interceptor();
+    test_scalable_budget_failure_and_project_teardown();
+    test_scalable_rapid_resize_drag_density_and_cancellation();
+    test_completed_target_is_revalidated_after_external_resize();
+    test_cached_source_survives_compatibility_request();
+    test_async_latest_text_resize();
     test_gif_transparent_frame_releases_capture();
 #if defined(_WIN32)
     test_gif_budget_sharing_and_png_transitions();

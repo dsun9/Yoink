@@ -48,5 +48,10 @@ PPRendererMetrics pp_renderer_metrics(const PPRenderer *renderer);
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source,
     double longest_dip, double angle_deg, double opacity, double pixels_per_dip,
     PPFrame *out, PPError *error);
+/* Explicit diagnostic/export readback with the same canonical mapping as
+ * retained drawing. Normal native presentation uses draw_source instead. */
+bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,
+    PPVec2 layout,PPRect source_rect,double longest_dip,double angle_deg,
+    double opacity,double pixels_per_dip,PPFrame *out,PPError *error);
 void pp_renderer_destroy(PPRenderer *renderer);
 #endif

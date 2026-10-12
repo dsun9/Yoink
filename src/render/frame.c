@@ -8,6 +8,9 @@
 struct PPRenderer {
     SDL_Window *window; SDL_GLContext context; PPGL gl;
     GLuint program, vao, fbo, textures[4];
+    struct {GLint image,alpha,destination_size,source_size,rotation,scale,source_offset,opacity;} uniforms;
+    PFNGLDEBUGMESSAGECALLBACKPROC error_callback;
+    bool draw_error;
     uint32_t window_id;
     bool owns_window;
     int source_width, source_height;
@@ -17,6 +20,11 @@ struct PPRenderer {
     PPSharedTexture *shared;
 };
 struct PPSharedTexture {PPRenderer *owner;GLuint name;int width,height;};
+static void APIENTRY observe_error(GLenum source,GLenum type,GLuint id,GLenum severity,
+    GLsizei length,const GLchar *message,const void *owner) {
+    (void)source;(void)id;(void)severity;(void)length;(void)message;
+    if(type==GL_DEBUG_TYPE_ERROR)((PPRenderer *)owner)->draw_error=true;
+}
 static bool error_set(PPError *error, int code, const char *message) {
     if (error) { error->code = code; snprintf(error->message, sizeof(error->message), "%s", message); }
     return false;
@@ -62,7 +70,15 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
         error_set(error,PP_ERROR_RENDER,SDL_GetError());pp_renderer_destroy(renderer);return false;
     }
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,share?1:0);
+    int previous_flags=0;SDL_GL_GetAttribute(SDL_GL_CONTEXT_FLAGS,&previous_flags);
+#ifdef _WIN32
+    if(window_id)SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS,previous_flags|SDL_GL_CONTEXT_DEBUG_FLAG);
+#endif
     if (renderer->window) renderer->context = SDL_GL_CreateContext(renderer->window);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS,previous_flags);
+#ifdef _WIN32
+    if(!renderer->context && window_id)renderer->context=SDL_GL_CreateContext(renderer->window);
+#endif
     SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,previous_share);
     if (!renderer->context || !SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
         error_set(error, PP_ERROR_RENDER, SDL_GetError()); pp_renderer_destroy(renderer); return false;
@@ -71,9 +87,27 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
     PPGL *gl = &renderer->gl;
     renderer->program = pp_gl_program(gl, vertex_shader, fragment_shader, error);
     if (!renderer->program) { pp_renderer_destroy(renderer); return false; }
+#define CACHE(name) renderer->uniforms.name=gl->GetUniformLocation(renderer->program,#name)
+    CACHE(image);CACHE(alpha);CACHE(destination_size);CACHE(source_size);
+    CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
+#undef CACHE
     gl->GenVertexArrays(1, &renderer->vao); gl->GenFramebuffers(1, &renderer->fbo);
     glGenTextures(4, renderer->textures);
     if (glGetError() != GL_NO_ERROR) { error_set(error,PP_ERROR_RENDER,"Cannot allocate GL frame resources"); pp_renderer_destroy(renderer); return false; }
+#ifdef _WIN32
+    if(window_id && SDL_GL_ExtensionSupported("GL_KHR_debug")) {
+        GLint flags=0;glGetIntegerv(GL_CONTEXT_FLAGS,&flags);
+        PFNGLDEBUGMESSAGECALLBACKPROC callback=(PFNGLDEBUGMESSAGECALLBACKPROC)SDL_GL_GetProcAddress("glDebugMessageCallback");
+        PFNGLDEBUGMESSAGECONTROLPROC control=(PFNGLDEBUGMESSAGECONTROLPROC)SDL_GL_GetProcAddress("glDebugMessageControl");
+        if((flags&GL_CONTEXT_FLAG_DEBUG_BIT)&&callback&&control) {
+            glEnable(GL_DEBUG_OUTPUT);glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+            control(GL_DONT_CARE,GL_DEBUG_TYPE_ERROR,GL_DONT_CARE,0,NULL,GL_TRUE);
+            callback(observe_error,renderer);
+            if(glGetError()==GL_NO_ERROR)renderer->error_callback=callback;
+            else callback(NULL,NULL);
+        }
+    }
+#endif
     *out = renderer; return true;
 }
 bool pp_renderer_create(PPRenderer **out, PPError *error) {return create(out,0,NULL,false,error);}
@@ -171,6 +205,7 @@ bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
     }
     glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
     GLenum upload_error=glGetError();
+    renderer->draw_error=false; /* The explicit transactional check consumed it. */
     if(upload_error!=GL_NO_ERROR) {
         if(candidate) glDeleteTextures(1,&candidate);
         return error_set(error,upload_error==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot upload direct source texture");
@@ -202,34 +237,41 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     PPGL *gl=&renderer->gl;gl->BindFramebuffer(GL_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);
     gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->shared?renderer->shared->name:renderer->textures[0]);
     gl->UseProgram(renderer->program);
-#define LOCATION(name) gl->GetUniformLocation(renderer->program,name)
-    gl->Uniform1i(LOCATION("image"),0);gl->Uniform1i(LOCATION("alpha"),1);
-    gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
-    gl->Uniform2f(LOCATION("source_size"),(float)renderer->source_width,(float)renderer->source_height);
-    gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
-    gl->Uniform2f(LOCATION("scale"),(float)(scale*rect.w/renderer->source_width),(float)(scale*rect.h/renderer->source_height));
-    gl->Uniform2f(LOCATION("source_offset"),(float)((rect.x+rect.w*.5-layout.x*.5)*renderer->source_width/rect.w),
+#define LOCATION(name) renderer->uniforms.name
+    gl->Uniform1i(LOCATION(image),0);gl->Uniform1i(LOCATION(alpha),1);
+    gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
+    gl->Uniform2f(LOCATION(source_size),(float)renderer->source_width,(float)renderer->source_height);
+    gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
+    gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/renderer->source_width),(float)(scale*rect.h/renderer->source_height));
+    gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*renderer->source_width/rect.w),
         (float)((rect.y+rect.h*.5-layout.y*.5)*renderer->source_height/rect.h));
-    gl->Uniform1f(LOCATION("opacity"),(float)opacity);
+    gl->Uniform1f(LOCATION(opacity),(float)opacity);
 #undef LOCATION
     glDisable(GL_BLEND);glDisable(GL_DITHER);glViewport(0,0,w,h);
     gl->BindVertexArray(renderer->vao);glDrawArrays(GL_TRIANGLES,0,3);
-    if(glGetError()!=GL_NO_ERROR) return error_set(error,PP_ERROR_RENDER,"Direct OpenGL rendering failed");
+    if(renderer->error_callback?renderer->draw_error:glGetError()!=GL_NO_ERROR)
+        return error_set(error,PP_ERROR_RENDER,"Direct OpenGL rendering failed");
     if(!SDL_GL_SwapWindow(renderer->window)) return error_set(error,PP_ERROR_RENDER,SDL_GetError());
     renderer->metrics.transform_draws++;return true;
 }
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest_dip,
     double angle_deg, double opacity, double pixels_per_dip, PPFrame *out, PPError *error) {
+    if(!source)return error_set(error,PP_ERROR_ARGUMENT,"Missing transform source");
+    PPVec2 layout={source->width,source->height};PPRect rect={0,0,source->width,source->height};
+    return pp_renderer_transform_source(renderer,source,layout,rect,longest_dip,angle_deg,opacity,pixels_per_dip,out,error);
+}
+bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,
+    double longest_dip,double angle_deg,double opacity,double pixels_per_dip,PPFrame *out,PPError *error) {
     if (!renderer || !renderer->owns_window || !source || !source->pixels || !source->content_alpha || !out || out->pixels || out->content_alpha ||
         source->width <= 0 || source->height <= 0 || source->width > 16384 || source->height > 16384 ||
         source->stride < (size_t)source->width*4 || source->stride % 4 || source->stride/4 > 2147483647 ||
         !isfinite(longest_dip) || longest_dip <= 0 || !isfinite(angle_deg) || !isfinite(opacity) || opacity < 0 || opacity > 1 ||
         !isfinite(pixels_per_dip) || pixels_per_dip <= 0)
         return error_set(error, PP_ERROR_ARGUMENT, "Invalid frame transform");
-    double scale = longest_dip*pixels_per_dip/(source->width > source->height ? source->width : source->height);
+    double scale = longest_dip*pixels_per_dip/fmax(layout.x,layout.y);
     double angle = fmod(angle_deg, 360)*3.14159265358979323846/180, c = cos(angle), s = sin(angle);
     int drawable_w,drawable_h;
-    if (!pp_geometry_extent(source,longest_dip,angle_deg,pixels_per_dip,&drawable_w,&drawable_h))
+    if (!pp_geometry_source_extent(layout,rect,longest_dip,angle_deg,pixels_per_dip,&drawable_w,&drawable_h))
         return error_set(error, PP_ERROR_ARGUMENT, "Transformed frame dimensions exceed limits");
     double w=drawable_w,h=drawable_h;
     PPFrame frame = {0}; frame.width = (int)w; frame.height = (int)h; frame.stride = (size_t)frame.width*4;
@@ -259,13 +301,14 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     }
     gl->ActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,renderer->textures[1]);
     gl->UseProgram(renderer->program);
-#define LOCATION(name) gl->GetUniformLocation(renderer->program, name)
-    gl->Uniform1i(LOCATION("image"),0); gl->Uniform1i(LOCATION("alpha"),1);
-    gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
-    gl->Uniform2f(LOCATION("source_size"),(float)source->width,(float)source->height);
-    gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
-    gl->Uniform2f(LOCATION("scale"),(float)scale,(float)scale); gl->Uniform1f(LOCATION("opacity"),(float)opacity);
-    gl->Uniform2f(LOCATION("source_offset"),0,0);
+#define LOCATION(name) renderer->uniforms.name
+    gl->Uniform1i(LOCATION(image),0); gl->Uniform1i(LOCATION(alpha),1);
+    gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
+    gl->Uniform2f(LOCATION(source_size),(float)source->width,(float)source->height);
+    gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
+    gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/source->width),(float)(scale*rect.h/source->height)); gl->Uniform1f(LOCATION(opacity),(float)opacity);
+    gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*source->width/rect.w),
+        (float)((rect.y+rect.h*.5-layout.y*.5)*source->height/rect.h));
 #undef LOCATION
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
@@ -282,6 +325,7 @@ void pp_renderer_destroy(PPRenderer *renderer) {
     if (!renderer) return;
     SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
     if (window && renderer->context && SDL_GL_MakeCurrent(window, renderer->context)) {
+        if(renderer->error_callback)renderer->error_callback(NULL,NULL);
         if(renderer->shared) {glFinish();glBindTexture(GL_TEXTURE_2D,0);renderer->shared=NULL;}
         PPGL *gl = &renderer->gl;
         if (renderer->program) gl->DeleteProgram(renderer->program);

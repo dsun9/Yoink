@@ -25,6 +25,46 @@ static uint64_t coverage_sum(const PPFrame *frame) {
         sum += frame->content_alpha[i];
     return sum;
 }
+typedef struct FontLifecycle {
+    PPBytes primary, fallback;
+    SDL_Semaphore *ready, *start, *done;
+    bool ok;
+    uint64_t builds;
+    PPError error;
+} FontLifecycle;
+static int SDLCALL font_lifecycle_worker(void *data) {
+    FontLifecycle *work=data;PPAssets *assets=NULL;
+    PPTextStyle style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}};
+    work->ok=pp_assets_create(&assets,&work->error)&&pp_asset_import(assets,work->primary,PP_ASSET_FONT,&style.primary_asset,&work->error)&&
+        pp_asset_import(assets,work->fallback,PP_ASSET_FONT,&style.fallback_asset,&work->error);
+    for(int i=0;i<32;i++) {
+        SDL_SignalSemaphore(work->ready);SDL_WaitSemaphore(work->start);
+        PPTextResult result={0};
+        if(work->ok)work->ok=pp_text_render_result(assets,"A\xcc\x81\xf0\x9f\x91\x89\nAj",&style,1.5+i%3,&result,NULL,&work->error);
+        pp_frame_destroy(&result.frame);SDL_SignalSemaphore(work->done);
+    }
+    work->builds=pp_assets_source_metrics(assets).raster_builds;pp_assets_destroy(assets);return 0;
+}
+static void test_concurrent_font_lifecycle(void) {
+    PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf"),fallback=read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    FontLifecycle work[2]={{0}};SDL_Thread *thread[2];
+    for(int i=0;i<2;i++) {
+        work[i].primary=(PPBytes){primary.data,primary.size};work[i].fallback=(PPBytes){fallback.data,fallback.size};
+        work[i].ready=SDL_CreateSemaphore(0);work[i].start=SDL_CreateSemaphore(0);work[i].done=SDL_CreateSemaphore(0);
+        CHECK(work[i].ready&&work[i].start&&work[i].done);thread[i]=SDL_CreateThread(font_lifecycle_worker,"font-lifecycle",work+i);CHECK(thread[i]);
+    }
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPTextStyle style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}};
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));CHECK(pp_asset_import(assets,(PPBytes){fallback.data,fallback.size},PP_ASSET_FONT,&style.fallback_asset,&error));
+    for(int iteration=0;iteration<32;iteration++) {
+        for(int i=0;i<2;i++)CHECK(SDL_WaitSemaphoreTimeout(work[i].ready,5000));
+        for(int i=0;i<2;i++)SDL_SignalSemaphore(work[i].start);
+        PPTextResult result={0};CHECK(pp_text_render_result(assets,"A\xcc\x81\xf0\x9f\x91\x89\nAj",&style,1.25+iteration%3,&result,NULL,&error));pp_frame_destroy(&result.frame);
+        for(int i=0;i<2;i++) {CHECK(SDL_WaitSemaphoreTimeout(work[i].done,5000));CHECK(work[i].ok);}
+    }
+    for(int i=0;i<2;i++) {SDL_WaitThread(thread[i],NULL);CHECK(work[i].builds==32);SDL_DestroySemaphore(work[i].ready);SDL_DestroySemaphore(work[i].start);SDL_DestroySemaphore(work[i].done);}
+    CHECK(pp_assets_source_metrics(assets).raster_builds==32);pp_assets_destroy(assets);pp_blob_destroy(&primary);pp_blob_destroy(&fallback);
+    puts("PASS 96 concurrent isolated font open/render/close cycles with separate assets, text engines, faces and output ownership");
+}
 static void test_drawn_artwork_classification(void) {
     PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
     PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
@@ -286,6 +326,16 @@ static void test_text_fallback_and_embedding(void) {
     pp_frame_destroy(&frame);
 }
 int main(int argc, char **argv) {
+    if(argc==2&&!strcmp(argv[1],"font-lifecycle")) {test_concurrent_font_lifecycle();return 0;}
+    if(argc==2&&!strcmp(argv[1],"worker-limits")) {
+        PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPBlob font=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+        PPTextStyle style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={20,80,140,255}};
+        CHECK(pp_asset_import(assets,(PPBytes){font.data,font.size},PP_ASSET_FONT,&style.primary_asset,&error));pp_blob_destroy(&font);
+        char text[4041];size_t index=0;for(int line=0;line<40;line++) {for(int column=0;column<100;column++)text[index++]='A';text[index++]='\n';}text[index]=0;
+        PPTextResult result={0};CHECK(!pp_text_render_result_bounded(assets,text,&style,.01,1024*1024,&result,NULL,&error));
+        CHECK(error.code==PP_ERROR_RESOURCE_LIMIT&&!result.frame.pixels&&!pp_assets_source_metrics(assets).raster_builds);
+        pp_assets_destroy(assets);puts("PASS bounded text rejects excessive canonical glyph scratch before the small destination allocation");return 0;
+    }
     if(argc==2&&!strcmp(argv[1],"canonical")) {test_canonical_raster_geometry();return 0;}
     if(argc==2&&!strcmp(argv[1],"artwork")) {test_drawn_artwork_classification();return 0;}
     if(argc==2&&!strcmp(argv[1],"hybrid")) {test_hybrid_selected_bitmap();return 0;}

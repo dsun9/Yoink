@@ -94,8 +94,8 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                       error))
     return NULL;
   bool direct=false;
-#if defined(_WIN32)
-  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot) || pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot);
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot)||pp_item_snapshot_text_result(pp_scene_get(p->scene,s->id)->snapshot)!=NULL;
 #endif
   if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {
     pp_scene_delete(p->scene, s->id);
@@ -109,6 +109,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
   return s;
 }
 bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
+  pp_scalable_poll(p);
   const PPDisplay *d = p->displays;
   size_t count = p->display_count;
   for (size_t i = 0; i < p->instance_count;) {
@@ -154,6 +155,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);
       double elapsed = fmax(0, now - instance->animation_start), next;
       if (!pp_sprite_present(p,s,instance,display,elapsed,&next,error)) {
+        pp_scalable_cancel(p,s);
         bool native = p->failed_surface == s->surface;
         if (!native && error && error->code == PP_ERROR_RENDER && !pp_snapshot_is_png(instance->snapshot) &&
             !pp_snapshot_is_gif(instance->snapshot) && !pp_item_snapshot_text_result(instance->snapshot) && !s->retained.valid)
@@ -194,7 +196,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
         continue;
       }
       s->next_frame = instance->animation_start + next;
-      if (s->sharp_pending && !s->resizing && s->pose.longest_dip == s->ease_target.longest_dip) {
+      if (s->sharp_pending && !pp_snapshot_is_scalable_text(instance->snapshot) && !s->resizing && s->pose.longest_dip == s->ease_target.longest_dip) {
         p->metrics.sharp_publications++;
         p->metrics.last_sharp_input_timestamp = s->resize_start;
         p->metrics.last_sharp_instance_id = s->id;
@@ -265,6 +267,12 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     s->resize_start = event->timestamp;
     s->resizing = true;
     s->sharp_pending = true;
+    const PPDisplay *d=display_by_id(p->displays,p->display_count,s->display_id);
+    const PPSceneInstance *instance=pp_scene_get(p->scene,s->id);
+    if(d&&instance&&pp_surface_window_id(s->surface)&&!pp_scalable_request(p,s,instance,d,s->ease_target.longest_dip,error)) {
+      if(error)p->notice=*error;pp_scalable_cancel(p,s);s->resizing=false;s->sharp_pending=false;
+      s->interaction.target_pose.longest_dip=s->pose.longest_dip;s->ease_target.longest_dip=s->pose.longest_dip;
+    }
   }
   if (result.command == PP_COMMAND_OPEN_DRAWER)
     p->drawer_request = s->id;
@@ -311,8 +319,10 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
        * Another sprite may own a newer press; its capture must survive. */
       pp_surface_cancel_input(s->surface);
       if (instance->snapshot != s->seen_snapshot) {
+        pp_scalable_cancel(p,s);
         s->replaced = true;
       }
+      else if(instance->pose.longest_dip!=s->pose.longest_dip)pp_scalable_cancel(p,s);
       s->pose = instance->pose;
       s->interaction = (PPInteraction){0};
       s->rotating = s->resizing = s->dragging = false;

@@ -41,6 +41,7 @@ void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   p->gpu.retained_bytes-=r->gpu_bytes;memset(r,0,sizeof(*r));
 }
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *s) {
+  pp_scalable_release(p,s);
   pp_retained_release(p,&s->retained);
   pp_assets_release_raster(p->assets,s->raster_bytes);s->raster_bytes=0;
 }
@@ -110,8 +111,8 @@ native_failure:
 }
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {
-#if defined(_WIN32)
-  bool direct=pp_snapshot_is_png(instance->snapshot) || pp_snapshot_is_gif(instance->snapshot) || pp_snapshot_is_bitmap_text(instance->snapshot);
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  bool direct=pp_snapshot_is_png(instance->snapshot)||pp_snapshot_is_gif(instance->snapshot)||pp_item_snapshot_text_result(instance->snapshot)!=NULL;
 #else
   bool direct=false;
 #endif
@@ -127,10 +128,12 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
     PPSourcePresentation source={NULL,identity,1,pp_item_snapshot_size(instance->snapshot)};
     bool gif=pp_snapshot_is_gif(instance->snapshot);struct PPGifEntry *candidate=NULL;
     bool bitmap=pp_snapshot_is_bitmap_text(instance->snapshot);
+    bool text=pp_snapshot_is_scalable_text(instance->snapshot);
     if(bitmap && identity==s->retained.content_id) source.source_rect=s->retained.source_rect;
-    if(bitmap && identity!=s->retained.content_id && !pp_retained_bitmap_text_source(instance->snapshot,&source,error))ok=false;
+    if(text&&!pp_scalable_source(p,s,instance,display,&source,error))ok=false;
+    else if(bitmap && identity!=s->retained.content_id && !pp_retained_bitmap_text_source(instance->snapshot,&source,error))ok=false;
     else if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
-    else if(!gif && !bitmap && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
+    else if(!gif && !bitmap && !text && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
       if(!gif && source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
       ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);if(!gif)*next=HUGE_VAL;
@@ -141,6 +144,7 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
       pp_surface_hide(surface);p->failed_surface=surface;
     }
     if(ok) {
+      if(!pp_snapshot_is_scalable_text(instance->snapshot)&&s->scalable_bytes)pp_scalable_release(p,s);
       pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
     }
