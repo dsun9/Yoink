@@ -52,9 +52,13 @@ static void quality(uint64_t id,const PPTextResult *source) {
   CHECK(GetForegroundWindow()==(HWND)receiver->window);
   PPSprite *sprite=pp_sprites_find(presenter,id);CHECK(sprite);RECT rectangle;CHECK(GetWindowRect(native(sprite->surface),&rectangle));
   const PPDisplay *display=pp_display_at(displays,display_count,sprite->pose.center);CHECK(display);
-  PPRect source_rect=sprite->retained.source_rect;PPVec2 layout=source->layout_size;double density=display->drawable_pixels_per_dip;
-  double drawable_per_desktop=density/display->desktop_units_per_dip,scale=sprite->pose.longest_dip*density/fmax(layout.x,layout.y);
-  double angle=sprite->pose.angle_deg*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
+  PPRect source_rect={source->layout_origin.x-source->raster_origin_px.x/source->raster_density,
+    source->layout_origin.y-source->raster_origin_px.y/source->raster_density,
+    source->frame.width/source->raster_density,source->frame.height/source->raster_density};
+  PPVec2 layout=source->layout_size;double density=display->drawable_pixels_per_dip;
+  PPPose expected_pose=pp_scene_get(scene,id)->pose;
+  double drawable_per_desktop=density/display->desktop_units_per_dip,scale=expected_pose.longest_dip*density/fmax(layout.x,layout.y);
+  double angle=expected_pose.angle_deg*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
   SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(sprite->surface));int width,height;CHECK(SDL_GetWindowSizeInPixels(window,&width,&height));
   HDC screen=GetDC(NULL);CHECK(screen);HDC dc=CreateCompatibleDC(screen);CHECK(dc);
   int capture_width=rectangle.right-rectangle.left,capture_height=rectangle.bottom-rectangle.top;
@@ -76,7 +80,7 @@ static void quality(uint64_t id,const PPTextResult *source) {
         const uint8_t *pixels=source->frame.pixels;size_t stride=source->frame.stride;
         double top=pixels[(size_t)clamp(y,source->frame.height)*stride+clamp(x,source->frame.width)*4+channel]*(1-fx)+pixels[(size_t)clamp(y,source->frame.height)*stride+clamp(x+1,source->frame.width)*4+channel]*fx;
         double bottom=pixels[(size_t)clamp(y+1,source->frame.height)*stride+clamp(x,source->frame.width)*4+channel]*(1-fx)+pixels[(size_t)clamp(y+1,source->frame.height)*stride+clamp(x+1,source->frame.width)*4+channel]*fx;
-        rgba[channel]=(top*(1-fy)+bottom*fy)*sprite->pose.opacity;
+        rgba[channel]=(top*(1-fy)+bottom*fy)*expected_pose.opacity;
       }
     }
     COLORREF pixel=GetPixel(dc,px-rectangle.left,py-rectangle.top);CHECK(pixel!=CLR_INVALID);int actual[3]={GetRValue(pixel),GetGValue(pixel),GetBValue(pixel)};
@@ -106,7 +110,28 @@ int main(int argc,char **argv) {
   PPSprite *created=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){{500,400},120,0,1},now(),&error);CHECK(created);uint64_t id=created->id;pump();PPSurface *surface=pp_sprites_find(presenter,id)->surface;HWND window=native(surface);
   const PPTextResult *source=NULL;API(pp_item_snapshot_bitmap_source(pp_scene_get(scene,id)->snapshot,&source,&error));CHECK(source->frame.width==136&&source->frame.height==128&&!source->frame.content_alpha);
   printf("BITMAP native density=%.2f source=136x128 canonical=120x113 retained_GPU=%zu\n",pp_display_at(displays,display_count,(PPVec2){500,400})->drawable_pixels_per_dip,pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
-  quality(id,source);PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(presenter);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;pump();unchanged(warm,builds);
+  quality(id,source);
+  PPItemSnapshot *original=pp_item_snapshot_retain(pp_scene_get(scene,id)->snapshot);
+  for(int change=0;change<2;change++) {
+    item.id=item_id;item.text_style.font_size_dip=change?96:192;
+    API(pp_project_edit_item(project,item_id,&item,&error));
+    PPItemSnapshot *replacement=pp_project_snapshot(project,item_id);const PPTextResult *fresh=NULL;
+    API(pp_item_snapshot_bitmap_source(replacement,&fresh,&error));
+    CHECK(fresh->frame.width==source->frame.width&&fresh->frame.height==source->frame.height&&
+      fresh->frame.stride==source->frame.stride&&!memcmp(fresh->frame.pixels,source->frame.pixels,source->frame.stride*source->frame.height));
+    for(int rotation=0;rotation<2;rotation++) {
+      PPPose preserved={{500,400},384,rotation?17.25:0,.5};pose(id,preserved);
+      PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(presenter);
+      API(pp_scene_replace_snapshot(scene,id,replacement,now(),&error));pump();
+      CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&preserved,sizeof(preserved)));
+      CHECK(pp_anchor_presenter_renderer_metrics(presenter).source_uploads==before.source_uploads);
+      quality(id,fresh);
+      printf("REPLACEMENT bitmap font=%.0f rotation=%.2f pose_preserved=1 original_source_pixels_equal=1 unnecessary_uploads=0\n",item.text_style.font_size_dip,preserved.angle_deg);
+    }
+    source=fresh;pp_item_snapshot_release(replacement);
+  }
+  pp_item_snapshot_release(original);pose(id,(PPPose){{500,400},120,0,1});
+  PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(presenter);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;pump();unchanged(warm,builds);
   unsigned before=downs;LONG below=receiver->clicks;click(500,400);CHECK(downs==before+1&&receiver->clicks==below&&GetForegroundWindow()==(HWND)receiver->window);
   RECT rectangle;CHECK(GetWindowRect(window,&rectangle));click(rectangle.right+2,400);CHECK(receiver->clicks==below+1);
   pose(id,(PPPose){{520,400},120,0,1});CHECK(native(surface)==window);unchanged(warm,builds);

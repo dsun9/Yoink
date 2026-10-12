@@ -20,10 +20,6 @@ bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance 
   bool ok=pp_content_request(s->content,instance->snapshot,longest,display->drawable_pixels_per_dip,error);
   state(p,s);return ok;
 }
-bool pp_scalable_defer_if_busy(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
-    const PPDisplay *display,double longest) {
-  PPError error={0};return pp_scalable_request(p,s,instance,display,longest,&error)&&s->raster_retry;
-}
 void pp_scalable_cancel(PPAnchorPresenter *p,PPSprite *s) {
   (void)p;pp_content_cancel(s->content);s->raster_requested=s->raster_retry=false;s->raster_serial++;
 }

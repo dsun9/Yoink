@@ -5,6 +5,3 @@ bool pp_snapshot_is_svg(const PPItemSnapshot *snapshot) {
   bool svg=asset&&pp_asset_kind(asset)==PP_ASSET_SVG;pp_asset_release(asset);return svg;
 }
 bool pp_snapshot_is_scalable(const PPItemSnapshot *snapshot){return pp_snapshot_is_scalable_text(snapshot)||pp_snapshot_is_svg(snapshot);}
-bool pp_svg_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,const PPDisplay *display,double longest,PPError *error) {
-  return pp_scalable_request(p,s,instance,display,longest,error);
-}
