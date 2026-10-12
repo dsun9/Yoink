@@ -80,6 +80,21 @@ int main(void) {
     CHECK(!pp_item_snapshot_text_result(mixed_snapshot)->artwork.bitmap_only&&pp_assets_source_metrics(assets).raster_builds==builds);
     CHECK(pp_item_snapshot_frame(mixed_snapshot,0,2.25,&compatibility,&next,&error)&&compatibility->width>120);
     pp_item_snapshot_release(mixed_snapshot);
+    PPItem bearing={.kind=PP_ITEM_TEXT,.text="C",.opacity=1,.text_style={.requested_family="Pointy Hybrid",.font_size_dip=16,.color={0,255,0,255}}};
+    bearing.text_style.primary_asset=import_font(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");PPItemSnapshot *overhang=NULL;
+    CHECK(pp_item_snapshot_create(assets,&bearing,&overhang,&error));const PPTextResult *bearing_source=NULL;
+    CHECK(pp_item_snapshot_bitmap_source(overhang,&bearing_source,&error));
+    /* SDL_ttf already includes the negative bearing and raised top in its
+     * draw placement. The 16-pixel advance grows by 3 left and 2 above. */
+    CHECK(bearing_source->artwork.bitmap_only&&bearing_source->layout_origin.x==0&&bearing_source->layout_origin.y==0);
+    CHECK(bearing_source->frame.width==19&&bearing_source->frame.height==22);
+    const uint8_t edge[]={0,128,0,128},solid[]={0,255,0,255},hole[]={0,0,0,0};
+    CHECK(!memcmp(bearing_source->frame.pixels,edge,4));
+    CHECK(!memcmp(bearing_source->frame.pixels+bearing_source->frame.stride+4,solid,4));
+    CHECK(!memcmp(bearing_source->frame.pixels+bearing_source->frame.stride*6+6*4,hole,4));
+    CHECK(pp_item_snapshot_frame(overhang,0,6.125,&compatibility,&next,&error));
+    CHECK(pp_item_snapshot_bitmap_source(overhang,&again,&error)&&again==bearing_source&&again->frame.width==19&&again->frame.height==22);
+    pp_item_snapshot_release(overhang);
     pp_item_snapshot_release(retained);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap source retains exact native premultiplied detail, clusters/line placement, immutable ownership, bounded candidate overlap, recovery and mixed-outline exclusion");
     return 0;
