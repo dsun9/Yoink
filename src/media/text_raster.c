@@ -195,9 +195,9 @@ static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double s
     return true;
 }
 
-bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
+static bool raster(TTF_Text *text, const PPTextRasterFont fonts[2],
         double shaping_size, double requested_size, const uint8_t color[4],
-        PPFrame *out, PPVec2 *origin_px, PPError *error) {
+        size_t max_bytes,PPFrame *out, PPVec2 *extent,PPVec2 *origin_px, PPError *error) {
     FT_Library library = NULL;
     RasterFont raster_fonts[2] = {0};
     bool ok = false;
@@ -250,6 +250,11 @@ bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
     if (!pp_media_size(right - left, bottom - top, 1, &bytes, error)) goto done;
     int origin_x = -left, origin_y = -top;
     if (origin_px) *origin_px = (PPVec2){origin_x, origin_y};
+    if(extent) *extent=(PPVec2){right-left,bottom-top};
+    if(!out) {ok=true;goto done;}
+    if((size_t)(right-left)*(bottom-top)>max_bytes/5) {
+        pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Text candidate exceeds reserved worker raster budget");goto done;
+    }
     out->width = right - left;
     out->height = bottom - top;
     out->stride = (size_t)out->width * 4;
@@ -279,8 +284,21 @@ done:
         if (raster_fonts[i].native) FT_Done_Face(raster_fonts[i].native);
     }
     FT_Done_FreeType(library);
-    if (!ok) pp_frame_destroy(out);
+    if (!ok && out) pp_frame_destroy(out);
     return ok;
+}
+bool pp_text_raster_measure(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,PPVec2 *extent,PPVec2 *origin,PPError *error) {
+    return raster(text,fonts,shaping_size,requested_size,NULL,SIZE_MAX,NULL,extent,origin,error);
+}
+bool pp_text_raster_bounded(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,const uint8_t color[4],size_t max_bytes,
+        PPFrame *out,PPVec2 *origin,PPError *error) {
+    return raster(text,fonts,shaping_size,requested_size,color,max_bytes,out,NULL,origin,error);
+}
+bool pp_text_raster_origin(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,const uint8_t color[4],PPFrame *out,PPVec2 *origin,PPError *error) {
+    return pp_text_raster_bounded(text,fonts,shaping_size,requested_size,color,SIZE_MAX,out,origin,error);
 }
 
 bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],

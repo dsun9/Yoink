@@ -21,6 +21,7 @@ typedef struct PPSourcePresentation {
   uint64_t content_id, source_revision;
   PPVec2 layout;
   bool visual_alpha;
+  PPRect source_rect; /* Source texels mapped into canonical local DIPs. Zero means full layout. */
 } PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
@@ -33,6 +34,7 @@ typedef struct PPRetainedPresentation {
   PPRect bounds;
   double density, animation_start;
   bool visible, valid, visual_alpha;
+  PPRect source_rect;
 } PPRetainedPresentation;
 typedef struct PPSprite {
   PPSurface *surface;
