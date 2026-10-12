@@ -2,6 +2,15 @@
 #define POINTY_RENDER_H
 #include "pointy/types.h"
 typedef struct PPRenderer PPRenderer;
+typedef struct PPSharedTexture PPSharedTexture;
+struct PPFrame;
+/* Explicit context group owner. It outlives joined renderers and textures.
+ * All operations stay on the owning application thread. */
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error);
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t window_id,PPRenderer *owner,PPError *error);
+bool pp_shared_texture_create(PPRenderer *owner,const struct PPFrame *frame,PPSharedTexture **out,PPError *error);
+bool pp_renderer_bind_shared(PPRenderer *renderer,PPSharedTexture *texture,uint64_t content_id,uint64_t revision,PPError *error);
+void pp_shared_texture_destroy(PPSharedTexture *texture);
 typedef struct PPRendererMetrics {
     uint64_t source_uploads, transform_draws, readbacks;
 } PPRendererMetrics;
@@ -27,6 +36,10 @@ bool pp_renderer_upload_source(PPRenderer *renderer, const PPFrame *source,
  * raster dimensions. Window drawable dimensions must match its extent. */
 bool pp_renderer_draw(PPRenderer *renderer, PPVec2 layout_size, double longest_dip,
     double angle_deg, double opacity, double pixels_per_dip, PPError *error);
+/* Maps the source into a canonical local rectangle while keeping pose center,
+ * layout aspect and size fixed. Bounds include overhang beyond that layout. */
+bool pp_renderer_draw_source(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
+    double longest_dip, double angle_deg, double opacity, double pixels_per_dip, PPError *error);
 /* Waits for this context's submitted GPU work. This is a diagnostic completion
  * boundary, not a visible-compositor frame-rate guarantee. */
 bool pp_renderer_complete(PPRenderer *renderer, PPError *error);

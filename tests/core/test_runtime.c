@@ -18,6 +18,7 @@ struct PPSurface {
   uint32_t window_id;
 };
 struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
+struct PPSharedTexture {const PPFrame *frame;};
 static uint32_t direct_window_serial;
 static unsigned cpu_transforms;
 static PPSurface *surfaces;
@@ -116,6 +117,16 @@ bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) 
     for(PPSurface *s=surfaces;s;s=s->next)if(s->window_id==id)(*out)->surface=s;
     CHECK((*out)->surface);return true;
 }
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));return *out!=NULL;}
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {(void)owner;return pp_renderer_create_for_window(out,id,error);}
+bool pp_shared_texture_create(PPRenderer *owner,const PPFrame *frame,PPSharedTexture **out,PPError *error) {
+    (void)error;*out=malloc(sizeof(**out));CHECK(*out);(*out)->frame=frame;owner->metrics.source_uploads++;return true;
+}
+bool pp_renderer_bind_shared(PPRenderer *r,PPSharedTexture *texture,uint64_t id,uint64_t revision,PPError *error) {
+    (void)error;r->content_id=id;r->revision=revision;r->surface->source_width=texture->frame->width;
+    r->surface->red=texture->frame->pixels[0];r->surface->blue=texture->frame->pixels[2];return true;
+}
+void pp_shared_texture_destroy(PPSharedTexture *texture){free(texture);}
 bool pp_renderer_upload_source(PPRenderer *r,const PPFrame *frame,uint64_t id,uint64_t revision,PPError *error) {
     (void)error;if(r->content_id==id&&r->revision==revision)return true;
     r->surface->source_width=frame->width;r->surface->red=frame->pixels[0];r->surface->blue=frame->pixels[2];
@@ -125,6 +136,9 @@ bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,doubl
     (void)layout;(void)size;(void)angle;(void)opacity;(void)density;
     if(r->surface==fail_surface){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct presentation failure"};return false;}
     r->metrics.transform_draws++;return true;
+}
+bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect source_rect,double size,double angle,double opacity,double density,PPError *error) {
+  (void)source_rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
 }
 bool pp_renderer_transform(PPRenderer *r, const PPFrame *source, double longest,
                            double angle, double opacity, double scale,

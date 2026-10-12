@@ -25,6 +25,81 @@ static uint64_t coverage_sum(const PPFrame *frame) {
         sum += frame->content_alpha[i];
     return sum;
 }
+static void test_drawn_artwork_classification(void) {
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPBlob fallback=read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    PPTextStyle style={.font_size_dip=96,.color={0,0,0,255}};
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    CHECK(pp_asset_import(assets,(PPBytes){fallback.data,fallback.size},PP_ASSET_FONT,&style.fallback_asset,&error));
+    pp_blob_destroy(&primary);pp_blob_destroy(&fallback);
+    PPFrame frame={0};PPTextDiagnostics diagnostics;
+    CHECK(pp_text_render(assets,"\xf0\x9f\x91\x89",&style,1,&frame,&diagnostics,&error));
+    CHECK(diagnostics.artwork.bitmap_only&&diagnostics.artwork.bitmap_glyphs==1);
+    CHECK(!diagnostics.artwork.scalable_glyphs&&!diagnostics.artwork.unknown_glyphs);
+    CHECK(fabs(diagnostics.artwork.useful_pixels_per_dip-109.0/96)<1e-9);
+    pp_frame_destroy(&frame);
+    const char *texts[]={"A","A\xf0\x9f\x91\x89","\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb","\xf0\x9f\x91\x89\n\xf0\x9f\x91\x89","A\xcc\x81"};
+    const size_t bitmaps[]={0,1,1,2,0},scalable[]={1,1,0,0,2};
+    for(size_t i=0;i<sizeof(texts)/sizeof(texts[0]);i++) {
+        CHECK(pp_text_render(assets,texts[i],&style,1,&frame,&diagnostics,&error));
+        CHECK(diagnostics.artwork.bitmap_glyphs==bitmaps[i]&&diagnostics.artwork.scalable_glyphs==scalable[i]);
+        CHECK(!diagnostics.artwork.unknown_glyphs&&diagnostics.artwork.bitmap_only==(i==2||i==3));
+        pp_frame_destroy(&frame);
+    }
+    primary=read_font(PP_FONT_FIXTURES "/PointyDefaultFonts.ttc");
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    pp_blob_destroy(&primary);style.primary_face=1;
+    CHECK(pp_text_render(assets,"\xf0\x9f\x91\x89",&style,1,&frame,&diagnostics,&error));
+    CHECK(diagnostics.artwork.scalable_glyphs==1&&!diagnostics.artwork.bitmap_only&&!diagnostics.artwork.bitmap_glyphs);
+    pp_frame_destroy(&frame);pp_assets_destroy(assets);
+    puts("PASS drawn bitmap hand classification and selected useful strike");
+}
+static void test_hybrid_selected_bitmap(void) {
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPBlob bytes=read_font(PP_FONT_FIXTURES "/PointyHybrid.ttf");
+    PPFontInfo info;CHECK(pp_font_inspect((PPBytes){bytes.data,bytes.size},0,&info,&error));
+    CHECK(info.scalable&&info.bitmap_strikes&&info.embeddable&&!info.bitmap_only);
+    PPTextStyle style={.font_size_dip=16,.color={0,255,0,255}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes.data,bytes.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    pp_blob_destroy(&bytes);PPFrame frame={0};PPTextDiagnostics diagnostics;
+    CHECK(pp_text_render(assets,"B",&style,1,&frame,&diagnostics,&error));
+    CHECK(diagnostics.artwork.bitmap_only&&diagnostics.artwork.bitmap_glyphs==1&&!diagnostics.artwork.scalable_glyphs);
+    bool color=false;
+    for(size_t i=0;i<(size_t)frame.width*frame.height;i++) if(frame.pixels[i*4+3]>0&&frame.pixels[i*4+1]>0&&!frame.pixels[i*4]&&!frame.pixels[i*4+2]) color=true;
+    CHECK(color);pp_frame_destroy(&frame);
+    CHECK(pp_text_render(assets,"A",&style,1,&frame,&diagnostics,&error));
+    CHECK(!diagnostics.artwork.bitmap_only&&diagnostics.artwork.scalable_glyphs==1&&!diagnostics.artwork.bitmap_glyphs);pp_frame_destroy(&frame);
+    CHECK(pp_text_render(assets,"AB",&style,1,&frame,&diagnostics,&error));
+    CHECK(!diagnostics.artwork.bitmap_only&&diagnostics.artwork.scalable_glyphs==1&&diagnostics.artwork.bitmap_glyphs==1);
+    pp_frame_destroy(&frame);
+    PPTextResult enlarged={0};
+    CHECK(pp_text_render_result(assets,"B",&style,6,&enlarged,&diagnostics,&error));
+    CHECK(enlarged.artwork.bitmap_only&&enlarged.frame.width>=96);
+    CHECK(visible(&enlarged.frame)>6000);
+    pp_frame_destroy(&enlarged.frame);pp_assets_destroy(assets);
+    puts("PASS hybrid face classifies selected bitmap, outline and mixed glyphs independently");
+}
+static void test_canonical_raster_geometry(void) {
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPBlob fallback=read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    PPTextStyle style={.font_size_dip=96,.color={30,120,230,210}};
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    CHECK(pp_asset_import(assets,(PPBytes){fallback.data,fallback.size},PP_ASSET_FONT,&style.fallback_asset,&error));
+    pp_blob_destroy(&primary);pp_blob_destroy(&fallback);
+    PPTextResult canonical={0},sharp={0};
+    CHECK(pp_text_render_result(assets,"A\xcc\x81",&style,1,&canonical,NULL,&error));
+    CHECK(pp_text_render_result(assets,"A\xcc\x81",&style,1.5,&sharp,NULL,&error));
+    CHECK(canonical.layout_size.x==58 && canonical.layout_size.y==122 && canonical.layout_origin.y==1);
+    CHECK(sharp.layout_size.x==canonical.layout_size.x && sharp.layout_size.y==canonical.layout_size.y);
+    CHECK(sharp.layout_origin.y==canonical.layout_origin.y && sharp.raster_origin_px.y==0 && sharp.raster_density==1.5);
+    PPFrame fresh={0};CHECK(pp_text_render(assets,"A\xcc\x81",&style,1.5,&fresh,NULL,&error));
+    CHECK(fresh.width==sharp.frame.width&&fresh.height==sharp.frame.height);
+    CHECK(!memcmp(fresh.pixels,sharp.frame.pixels,fresh.stride*fresh.height));
+    pp_frame_destroy(&fresh);pp_frame_destroy(&canonical.frame);pp_frame_destroy(&sharp.frame);pp_assets_destroy(assets);
+    puts("PASS canonical text padding/baseline stays fixed across requested native resolution");
+}
 
 static void test_whitespace_validation(void) {
     PPAssets *assets = NULL;
@@ -211,6 +286,9 @@ static void test_text_fallback_and_embedding(void) {
     pp_frame_destroy(&frame);
 }
 int main(int argc, char **argv) {
+    if(argc==2&&!strcmp(argv[1],"canonical")) {test_canonical_raster_geometry();return 0;}
+    if(argc==2&&!strcmp(argv[1],"artwork")) {test_drawn_artwork_classification();return 0;}
+    if(argc==2&&!strcmp(argv[1],"hybrid")) {test_hybrid_selected_bitmap();return 0;}
     if (argc == 2 && !strcmp(argv[1], "whitespace")) {
         test_whitespace_validation();
         return 0;

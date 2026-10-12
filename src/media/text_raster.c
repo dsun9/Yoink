@@ -13,12 +13,65 @@ typedef struct RasterFont {
     FT_Face base, native;
 } RasterFont;
 
+bool pp_text_artwork(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double canonical_font_size,PPTextArtwork *out,PPError *error) {
+    FT_Library library=NULL;
+    FT_Face faces[2]={0};
+    *out=(PPTextArtwork){0};
+    if(FT_Init_FreeType(&library))
+        return pp_media_error(error,PP_ERROR_MEMORY,"Could not initialize artwork inspection");
+    bool ok=false;
+    for(int i=0;i<2;i++) {
+        if(!fonts[i].shaped_font) continue;
+        if(FT_New_Memory_Face(library,fonts[i].bytes.data,(FT_Long)fonts[i].bytes.size,fonts[i].face_index,&faces[i]))
+            goto failed_face;
+        /* Match pinned SDL_ttf's size/strike choice. Loading with COLOR before
+         * rasterization preserves embedded colored bitmap preference in a
+         * hybrid face; a monochrome outline is not a replacement source. */
+        if(FT_IS_SCALABLE(faces[i])) {
+            if(FT_Set_Char_Size(faces[i],0,(FT_F26Dot6)lround(shaping_size*64),72,72)) goto failed_face;
+        } else if(faces[i]->num_fixed_sizes<=0 ||
+            FT_Select_Size(faces[i],SDL_min((int)shaping_size,faces[i]->num_fixed_sizes-1))) goto failed_face;
+    }
+    for(int i=0;i<text->internal->num_ops;i++) {
+        const TTF_DrawOperation *op=&text->internal->ops[i];
+        if(op->cmd==TTF_DRAW_COMMAND_NOOP) continue;
+        if(op->cmd!=TTF_DRAW_COMMAND_COPY) {out->unknown_glyphs++;continue;}
+        if(op->copy.src.w<=0 || op->copy.src.h<=0 || op->copy.dst.w<=0 || op->copy.dst.h<=0) continue;
+        int index=op->copy.glyph_font==fonts[0].shaped_font?0:op->copy.glyph_font==fonts[1].shaped_font?1:-1;
+        FT_Face face=index>=0?faces[index]:NULL;
+        if(!face || FT_Load_Glyph(face,op->copy.glyph_index,FT_LOAD_DEFAULT|FT_LOAD_COLOR)) {
+            out->unknown_glyphs++;continue;
+        }
+        FT_LayerIterator layers={0};FT_UInt layer,palette;
+        bool color_layers=FT_Get_Color_Glyph_Layer(face,op->copy.glyph_index,&layer,&palette,&layers)!=0;
+        if(face->glyph->format==FT_GLYPH_FORMAT_BITMAP) out->bitmap_glyphs++;
+        else if(face->glyph->format==FT_GLYPH_FORMAT_OUTLINE || color_layers) out->scalable_glyphs++;
+        else out->unknown_glyphs++;
+    }
+    out->bitmap_only=out->bitmap_glyphs>0&&!out->scalable_glyphs&&!out->unknown_glyphs;
+    if(out->bitmap_only) out->useful_pixels_per_dip=shaping_size/canonical_font_size;
+    ok=true;goto done;
+failed_face:
+    pp_media_error(error,PP_ERROR_FORMAT,"Could not inspect selected glyph artwork");
+done:
+    for(int i=0;i<2;i++) if(faces[i]) FT_Done_Face(faces[i]);
+    FT_Done_FreeType(library);return ok;
+}
+
 static int floor26(FT_Pos value) { return (int)floor(value / 64.0); }
 static int left_bearing(FT_GlyphSlot slot) {
     return slot->format == FT_GLYPH_FORMAT_BITMAP ? slot->bitmap_left : floor26(slot->metrics.horiBearingX);
 }
 static int top_bearing(FT_GlyphSlot slot) {
     return slot->format == FT_GLYPH_FORMAT_BITMAP ? slot->bitmap_top : floor26(slot->metrics.horiBearingY);
+}
+static bool bitmap_operation(RasterFont *font,const TTF_CopyOperation *op) {
+    if(!font->native) return true;
+    /* A scalable face can contain a selected embedded bitmap. Keep that
+     * shaped source instead of loading its empty/different native outline. */
+    return !FT_Load_Glyph(font->base,op->glyph_index,FT_LOAD_DEFAULT|FT_LOAD_COLOR) &&
+        font->base->glyph->format==FT_GLYPH_FORMAT_BITMAP;
 }
 
 static void over(PPFrame *out, int x, int y, const uint8_t rgba[4]) {
@@ -149,9 +202,9 @@ static bool native_glyph(RasterFont *font, const TTF_CopyOperation *op, double s
     return true;
 }
 
-bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
+static bool raster(TTF_Text *text, const PPTextRasterFont fonts[2],
         double shaping_size, double requested_size, const uint8_t color[4],
-        PPFrame *out, PPVec2 *origin_px, PPError *error) {
+        size_t max_bytes,PPFrame *out, PPVec2 *extent,PPVec2 *origin_px, PPError *error) {
     FT_Library library = NULL;
     RasterFont raster_fonts[2] = {0};
     bool ok = false;
@@ -184,7 +237,7 @@ bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
         RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
         int x, y, glyph_right, glyph_bottom;
-        if (font->native) {
+        if (!bitmap_operation(font,&op->copy)) {
             if (!native_glyph(font, &op->copy, scale, &x, &y, error)) goto done;
             FT_Bitmap *bitmap = &font->native->glyph->bitmap;
             if (!bitmap->width || !bitmap->rows) continue;
@@ -204,6 +257,11 @@ bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
     if (!pp_media_size(right - left, bottom - top, 1, &bytes, error)) goto done;
     int origin_x = -left, origin_y = -top;
     if (origin_px) *origin_px = (PPVec2){origin_x, origin_y};
+    if(extent) *extent=(PPVec2){right-left,bottom-top};
+    if(!out) {ok=true;goto done;}
+    if((size_t)(right-left)*(bottom-top)>max_bytes/5) {
+        pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Text candidate exceeds reserved worker raster budget");goto done;
+    }
     out->width = right - left;
     out->height = bottom - top;
     out->stride = (size_t)out->width * 4;
@@ -218,7 +276,7 @@ bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
         const TTF_DrawOperation *op = &text->internal->ops[i];
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
         RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
-        if (!font->native) {
+        if (bitmap_operation(font,&op->copy)) {
             if (!draw_bitmap(out, &op->copy, scale, origin_x, origin_y, color, error)) goto done;
             continue;
         }
@@ -233,8 +291,21 @@ done:
         if (raster_fonts[i].native) FT_Done_Face(raster_fonts[i].native);
     }
     FT_Done_FreeType(library);
-    if (!ok) pp_frame_destroy(out);
+    if (!ok && out) pp_frame_destroy(out);
     return ok;
+}
+bool pp_text_raster_measure(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,PPVec2 *extent,PPVec2 *origin,PPError *error) {
+    return raster(text,fonts,shaping_size,requested_size,NULL,SIZE_MAX,NULL,extent,origin,error);
+}
+bool pp_text_raster_bounded(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,const uint8_t color[4],size_t max_bytes,
+        PPFrame *out,PPVec2 *origin,PPError *error) {
+    return raster(text,fonts,shaping_size,requested_size,color,max_bytes,out,NULL,origin,error);
+}
+bool pp_text_raster_origin(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,const uint8_t color[4],PPFrame *out,PPVec2 *origin,PPError *error) {
+    return pp_text_raster_bounded(text,fonts,shaping_size,requested_size,color,SIZE_MAX,out,origin,error);
 }
 
 bool pp_text_raster(TTF_Text *text, const PPTextRasterFont fonts[2],

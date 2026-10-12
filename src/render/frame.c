@@ -13,7 +13,10 @@ struct PPRenderer {
     int source_width, source_height;
     uint64_t content_id, revision;
     PPRendererMetrics metrics;
+    PPRenderer *group;
+    PPSharedTexture *shared;
 };
+struct PPSharedTexture {PPRenderer *owner;GLuint name;int width,height;};
 static bool error_set(PPError *error, int code, const char *message) {
     if (error) { error->code = code; snprintf(error->message, sizeof(error->message), "%s", message); }
     return false;
@@ -30,29 +33,37 @@ static const char *fragment_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform sampler2D alpha;"
     "uniform vec2 destination_size; uniform vec2 source_size;"
-    "uniform vec2 rotation; uniform vec2 scale; uniform float opacity;"
+    "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
     "out vec4 color; out vec4 coverage;"
     "void main() {"
     "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
-    "vec2 uv=s/source_size+0.5;"
+    "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
-static bool create(PPRenderer **out, uint32_t window_id, PPError *error) {
+static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool texture_owner, PPError *error) {
     if (!out) return error_set(error, PP_ERROR_ARGUMENT, "Missing renderer output");
     *out = NULL;
     if (!window_id && !SDL_InitSubSystem(SDL_INIT_VIDEO)) return error_set(error, PP_ERROR_RENDER, SDL_GetError());
     PPRenderer *renderer = calloc(1, sizeof(*renderer));
     if (!renderer) { if(!window_id) SDL_QuitSubSystem(SDL_INIT_VIDEO); return error_set(error, PP_ERROR_MEMORY, "Cannot allocate renderer"); }
     renderer->owns_window=!window_id;
+    renderer->group=share?share:renderer;
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3); SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     if(!window_id) {
-        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 0);
+        SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, texture_owner?1:0);
+        if(texture_owner) {SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE,8);SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,0);SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE,0);}
         renderer->window = SDL_CreateWindow("PointyPointer renderer", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     } else renderer->window=SDL_GetWindowFromID(window_id);
     if(renderer->window) renderer->window_id=SDL_GetWindowID(renderer->window);
+    int previous_share=0;SDL_GL_GetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,&previous_share);
+    if(share && !SDL_GL_MakeCurrent(share->window,share->context)) {
+        error_set(error,PP_ERROR_RENDER,SDL_GetError());pp_renderer_destroy(renderer);return false;
+    }
+    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,share?1:0);
     if (renderer->window) renderer->context = SDL_GL_CreateContext(renderer->window);
+    SDL_GL_SetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,previous_share);
     if (!renderer->context || !SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
         error_set(error, PP_ERROR_RENDER, SDL_GetError()); pp_renderer_destroy(renderer); return false;
     }
@@ -65,11 +76,16 @@ static bool create(PPRenderer **out, uint32_t window_id, PPError *error) {
     if (glGetError() != GL_NO_ERROR) { error_set(error,PP_ERROR_RENDER,"Cannot allocate GL frame resources"); pp_renderer_destroy(renderer); return false; }
     *out = renderer; return true;
 }
-bool pp_renderer_create(PPRenderer **out, PPError *error) {return create(out,0,error);}
+bool pp_renderer_create(PPRenderer **out, PPError *error) {return create(out,0,NULL,false,error);}
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {return create(out,0,NULL,true,error);}
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {
+    if(!owner || owner->group!=owner || !id) return error_set(error,PP_ERROR_ARGUMENT,"Missing texture share group");
+    return create(out,id,owner,false,error);
+}
 bool pp_renderer_create_for_window(PPRenderer **out, uint32_t id, PPError *error) {
     if(out) *out=NULL;
     if(!id || !SDL_GetWindowFromID(id)) return error_set(error,PP_ERROR_ARGUMENT,"Missing direct OpenGL window");
-    return create(out,id,error);
+    return create(out,id,NULL,false,error);
 }
 PPRendererMetrics pp_renderer_metrics(const PPRenderer *renderer) {
     return renderer?renderer->metrics:(PPRendererMetrics){0};
@@ -90,6 +106,46 @@ static void texture(GLuint texture, GLint format, GLenum data_format, int w, int
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE); glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, format, w, h, 0, data_format, GL_UNSIGNED_BYTE, data);
+}
+bool pp_shared_texture_create(PPRenderer *owner,const PPFrame *frame,PPSharedTexture **out,PPError *error) {
+    if(out)*out=NULL;
+    if(!out || !owner || owner->group!=owner || !frame || !frame->pixels || frame->width<=0 || frame->height<=0 ||
+       frame->width>8192 || frame->height>8192 || frame->stride<(size_t)frame->width*4 || frame->stride%4)
+        return error_set(error,PP_ERROR_ARGUMENT,"Invalid immutable shared frame");
+    PPSharedTexture *candidate=calloc(1,sizeof(*candidate));
+    if(!candidate)return error_set(error,PP_ERROR_MEMORY,"Cannot allocate shared frame owner");
+    if(!current(owner,error)){free(candidate);return false;}
+    glGenTextures(1,&candidate->name);owner->gl.ActiveTexture(GL_TEXTURE0);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(frame->stride/4));
+    texture(candidate->name,GL_RGBA8,GL_RGBA,frame->width,frame->height,frame->pixels);
+    glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+    /* Immutable publication waits once on a cache miss. Consumers subsequently
+     * bind the completed object in their own context; no shared mutable frame. */
+    glFinish();GLenum failure=glGetError();
+    if(failure!=GL_NO_ERROR){glDeleteTextures(1,&candidate->name);free(candidate);return error_set(error,failure==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot publish shared frame texture");}
+    candidate->owner=owner;candidate->width=frame->width;candidate->height=frame->height;
+    owner->metrics.source_uploads++;*out=candidate;return true;
+}
+bool pp_renderer_bind_shared(PPRenderer *renderer,PPSharedTexture *source,uint64_t id,uint64_t revision,PPError *error) {
+    if(!renderer || !source || renderer->group!=source->owner || !id || !revision)
+        return error_set(error,PP_ERROR_ARGUMENT,"Texture belongs to another context group");
+    if(renderer->shared==source && renderer->content_id==id && renderer->revision==revision)return true;
+    if(!current(renderer,error))return false;
+    /* Complete the previous binding before its final application reference can
+     * be retired. All joined consumers use the same serialized owner thread. */
+    if(renderer->content_id)glFinish();
+    renderer->gl.ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,source->name);
+    if(glGetError()!=GL_NO_ERROR)return error_set(error,PP_ERROR_RENDER,"Cannot bind shared frame");
+    if(!renderer->shared && renderer->content_id) {
+        glDeleteTextures(1,&renderer->textures[0]);glGenTextures(1,&renderer->textures[0]);
+    }
+    renderer->shared=source;renderer->content_id=id;renderer->revision=revision;
+    renderer->source_width=source->width;renderer->source_height=source->height;return true;
+}
+void pp_shared_texture_destroy(PPSharedTexture *source) {
+    if(!source)return;
+    if(current(source->owner,NULL))glDeleteTextures(1,&source->name);
+    free(source);
 }
 bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
     uint64_t content_id,uint64_t revision,PPError *error) {
@@ -120,11 +176,16 @@ bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
         return error_set(error,upload_error==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot upload direct source texture");
     }
     if(replacement) {glDeleteTextures(1,&renderer->textures[0]);renderer->textures[0]=candidate;}
+    if(renderer->shared){glFinish();renderer->shared=NULL;}
     renderer->source_width=source->width;renderer->source_height=source->height;
     renderer->content_id=content_id;renderer->revision=revision;renderer->metrics.source_uploads++;
     return true;
 }
 bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
+    double angle_deg,double opacity,double density,PPError *error) {
+    return pp_renderer_draw_source(renderer,layout,(PPRect){0,0,layout.x,layout.y},longest,angle_deg,opacity,density,error);
+}
+bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
     double angle_deg,double opacity,double density,PPError *error) {
     if(!renderer || renderer->owns_window || !renderer->content_id || !isfinite(layout.x) || !isfinite(layout.y) ||
         layout.x<=0 || layout.y<=0 || !isfinite(longest) || longest<=0 || !isfinite(angle_deg) ||
@@ -132,22 +193,23 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct transform");
     double scale=longest*density/fmax(layout.x,layout.y);
     double angle=fmod(angle_deg,360)*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
-    double extent_w=ceil(scale*(fabs(c)*layout.x+fabs(s)*layout.y)-1e-9);
-    double extent_h=ceil(scale*(fabs(s)*layout.x+fabs(c)*layout.y)-1e-9);
-    if(!isfinite(extent_w) || !isfinite(extent_h) || extent_w<1 || extent_h<1 || extent_w>16384 || extent_h>16384)
+    int extent_w,extent_h;
+    if(!pp_geometry_source_extent(layout,rect,longest,angle_deg,density,&extent_w,&extent_h))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct transform exceeds drawable limits");
     if(!current(renderer,error)) return false;
     int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w!=(int)extent_w || h!=(int)extent_h)
         return error_set(error,PP_ERROR_ARGUMENT,"Direct window drawable does not match canonical transform bounds");
     PPGL *gl=&renderer->gl;gl->BindFramebuffer(GL_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);
-    gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->textures[0]);
+    gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->shared?renderer->shared->name:renderer->textures[0]);
     gl->UseProgram(renderer->program);
 #define LOCATION(name) gl->GetUniformLocation(renderer->program,name)
     gl->Uniform1i(LOCATION("image"),0);gl->Uniform1i(LOCATION("alpha"),1);
     gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
     gl->Uniform2f(LOCATION("source_size"),(float)renderer->source_width,(float)renderer->source_height);
     gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
-    gl->Uniform2f(LOCATION("scale"),(float)(scale*layout.x/renderer->source_width),(float)(scale*layout.y/renderer->source_height));
+    gl->Uniform2f(LOCATION("scale"),(float)(scale*rect.w/renderer->source_width),(float)(scale*rect.h/renderer->source_height));
+    gl->Uniform2f(LOCATION("source_offset"),(float)((rect.x+rect.w*.5-layout.x*.5)*renderer->source_width/rect.w),
+        (float)((rect.y+rect.h*.5-layout.y*.5)*renderer->source_height/rect.h));
     gl->Uniform1f(LOCATION("opacity"),(float)opacity);
 #undef LOCATION
     glDisable(GL_BLEND);glDisable(GL_DITHER);glViewport(0,0,w,h);
@@ -203,6 +265,7 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     gl->Uniform2f(LOCATION("source_size"),(float)source->width,(float)source->height);
     gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
     gl->Uniform2f(LOCATION("scale"),(float)scale,(float)scale); gl->Uniform1f(LOCATION("opacity"),(float)opacity);
+    gl->Uniform2f(LOCATION("source_offset"),0,0);
 #undef LOCATION
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
@@ -219,6 +282,7 @@ void pp_renderer_destroy(PPRenderer *renderer) {
     if (!renderer) return;
     SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
     if (window && renderer->context && SDL_GL_MakeCurrent(window, renderer->context)) {
+        if(renderer->shared) {glFinish();glBindTexture(GL_TEXTURE_2D,0);renderer->shared=NULL;}
         PPGL *gl = &renderer->gl;
         if (renderer->program) gl->DeleteProgram(renderer->program);
         if (renderer->vao) gl->DeleteVertexArrays(1,&renderer->vao);

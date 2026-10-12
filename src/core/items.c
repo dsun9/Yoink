@@ -11,9 +11,10 @@ struct PPItemSnapshot {
     PPItem item;
     PPAsset *image, *primary, *fallback;
     PPVec2 size;
-    PPFrame text_frame;
+    PPTextResult text_result;
+    PPTextResult bitmap_source;
     double text_scale;
-    size_t raster_bytes;
+    size_t raster_bytes, bitmap_bytes;
 };
 
 static bool item_error(PPError *error, int code, const char *message) {
@@ -50,21 +51,21 @@ static bool retain_font(PPAssets *assets, PPAssetId id, int face, PPAsset **out,
 }
 
 static bool render_text(PPItemSnapshot *snapshot, double scale, PPError *error) {
-    PPFrame candidate = {0};
-    if (!pp_text_render(snapshot->assets, snapshot->item.text, &snapshot->item.text_style,
+    PPTextResult candidate = {0};
+    if (!pp_text_render_result(snapshot->assets, snapshot->item.text, &snapshot->item.text_style,
             scale, &candidate, NULL, error)) return false;
     /* Text validates per-frame dimensions/bytes before allocating. The fresh
      * output is transient until reserved here; old retained pixels remain
      * charged until commit, so failure preserves the existing cache. */
-    size_t bytes = candidate.stride * (size_t)candidate.height +
-        (size_t)candidate.width * candidate.height;
+    size_t bytes = candidate.frame.stride * (size_t)candidate.frame.height +
+        (size_t)candidate.frame.width * candidate.frame.height;
     if (!pp_assets_reserve_raster(snapshot->assets, bytes, error)) {
-        pp_frame_destroy(&candidate);
+        pp_frame_destroy(&candidate.frame);
         return false;
     }
-    pp_frame_destroy(&snapshot->text_frame);
+    pp_frame_destroy(&snapshot->text_result.frame);
     pp_assets_release_raster(snapshot->assets, snapshot->raster_bytes);
-    snapshot->text_frame = candidate;
+    snapshot->text_result = candidate;
     snapshot->raster_bytes = bytes;
     snapshot->text_scale = scale;
     return true;
@@ -110,7 +111,7 @@ bool pp_item_snapshot_create(PPAssets *assets, const PPItem *item, PPItemSnapsho
                 &snapshot->primary, error) ||
             !retain_font(assets, item->text_style.fallback_asset, item->text_style.fallback_face,
                 &snapshot->fallback, error) || !render_text(snapshot, 1, error)) goto failed;
-        snapshot->size = (PPVec2){snapshot->text_frame.width, snapshot->text_frame.height};
+        snapshot->size = snapshot->text_result.layout_size;
     }
     static uint64_t next_revision;
     snapshot->revision = ++next_revision;
@@ -128,8 +129,10 @@ PPItemSnapshot *pp_item_snapshot_retain(PPItemSnapshot *snapshot) {
 
 void pp_item_snapshot_release(PPItemSnapshot *snapshot) {
     if (!snapshot || --snapshot->references) return;
-    pp_frame_destroy(&snapshot->text_frame);
+    pp_frame_destroy(&snapshot->text_result.frame);
+    pp_frame_destroy(&snapshot->bitmap_source.frame);
     pp_assets_release_raster(snapshot->assets, snapshot->raster_bytes);
+    pp_assets_release_raster(snapshot->assets, snapshot->bitmap_bytes);
     pp_asset_release(snapshot->image);
     pp_asset_release(snapshot->primary);
     pp_asset_release(snapshot->fallback);
@@ -150,6 +153,35 @@ PPAssets *pp_item_snapshot_assets(const PPItemSnapshot *snapshot) {
 uint64_t pp_item_snapshot_revision(const PPItemSnapshot *snapshot) {
     return snapshot ? snapshot->revision : 0;
 }
+const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot) {
+    return snapshot && snapshot->item.kind==PP_ITEM_TEXT?&snapshot->text_result:NULL;
+}
+bool pp_item_snapshot_bitmap_source(PPItemSnapshot *snapshot,const PPTextResult **out,PPError *error) {
+    if(out) *out=NULL;
+    if(!snapshot || !out || snapshot->item.kind!=PP_ITEM_TEXT || !snapshot->text_result.artwork.bitmap_only)
+        return item_error(error,PP_ERROR_ARGUMENT,"Useful bitmap source requires completely bitmap text artwork");
+    if(!snapshot->bitmap_source.frame.pixels) {
+        const size_t total_limit=512u*1024u*1024u,resource_limit=256u*1024u*1024u;
+        size_t retained=pp_assets_raster_bytes(snapshot->assets);
+        if(retained>=total_limit)
+            return item_error(error,PP_ERROR_RESOURCE_LIMIT,"Active rasters exceed 512 MiB including bitmap candidate");
+        size_t available=total_limit-retained;
+        if(available>resource_limit) available=resource_limit;
+        PPTextResult candidate={0};
+        /* Preflight includes temporary source coverage and keeps every old
+         * retained frame charged. The text pipeline validates visible alpha
+         * before this presentation-only source drops its coverage plane. */
+        if(!pp_text_render_result_bounded(snapshot->assets,snapshot->item.text,&snapshot->item.text_style,
+            snapshot->text_result.artwork.useful_pixels_per_dip,available,&candidate,NULL,error)) return false;
+        free(candidate.frame.content_alpha);candidate.frame.content_alpha=NULL;
+        size_t bytes=candidate.frame.stride*(size_t)candidate.frame.height;
+        if(!pp_assets_reserve_raster(snapshot->assets,bytes,error)) {
+            pp_frame_destroy(&candidate.frame);return false;
+        }
+        snapshot->bitmap_source=candidate;snapshot->bitmap_bytes=bytes;
+    }
+    *out=&snapshot->bitmap_source;return true;
+}
 
 bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double scale,
     const PPFrame **out, double *next, PPError *error) {
@@ -162,7 +194,22 @@ bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double sca
     if (snapshot->item.kind == PP_ITEM_IMAGE)
         return pp_asset_frame(snapshot->image, elapsed, (int)fmax(1, width), (int)fmax(1, height), out, next, error);
     if (snapshot->text_scale != scale && !render_text(snapshot, scale, error)) return false;
-    *out = &snapshot->text_frame;
+    *out = &snapshot->text_result.frame;
     *next = INFINITY;
     return true;
+}
+bool pp_item_snapshot_select_frame(PPItemSnapshot *snapshot,double elapsed,double scale,
+    PPFrameSelection *out,PPError *error) {
+    if(out) *out=(PPFrameSelection){0};
+    if(!snapshot || !out) return item_error(error,PP_ERROR_ARGUMENT,"Missing frame selection output");
+    if(snapshot->item.kind==PP_ITEM_IMAGE) {
+        if(!isfinite(elapsed) || elapsed<0 || !isfinite(scale) || scale<=0)
+            return item_error(error,PP_ERROR_ARGUMENT,"Invalid frame clock or scale");
+        double w=ceil(snapshot->size.x*scale),h=ceil(snapshot->size.y*scale);
+        if(!isfinite(w)||!isfinite(h)||w>8192||h>8192)
+            return item_error(error,PP_ERROR_RESOURCE_LIMIT,"Raster exceeds 8192 pixels per axis");
+        return pp_asset_select_frame(snapshot->image,elapsed,(int)fmax(1,w),(int)fmax(1,h),out,error);
+    }
+    if(!pp_item_snapshot_frame(snapshot,elapsed,scale,&out->frame,&out->next_change,error)) return false;
+    out->revision=1;return true;
 }

@@ -21,6 +21,8 @@ typedef struct PPSourcePresentation {
   uint64_t content_id, source_revision;
   PPVec2 layout;
   bool visual_alpha;
+  PPRect source_rect; /* Source texels mapped into canonical local DIPs. Zero means full layout. */
+  PPSharedTexture *shared_texture;
 } PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
@@ -33,6 +35,8 @@ typedef struct PPRetainedPresentation {
   PPRect bounds;
   double density, animation_start;
   bool visible, valid, visual_alpha;
+  struct PPGifEntry *gif_entry;
+  PPRect source_rect;
 } PPRetainedPresentation;
 typedef struct PPSprite {
   PPSurface *surface;
@@ -74,8 +78,17 @@ struct PPAnchorPresenter {
   PPPresentationMetrics metrics;
   PPGpuResources gpu;
   PPRendererMetrics retired_renderer_metrics;
+  PPRenderer *texture_owner;
+  struct PPGifEntry *gif_entries;
 };
+bool pp_snapshot_is_gif(const PPItemSnapshot *snapshot);
+bool pp_presenter_texture_owner(PPAnchorPresenter *p,PPError *error);
+bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed,PPSourcePresentation *source,double *next,struct PPGifEntry **out,PPError *error);
+void pp_gif_release(PPAnchorPresenter *p,struct PPGifEntry *entry);
+void pp_gif_clear(PPAnchorPresenter *p);
 bool pp_snapshot_is_png(const PPItemSnapshot *snapshot);
+bool pp_snapshot_is_bitmap_text(const PPItemSnapshot *snapshot);
+bool pp_retained_bitmap_text_source(PPItemSnapshot *snapshot,PPSourcePresentation *source,PPError *error);
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
     const PPSceneInstance *instance,const PPDisplay *display,double elapsed,
     double *next,PPError *error);

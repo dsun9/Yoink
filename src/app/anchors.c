@@ -513,6 +513,7 @@ void pp_anchor_presenter_destroy(PPAnchorPresenter *p) {
     return;
   close_anchors(p);
   pp_sprites_clear(p);
+  pp_gif_clear(p);
   free(p->displays);
   pp_anchors_destroy(&p->runtime);
   if (p->owns_scene)
