@@ -33,7 +33,9 @@ bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t window_id,void *context
 /* Retained top-down premultiplied color texture in the borrowed UI context.
  * A UI adapter converts after its final linear sample at the blend boundary.
  * No coverage attachment, CPU transform or readback.
- * Caller reserves source and old/candidate output texture bytes before drawing. */
+ * Requires that owning UI context to be current (inside its frame). Another
+ * current context is rejected without changing it. A false return preserves
+ * the old output. Caller reserves source and old/candidate output bytes. */
 bool pp_renderer_preview_source(PPRenderer *renderer,const PPFrame *source,
     uint64_t content_id,uint64_t source_revision,PPVec2 layout,PPRect source_rect,
     double longest_dip,double angle_deg,double opacity,double density,

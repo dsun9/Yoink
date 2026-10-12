@@ -287,6 +287,8 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
         !pp_geometry_source_extent(layout,rect,longest,angle,density,&w,&h)||w>8192||h>8192)
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid retained UI transform");
     SDL_Window *previous_window=SDL_GL_GetCurrentWindow();SDL_GLContext previous_context=SDL_GL_GetCurrentContext();
+    if(previous_window!=r->window||previous_context!=r->context)
+        return error_set(error,PP_ERROR_ARGUMENT,"UI preview requires its owning current context");
     if(!current(r,error)) {restore_context(previous_window,previous_context,NULL);return false;}
     GLState state;PPGL *gl=&r->gl;save_state(gl,&state);
     bool ok=pp_renderer_upload_source(r,source,id,revision,error);GLuint candidate=0;
@@ -319,14 +321,20 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
     }
     gl->BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
     gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
+    if(!ok&&candidate){glDeleteTextures(1,&candidate);candidate=0;}
+    restore_state(gl,&state);
+    if(!restore_context(previous_window,previous_context,error)) {
+        /* No output commit has happened. Delete only in the owning namespace,
+         * then retry restoring the caller without replacing the original error. */
+        if(SDL_GL_GetCurrentContext()==r->context||SDL_GL_MakeCurrent(r->window,r->context)) {
+            if(candidate)glDeleteTextures(1,&candidate);restore_state(gl,&state);
+        }
+        restore_context(previous_window,previous_context,NULL);return false;
+    }
     if(ok) {
-        if(state.texture0==(GLint)r->preview_texture&&r->preview_texture)state.texture0=candidate;
-        if(state.active_texture==(GLint)r->preview_texture&&r->preview_texture)state.active_texture=candidate;
         glDeleteTextures(1,&r->preview_texture);r->preview_texture=candidate;
         *out=candidate;*width=w;*height=h;r->metrics.transform_draws++;
-    } else if(candidate)glDeleteTextures(1,&candidate);
-    restore_state(gl,&state);
-    if(!restore_context(previous_window,previous_context,error))return false;
+    }
     return ok;
 }
 bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,

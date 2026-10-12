@@ -18,6 +18,8 @@ typedef struct PPUIContentPreview {
   int source_width,source_height;
   bool valid;
 } PPUIContentPreview;
+/* Update inside the backend's owning frame/context. App and backend outlive
+ * this preview; release it before either owner is destroyed. */
 bool pp_ui_preview_update(PPUIBackend *ui,PPApp *app,PPUIContentPreview *preview,
     PPItemSnapshot *snapshot,double longest,double angle,double opacity,
     double density,double elapsed,double *next,PPError *error);

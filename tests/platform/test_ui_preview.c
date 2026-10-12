@@ -5,14 +5,36 @@
 #include <string.h>
 static PPApp *app;
 static PPUIBackend *ui;
+static PPUIBackend *other_ui;
 static PPItemSnapshot *snapshot;
 static PPUIContentPreview preview;
+static int restore_failure_countdown,restore_failures;
+bool SDLCALL pp_test_ui_make_current(SDL_Window *window,SDL_GLContext context) {
+  if(restore_failure_countdown&&window==ui->window&&context==ui->gl_context&&--restore_failure_countdown==0) {
+    restore_failures++;SDL_SetError("Injected final UI context restoration failure");return false;
+  }
+  return SDL_GL_MakeCurrent(window,context);
+}
 static void cleanup(void) {
   pp_ui_preview_release(&preview);pp_item_snapshot_release(snapshot);snapshot=NULL;
+  pp_ui_backend_destroy(other_ui);other_ui=NULL;
   pp_ui_backend_destroy(ui);ui=NULL;pp_app_destroy(app);app=NULL;
 }
 #undef CHECK
 #define CHECK(expr) do {if(!(expr)){fprintf(stderr,"%s:%d: CHECK(%s) failed\n",__FILE__,__LINE__,#expr);cleanup();exit(1);}}while(0)
+static void assert_ui_state(GLuint texture) {
+  GLint value=0,viewport[4]={0};
+  CHECK(SDL_GL_GetCurrentWindow()==ui->window&&SDL_GL_GetCurrentContext()==ui->gl_context);
+  glGetIntegerv(GL_CURRENT_PROGRAM,&value);CHECK(value==(GLint)ui->program);
+  glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&value);CHECK(value==(GLint)ui->vao);
+  glGetIntegerv(GL_VIEWPORT,viewport);CHECK(viewport[0]==3&&viewport[1]==5&&viewport[2]==77&&viewport[3]==44);
+  glGetIntegerv(GL_ACTIVE_TEXTURE,&value);CHECK(value==GL_TEXTURE3);
+  glGetIntegerv(GL_TEXTURE_BINDING_2D,&value);CHECK(value==(GLint)texture);
+  glGetIntegerv(GL_UNPACK_ALIGNMENT,&value);CHECK(value==8);
+  glGetIntegerv(GL_UNPACK_ROW_LENGTH,&value);CHECK(value==7);
+  CHECK(glIsEnabled(GL_BLEND)&&glIsEnabled(GL_SCISSOR_TEST)&&glIsEnabled(GL_CULL_FACE)&&glIsEnabled(GL_DEPTH_TEST)&&glIsEnabled(GL_DITHER));
+  CHECK(glGetError()==GL_NO_ERROR);
+}
 static double sample_alpha(const uint8_t *pixels,int width,int height,double u,double v) {
   double x=u*width-.5,y=v*height-.5;int left=(int)floor(x),top=(int)floor(y);
   double value=0;
@@ -23,7 +45,41 @@ static double sample_alpha(const uint8_t *pixels,int width,int height,double u,d
   }
   return value;
 }
+static void test_restore_failure_preserves_usable_output(void) {
+  PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  PPUIWindowOptions options={.title="Preview rollback",.geometry={0,0,160,120},.scale=1,.compact=true};
+  CHECK(pp_ui_backend_create(&ui,&options,&error));
+  size_t bytes=0;void *png=SDL_LoadFile(PP_MEDIA_FIXTURES "/alpha.png",&bytes);CHECK(png);
+  PPItem item={.id=1,.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){png,bytes},PP_ASSET_PNG,&item.image_asset,&error));SDL_free(png);
+  CHECK(pp_item_snapshot_create(pp_app_assets(app),&item,&snapshot,&error));double next;
+  CHECK(pp_ui_preview_update(ui,app,&preview,snapshot,96,0,1,1,0,&next,&error));
+  CHECK(preview.width==96&&preview.height==32);
+  GLuint independent=0;glGenTextures(1,&independent);ui->gl.ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,independent);
+  ui->gl.ActiveTexture(GL_TEXTURE3);glBindTexture(GL_TEXTURE_2D,independent);ui->gl.UseProgram(ui->program);ui->gl.BindVertexArray(ui->vao);
+  glViewport(3,5,77,44);glEnable(GL_BLEND);glEnable(GL_SCISSOR_TEST);glEnable(GL_CULL_FACE);glEnable(GL_DEPTH_TEST);glEnable(GL_DITHER);
+  glPixelStorei(GL_UNPACK_ALIGNMENT,8);glPixelStorei(GL_UNPACK_ROW_LENGTH,7);
+  CHECK(pp_ui_preview_update(ui,app,&preview,snapshot,96,0,.5,1,0,&next,&error));assert_ui_state(independent);
+  unsigned usable=preview.texture;size_t accepted=pp_content_gpu_resources(pp_app_content_sources(app,&error)).retained_bytes;
+  CHECK(accepted==12300);
+  restore_failure_countdown=2;
+  CHECK(!pp_ui_preview_update(ui,app,&preview,snapshot,144,0,1,1,0,&next,&error));
+  CHECK(restore_failures==1&&error.code==PP_ERROR_RENDER);
+  CHECK(preview.texture==usable&&preview.width==96&&preview.height==32);
+  assert_ui_state(independent);
+  CHECK(pp_content_gpu_resources(pp_app_content_sources(app,&error)).retained_bytes==accepted);
+  CHECK(SDL_GL_MakeCurrent(ui->window,ui->gl_context));CHECK(glIsTexture(usable));
+  CHECK(pp_ui_backend_create(&other_ui,&options,&error));CHECK(SDL_GL_GetCurrentContext()==other_ui->gl_context);
+  CHECK(!pp_ui_preview_update(ui,app,&preview,snapshot,144,0,1,1,0,&next,&error));CHECK(error.code==PP_ERROR_ARGUMENT);
+  CHECK(SDL_GL_GetCurrentContext()==other_ui->gl_context&&preview.texture==usable);
+  CHECK(pp_content_gpu_resources(pp_app_content_sources(app,&error)).retained_bytes==accepted);
+  CHECK(SDL_GL_MakeCurrent(ui->window,ui->gl_context));glDeleteTextures(1,&independent);
+  CHECK(pp_renderer_metrics(preview.renderer).readbacks==0);
+  pp_ui_preview_release(&preview);CHECK(!pp_content_gpu_resources(pp_app_content_sources(app,&error)).retained_bytes);
+  cleanup();puts("PASS failed final UI context restore preserves the usable output and exact old GPU charge");
+}
 int main(void) {
+  test_restore_failure_preserves_usable_output();
   PPError error={0};CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
   PPUIWindowOptions options={.title="Preview quality",.geometry={0,0,96,96},.scale=1.25f,.compact=true};
   CHECK(pp_ui_backend_create(&ui,&options,&error));

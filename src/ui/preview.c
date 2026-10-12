@@ -17,6 +17,9 @@ void pp_ui_preview_release(PPUIContentPreview *p) {
 bool pp_ui_preview_update(PPUIBackend *ui,PPApp *app,PPUIContentPreview *p,
     PPItemSnapshot *snapshot,double longest,double angle,double opacity,double density,
     double elapsed,double *next,PPError *error) {
+  if(SDL_GL_GetCurrentWindow()!=ui->window||SDL_GL_GetCurrentContext()!=ui->gl_context) {
+    if(error)*error=(PPError){PP_ERROR_ARGUMENT,"UI preview update requires its owning frame context"};return false;
+  }
   if(!snapshot||opacity<=0) {pp_ui_preview_release(p);*next=HUGE_VAL;return true;}
   if(p->snapshot&&pp_item_snapshot_item(p->snapshot)->id!=pp_item_snapshot_item(snapshot)->id)
     pp_ui_preview_release(p);
