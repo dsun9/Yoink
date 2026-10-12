@@ -7,6 +7,16 @@ typedef enum PPAssetKind { PP_ASSET_PNG, PP_ASSET_GIF, PP_ASSET_SVG, PP_ASSET_FO
 enum { PP_ERROR_FORMAT = 5, PP_ERROR_RESOURCE_LIMIT };
 typedef struct PPAssets PPAssets;
 typedef struct PPAsset PPAsset;
+typedef struct PPFrameSelection {
+    const PPFrame *frame;
+    size_t index;
+    uint64_t revision; /* Selected immutable frame index + 1, scoped to asset ID. */
+    double next_change; /* Absolute deadline in the caller's elapsed clock. */
+} PPFrameSelection;
+/* No shared playback state. PNG/GIF frames retain native resolution; repeated
+ * frames and loop revisits preserve their revision, including finite stop. */
+bool pp_asset_select_frame(PPAsset *asset,double elapsed_seconds,int width,int height,
+    PPFrameSelection *out,PPError *error);
 typedef struct PPSourceMetrics { uint64_t raster_builds; } PPSourceMetrics;
 /* Successful text/SVG raster generations and PNG/GIF cache decodes, accumulated
  * for this manager's lifetime. Cache hits, frame selection and failed requests

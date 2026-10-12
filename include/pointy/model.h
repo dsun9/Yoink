@@ -77,6 +77,8 @@ const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot)
  * retainers. It has no presentation coverage plane; alpha is validated before
  * retention. The snapshot owns its exact RGBA charge in the shared CPU budget. */
 bool pp_item_snapshot_bitmap_source(PPItemSnapshot *snapshot,const PPTextResult **out,PPError *error);
+bool pp_item_snapshot_select_frame(PPItemSnapshot *snapshot,double elapsed,double scale,
+    PPFrameSelection *out,PPError *error);
 /* Cached pixels are borrowed until the next request on this snapshot or asset.
  * SVG calls on ANY snapshot of the same asset may invalidate the frame. Consume
  * immediately or request again. Text cache bytes include RGBA plus coverage and

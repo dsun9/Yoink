@@ -198,3 +198,18 @@ bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double sca
     *next = INFINITY;
     return true;
 }
+bool pp_item_snapshot_select_frame(PPItemSnapshot *snapshot,double elapsed,double scale,
+    PPFrameSelection *out,PPError *error) {
+    if(out) *out=(PPFrameSelection){0};
+    if(!snapshot || !out) return item_error(error,PP_ERROR_ARGUMENT,"Missing frame selection output");
+    if(snapshot->item.kind==PP_ITEM_IMAGE) {
+        if(!isfinite(elapsed) || elapsed<0 || !isfinite(scale) || scale<=0)
+            return item_error(error,PP_ERROR_ARGUMENT,"Invalid frame clock or scale");
+        double w=ceil(snapshot->size.x*scale),h=ceil(snapshot->size.y*scale);
+        if(!isfinite(w)||!isfinite(h)||w>8192||h>8192)
+            return item_error(error,PP_ERROR_RESOURCE_LIMIT,"Raster exceeds 8192 pixels per axis");
+        return pp_asset_select_frame(snapshot->image,elapsed,(int)fmax(1,w),(int)fmax(1,h),out,error);
+    }
+    if(!pp_item_snapshot_frame(snapshot,elapsed,scale,&out->frame,&out->next_change,error)) return false;
+    out->revision=1;return true;
+}

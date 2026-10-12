@@ -2,6 +2,15 @@
 #define POINTY_RENDER_H
 #include "pointy/types.h"
 typedef struct PPRenderer PPRenderer;
+typedef struct PPSharedTexture PPSharedTexture;
+struct PPFrame;
+/* Explicit context group owner. It outlives joined renderers and textures.
+ * All operations stay on the owning application thread. */
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error);
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t window_id,PPRenderer *owner,PPError *error);
+bool pp_shared_texture_create(PPRenderer *owner,const struct PPFrame *frame,PPSharedTexture **out,PPError *error);
+bool pp_renderer_bind_shared(PPRenderer *renderer,PPSharedTexture *texture,uint64_t content_id,uint64_t revision,PPError *error);
+void pp_shared_texture_destroy(PPSharedTexture *texture);
 typedef struct PPRendererMetrics {
     uint64_t source_uploads, transform_draws, readbacks;
 } PPRendererMetrics;

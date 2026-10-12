@@ -29,6 +29,17 @@ static void test_image_frames_and_limits(void) {
     f=frame(a,.151,&next); CHECK(f->pixels[5]==255 && f->content_alpha[2]==0); CHECK(fabs(next-.16)<1e-8);
     f=frame(a,.161,&next); CHECK(f->content_alpha[1]==0); pp_asset_release(a);
     a=load(assets,"finite.gif",PP_ASSET_GIF); f=frame(a,.11,&next); CHECK(f->pixels[0]==255); f=frame(a,.25,&next); CHECK(f->pixels[5]==255 && isinf(next)); pp_asset_release(a);
+    a=load(assets,"finite.gif",PP_ASSET_GIF);
+    PPFrameSelection early={0},late={0},repeat={0};
+    CHECK(pp_asset_select_frame(a,.02,0,0,&early,&e));
+    CHECK(pp_asset_select_frame(a,.08,0,0,&late,&e));
+    CHECK(early.index==0 && early.revision==1 && early.frame->pixels[0]==255 && early.next_change==.05);
+    CHECK(late.index==1 && late.revision==2 && late.frame->pixels[5]==255 && late.next_change==.1);
+    CHECK(pp_asset_select_frame(a,.12,0,0,&repeat,&e));
+    CHECK(repeat.revision==early.revision && repeat.frame==early.frame);
+    CHECK(pp_asset_select_frame(a,.25,0,0,&repeat,&e));
+    CHECK(repeat.index==1 && repeat.revision==2 && isinf(repeat.next_change));
+    pp_asset_release(a);
     b=fixture("alpha.png"); uint8_t *p=(uint8_t *)b.data;
     p[16]=0; p[17]=0; p[18]=0x20; p[19]=1; CHECK(!pp_asset_import(assets,b,PP_ASSET_PNG,&x,&e) && e.code==PP_ERROR_RESOURCE_LIMIT);
     p[19]=0; p[20]=0; p[21]=0; p[22]=0x20; p[23]=0; CHECK(!pp_asset_import(assets,b,PP_ASSET_PNG,&x,&e) && e.code==PP_ERROR_RESOURCE_LIMIT); free(p);

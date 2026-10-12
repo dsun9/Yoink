@@ -26,6 +26,7 @@ static void add_metrics(PPRendererMetrics *sum,PPRendererMetrics value) {
 PPRendererMetrics pp_anchor_presenter_renderer_metrics(const PPAnchorPresenter *p) {
   if(!p) return (PPRendererMetrics){0};
   PPRendererMetrics sum=p->retired_renderer_metrics;add_metrics(&sum,pp_renderer_metrics(p->renderer));
+  add_metrics(&sum,pp_renderer_metrics(p->texture_owner));
   for(size_t i=0;i<p->instance_count;i++) add_metrics(&sum,pp_renderer_metrics(p->instances[i].retained.renderer));
   return sum;
 }
@@ -36,6 +37,7 @@ PPGpuResources pp_anchor_presenter_gpu_resources(const PPAnchorPresenter *p) {
 void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   add_metrics(&p->retired_renderer_metrics,pp_renderer_metrics(r->renderer));
   pp_renderer_destroy(r->renderer);pp_item_snapshot_release(r->snapshot);
+  pp_gif_release(p,r->gif_entry);
   p->gpu.retained_bytes-=r->gpu_bytes;memset(r,0,sizeof(*r));
 }
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *s) {
@@ -65,7 +67,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
     if(!frame || frame->width<=0 || frame->height<=0 || frame->width>8192 || frame->height>8192)
       return fail(error,PP_ERROR_ARGUMENT,"Changed retained source requires a validated frame");
     size_t candidate=(size_t)frame->width*frame->height*4;
-    bool overlap=r->content_id!=source.content_id || r->source_width!=frame->width || r->source_height!=frame->height;
+    bool overlap=!source.shared_texture && (r->content_id!=source.content_id || r->source_width!=frame->width || r->source_height!=frame->height);
     if(!p->gpu.limit_bytes) p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
     if(overlap && (candidate>p->gpu.limit_bytes || p->gpu.retained_bytes>p->gpu.limit_bytes-candidate))
       return fail(error,PP_ERROR_RESOURCE_LIMIT,"Retained GPU sources exceed 256 MiB including candidate overlap");
@@ -73,8 +75,9 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
       p->gpu.retained_bytes+=candidate;
       if(p->gpu.retained_bytes>p->gpu.peak_bytes) p->gpu.peak_bytes=p->gpu.retained_bytes;
     }
-    bool ok=r->renderer || pp_renderer_create_for_window(&r->renderer,pp_surface_window_id(surface),error);
-    if(ok) ok=pp_renderer_upload_source(r->renderer,frame,source.content_id,source.source_revision,error);
+    bool ok=r->renderer || (pp_presenter_texture_owner(p,error) && pp_renderer_create_shared_window(&r->renderer,pp_surface_window_id(surface),p->texture_owner,error));
+    if(ok) ok=source.shared_texture?pp_renderer_bind_shared(r->renderer,source.shared_texture,source.content_id,source.source_revision,error):
+        pp_renderer_upload_source(r->renderer,frame,source.content_id,source.source_revision,error);
     if(!ok) {
       if(overlap) p->gpu.retained_bytes-=candidate;
       /* A protective allocation rejection leaves the transactional old texture
@@ -83,6 +86,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
       return false;
     }
     if(overlap) {p->gpu.retained_bytes-=r->gpu_bytes;r->gpu_bytes=candidate;}
+    else if(source.shared_texture) {p->gpu.retained_bytes-=r->gpu_bytes;r->gpu_bytes=0;}
     r->source_width=frame->width;r->source_height=frame->height;
     r->content_id=source.content_id;r->source_revision=source.source_revision;
     r->visual_alpha=source.visual_alpha;
@@ -107,7 +111,7 @@ native_failure:
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {
 #if defined(_WIN32)
-  bool direct=pp_snapshot_is_png(instance->snapshot);
+  bool direct=pp_snapshot_is_png(instance->snapshot) || pp_snapshot_is_gif(instance->snapshot);
 #else
   bool direct=false;
 #endif
@@ -121,11 +125,15 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
   if(direct) {
     uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
     PPSourcePresentation source={NULL,identity,1,pp_item_snapshot_size(instance->snapshot)};
-    if(identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
+    bool gif=pp_snapshot_is_gif(instance->snapshot);struct PPGifEntry *candidate=NULL;
+    if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
+    else if(!gif && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
       if(source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
-      ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);*next=HUGE_VAL;
+      ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);if(!gif)*next=HUGE_VAL;
+      if(ok) {pp_gif_release(p,s->retained.gif_entry);s->retained.gif_entry=candidate;candidate=NULL;}
     }
+    pp_gif_release(p,candidate);
     if(ok) {
       pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
