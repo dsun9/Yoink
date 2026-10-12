@@ -5,14 +5,7 @@
 #include "content_sources.h"
 /* Source acquisition policy stays outside retained placement/drawing. GIF
  * frame and scalable raster replacements provide their own source revision. */
-typedef struct PPSourcePresentation {
-  const PPFrame *frame;
-  uint64_t content_id, source_revision;
-  PPVec2 layout;
-  bool visual_alpha;
-  PPRect source_rect; /* Source texels mapped into canonical local DIPs. Zero means full layout. */
-  PPSharedTexture *shared_texture;
-} PPSourcePresentation;
+typedef PPContentFrame PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
   PPItemSnapshot *snapshot;
@@ -40,6 +33,9 @@ typedef struct AnchorSurface {
   size_t target_bytes, preview_bytes;
   bool shown, failed;
   PPRetainedPresentation retained, target_retained;
+  PPContentConsumer *content;
+  PPItemSnapshot *snapshot;
+  PPSourcePresentation source;
 } AnchorSurface;
 typedef struct PPSprite {
   PPSurface *surface;

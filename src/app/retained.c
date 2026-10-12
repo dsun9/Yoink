@@ -150,6 +150,7 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
       pp_surface_hide(surface);p->failed_surface=surface;
     }
     if(ok) {
+      if(text)pp_content_accept(s->content);
       if(!pp_snapshot_is_scalable(instance->snapshot)&&s->scalable_bytes)pp_scalable_release(p,s);
       pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;

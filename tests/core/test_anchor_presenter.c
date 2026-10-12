@@ -362,6 +362,16 @@ static uint64_t png_pull(PPAnchorPresenter *p,PPScene *scene,PPDisplay *displays
     event(p,preview,PP_EVENT_POINTER_MOVE,400,300,now+.02);event(p,preview,PP_EVENT_BUTTON_UP,400,300,now+.03);
     update(p,displays,400,300,now+.3);CHECK(pp_scene_count(scene));return pp_scene_at(scene,pp_scene_count(scene)-1)->id;
 }
+static uint64_t source_sprite(PPAnchorPresenter *p,PPScene *scene,PPDisplay *displays,double now) {
+    /* Isolate source-worker observations from the independent anchor consumer.
+     * The whole preview-to-pull route has its own retained-source regression. */
+    update(p,displays,400,300,now);PPError error={0};
+    const PPItem *item=pp_project_target(p->project,PP_ANCHOR_TOP_RIGHT);
+    PPItemSnapshot *snapshot=pp_project_snapshot(p->project,item->id);PPVec2 layout=pp_item_snapshot_size(snapshot);pp_item_snapshot_release(snapshot);
+    size_t count=pp_scene_count(scene);PPPose pose={{400,300},fmax(layout.x,layout.y),item->angle_deg,item->opacity};
+    PPSprite *sprite=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,pose,now,&error);CHECK(sprite);
+    update(p,displays,400,300,now);CHECK(pp_scene_count(scene)==count+1);return pp_scene_at(scene,count)->id;
+}
 static void test_png_appearance_geometry_and_rollback(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -603,7 +613,7 @@ static void test_async_latest_text_resize(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);PPSurface *sprite=surface_for(id);CHECK(sprite&&sprite->shown);
+    uint64_t id=source_sprite(p,scene,displays,1);PPSurface *sprite=surface_for(id);CHECK(sprite&&sprite->shown);
     PPSourceMetrics before=pp_assets_source_metrics(assets);PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
     PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(p);
     PPPlatformEvent wheel={.surface=sprite,.instance_id=id,.kind=PP_EVENT_WHEEL,.desktop_point={400,300},.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
@@ -632,14 +642,14 @@ static void test_new_scalable_pull_survives_busy_worker(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));hold_next_worker();
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t first=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
-    uint64_t second=png_pull(p,scene,displays,2);CHECK(pp_scene_count(scene)==2);
+    uint64_t first=source_sprite(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    uint64_t second=source_sprite(p,scene,displays,2);CHECK(pp_scene_count(scene)==2);
     /* Equal targets now join one preparation. Give the second consumer a
      * distinct endpoint to exercise a genuinely occupied waiting slot. */
     PPPose second_pose=pp_scene_get(scene,second)->pose;second_pose.longest_dip=128;
     CHECK(pp_scene_set_pose(scene,second,second_pose,&error));pp_sprites_sync(p);CHECK(pp_sprites_update(p,2.3,&error));
     PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
-    uint64_t third=png_pull(p,scene,displays,3);
+    uint64_t third=source_sprite(p,scene,displays,3);
     CHECK(pp_scene_count(scene)==3&&first!=second&&second!=third);
     CHECK(surface_for(first)->shown&&surface_for(second)->shown&&surface_for(third)->shown);
     CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads+1);
@@ -674,7 +684,7 @@ static void test_cached_source_survives_compatibility_request(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));hold_next_worker();
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    uint64_t id=source_sprite(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     PPSprite *s=pp_sprites_find(p,id);PPRect mapping=s->retained.source_rect;PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
     const PPFrame *frame=NULL;double next;CHECK(pp_item_snapshot_frame(pp_scene_get(scene,id)->snapshot,0,3,&frame,&next,&error));
     PPPose pose=pp_scene_get(scene,id)->pose;pose.angle_deg=23.5;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2);
@@ -690,7 +700,7 @@ static void test_completed_target_is_revalidated_after_external_resize(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
     PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
     hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
     CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));release_worker();
@@ -710,7 +720,7 @@ static void test_scalable_rapid_resize_drag_density_and_cancellation(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
     PPRasterStatus initial=pp_raster_worker_status(p->worker);PPRendererMetrics renderer=pp_anchor_presenter_renderer_metrics(p);
     uint64_t owner_builds=pp_assets_source_metrics(assets).raster_builds;
     hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
@@ -756,7 +766,7 @@ static void test_scalable_budget_failure_and_project_teardown(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);PPSprite *s=pp_sprites_find(p,id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);PPSprite *s=pp_sprites_find(p,id);
     /* Let the source anchor finish its fade before measuring the stable scene.
      * Hidden previews release their owned raster/binding resources. */
     update(p,displays,400,300,1.5);
@@ -791,7 +801,7 @@ static void test_scalable_publication_failure_releases_interceptor(void) {
     PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
     hold_next_worker();PPPlatformEvent wheel={.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
     CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     event(p,surface,PP_EVENT_BUTTON_DOWN,400,300,2.01);CHECK(capture_owner==surface);fail_gl_context=true;
@@ -818,7 +828,7 @@ static void test_settled_worker_matches_fresh_text(void) {
             item.text_style.primary_asset=font_asset(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");}
         CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
         PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1.5}};
-        uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
+        uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
         PPPose pose=pp_scene_get(scene,id)->pose;pose.longest_dip=768;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2);wait_worker_idle(p,displays,2);
         const PPSceneInstance *instance=pp_scene_get(scene,id);PPSprite *sprite=pp_sprites_find(p,id);PPVec2 canonical=pp_item_snapshot_size(instance->snapshot);
         PPTextResult fresh={0};CHECK(pp_text_render_result(assets,item.text,&item.text_style,768*1.5/fmax(canonical.x,canonical.y),&fresh,NULL,&error));
@@ -929,7 +939,7 @@ static void test_svg_endpoint_worker_reuses_cached_artwork(void) {
     CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
     CHECK(surface->window_id&&pp_anchor_presenter_metrics(p).worker_source_builds==1);
     PPSprite *sprite=pp_sprites_find(p,id);PPPose pose=sprite->pose;PPVec2 canonical=pp_item_snapshot_size(pp_scene_get(scene,id)->snapshot);
     CHECK(sprite->scalable.frame.width==96&&sprite->scalable.frame.height==52);
@@ -953,8 +963,8 @@ static void test_svg_shared_asset_keeps_independent_sizes(void) {
     PPItem item=svg_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t first=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
-    uint64_t second=png_pull(p,scene,displays,2);wait_worker_idle(p,displays,2.3);
+    uint64_t first=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
+    uint64_t second=source_sprite(p,scene,displays,2);wait_worker_idle(p,displays,2.3);
     PPPose pose=pp_scene_get(scene,second)->pose;pose.longest_dip=337;CHECK(pp_scene_set_pose(scene,second,pose,&error));
     update(p,displays,400,300,3);wait_worker_idle(p,displays,3);
     PPSprite *a=pp_sprites_find(p,first),*b=pp_sprites_find(p,second);
@@ -995,7 +1005,7 @@ static void test_empty_svg_releases_input(void) {
     PPItem item=svg_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    uint64_t id=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
     event(p,surface,PP_EVENT_BUTTON_DOWN,400,300,2);CHECK(capture_owner==surface);
     const char *empty="<svg width='13' height='7'><rect width='13' height='7' fill='none'/></svg>";
     CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)empty,strlen(empty)},PP_ASSET_SVG,&item.image_asset,&error));
@@ -1111,7 +1121,39 @@ static void test_equal_consumers_share_requested_source_preparation(void) {
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS two retained consumers share one requested-resolution preparation without sharing their placement");
 }
+static void test_scalable_anchor_pull_reuses_prepared_content(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    const char *svg="<svg width='13.5' height='7.5'><rect x='2' y='1' width='9' height='5' fill='blue'/></svg>";
+    PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay display={1,{0,0,1920,1080},1,1};
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));
+    PPSurface *preview=p->anchors[PP_ANCHOR_TOP_LEFT].preview;
+    CHECK(preview->window_id&&preview->shown);
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++){SDL_Delay(1);CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));}
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));
+    CHECK(preview->bounds.w==96&&preview->bounds.h==54&&preview->source_width==96);
+    PPPresentationMetrics prepared=pp_anchor_presenter_metrics(p);PPRendererMetrics rendered=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(prepared.worker_source_builds==1&&rendered.readbacks==0);
+    /* This is transparent padding inside the native preview rectangle, beyond
+     * the16x16activation region. Its logical offset remains the grab. */
+    event(p,preview,PP_EVENT_BUTTON_DOWN,8,24,1.01);
+    event(p,preview,PP_EVENT_POINTER_MOVE,400,300,1.02);
+    event(p,preview,PP_EVENT_BUTTON_UP,400,300,1.03);
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){400,300},1.04,&error));
+    CHECK(pp_scene_count(p->scene)==1);const PPSceneInstance *sprite=pp_scene_at(p->scene,0);
+    CHECK(sprite->pose.center.x==440&&sprite->pose.center.y==324&&sprite->pose.longest_dip==96);
+    CHECK(surface_for(sprite->id)->shown&&surface_for(sprite->id)->bounds.w==96&&surface_for(sprite->id)->bounds.h==54);
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==prepared.worker_requests&&pp_anchor_presenter_metrics(p).worker_source_builds==1);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).readbacks==0);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS direct fractional-viewport anchor shares prepared content with a padding grab and pulled sprite");
+}
 int main(void) {
+    test_scalable_anchor_pull_reuses_prepared_content();
     test_equal_consumers_share_requested_source_preparation();
     test_anchor_retains_gif_clock_across_unrelated_edits();
     test_svg_cpu_adapter_keeps_canonical_aspect();
@@ -1186,7 +1228,7 @@ int main(void) {
     CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)blue,strlen(blue)},PP_ASSET_SVG,&replacement.image_asset,&error));
     replacement.image_longest_dip=200;
     CHECK(pp_project_edit_item(project,replacement.id,&replacement,&error));
-    update(p,d,-8,8,1.09);
+    update(p,d,-8,8,1.09);wait_worker_idle(p,d,1.09);
     bool blue_preview=false;
     for(PPSurface *s=surfaces;s;s=s->next) if(s->shown&&!s->id&&s->blue==255&&s->red==0) {
         CHECK(s->bounds.w==300 && s->bounds.h==150 && s->source_width==300);blue_preview=true;

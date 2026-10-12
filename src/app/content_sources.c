@@ -11,12 +11,13 @@ typedef struct ContentEntry {
   PPTextResult result;
   PPError error;
   size_t references,bytes;
-  bool requested,retry,done;
+  bool requested,retry,done,owns_frame;
 } ContentEntry;
 struct PPContentConsumer {
   struct PPContentConsumer *next;
   PPContentSources *sources;
-  ContentEntry *desired,*current;
+  ContentEntry *desired,*current,*seed;
+  PPItemSnapshot *snapshot;
   uint64_t rejected,reported;
 };
 struct PPContentSources {
@@ -117,13 +118,16 @@ static void release_entry(PPContentSources *s,ContentEntry *e) {
   if(!e||--e->references)return;
   pp_raster_worker_cancel(s->worker,s->generation,e->key.instance_id);
   ContentEntry **link=&s->entries;while(*link&&*link!=e)link=&(*link)->next;if(*link)*link=e->next;
-  pp_frame_destroy(&e->result.frame);pp_assets_release_raster(s->assets,e->bytes);pp_item_snapshot_release(e->snapshot);free(e);
+  if(e->owns_frame)pp_frame_destroy(&e->result.frame);
+  pp_assets_release_raster(s->assets,e->bytes);pp_item_snapshot_release(e->snapshot);free(e);
 }
 void pp_content_cancel(PPContentConsumer *c) {
   if(!c)return;release_entry(c->sources,c->desired);c->desired=NULL;c->rejected=c->reported=0;
+  release_entry(c->sources,c->seed);c->seed=NULL;
 }
 void pp_content_consumer_destroy(PPContentConsumer *c) {
   if(!c)return;PPContentSources *s=c->sources;pp_content_cancel(c);release_entry(s,c->current);
+  pp_item_snapshot_release(c->snapshot);
   PPContentConsumer **link=&s->consumers;while(*link&&*link!=c)link=&(*link)->next;if(*link)*link=c->next;free(c);
 }
 void pp_content_sources_destroy(PPContentSources *s) {
@@ -169,7 +173,7 @@ void pp_content_sources_poll(PPContentSources *s) {
     ContentEntry *e=s->entries;while(e&&(e->key.instance_id!=completion.key.instance_id||e->key.serial!=completion.key.serial))e=e->next;
     if(e&&e->requested) {
       e->requested=false;e->done=true;e->error=completion.error;
-      if(completion.success){e->bytes=pp_raster_completion_take(&completion);e->result=completion.result;completion.result=(PPTextResult){0};}
+      if(completion.success){e->bytes=pp_raster_completion_take(&completion);e->result=completion.result;e->owns_frame=true;completion.result=(PPTextResult){0};}
     }
     pp_raster_completion_release(&completion);
   }
@@ -183,6 +187,7 @@ bool pp_content_error(PPContentConsumer *c,PPError *error) {
 }
 const PPTextResult *pp_content_candidate(const PPContentConsumer *c,uint64_t *revision) {
   ContentEntry *e=c?c->desired:NULL;
+  if(!e||!e->result.frame.pixels||e==c->current||c->rejected==e->key.instance_id)e=c?c->seed:NULL;
   if(!e||!e->result.frame.pixels||e==c->current||c->rejected==e->key.instance_id)return NULL;
   if(revision)*revision=e->key.instance_id+2;return &e->result;
 }
@@ -191,19 +196,96 @@ const PPTextResult *pp_content_current(const PPContentConsumer *c,uint64_t *revi
   if(revision)*revision=e->key.instance_id+2;if(bytes)*bytes=e->bytes;return &e->result;
 }
 void pp_content_accept(PPContentConsumer *c) {
-  if(!c||!c->desired||!c->desired->result.frame.pixels||c->desired==c->current)return;
-  release_entry(c->sources,c->current);c->current=c->desired;c->current->references++;c->rejected=0;
+  if(!c)return;ContentEntry *e=c->desired;
+  if(!e||!e->result.frame.pixels||c->rejected==e->key.instance_id)e=c->seed;
+  if(!e||!e->result.frame.pixels) {
+    const PPItem *item=pp_item_snapshot_item(c->snapshot);
+    if(item&&item->kind==PP_ITEM_IMAGE&&!c->desired&&!c->seed){release_entry(c->sources,c->current);c->current=NULL;}
+    return;
+  }
+  if(e==c->current)return;
+  e->references++;release_entry(c->sources,c->current);c->current=e;c->rejected=0;
+  release_entry(c->sources,c->seed);c->seed=NULL;
 }
 void pp_content_reject(PPContentConsumer *c) {
-  if(!c||!c->desired)return;
-  ContentEntry *e=c->desired;c->rejected=e->key.instance_id;
+  if(!c)return;ContentEntry *e=c->desired;
+  if(!e||!e->result.frame.pixels||e==c->current)e=c->seed;
+  if(!e)return;c->rejected=e->key.instance_id;
   bool useful=false;
   for(PPContentConsumer *other=c->sources->consumers;other;other=other->next)
-    if(other->current==e||(other->desired==e&&other->rejected!=e->key.instance_id)){useful=true;break;}
+    if(other->current==e||((other->desired==e||other->seed==e)&&other->rejected!=e->key.instance_id)){useful=true;break;}
   /* A publication rejected by every owner has no useful CPU candidate. Keep
    * the failed target identity to avoid resubmitting it on every UI tick. */
-  if(!useful){pp_frame_destroy(&e->result.frame);pp_assets_release_raster(c->sources->assets,e->bytes);e->bytes=0;}
+  if(!useful){if(e->owns_frame)pp_frame_destroy(&e->result.frame);e->result.frame=(PPFrame){0};pp_assets_release_raster(c->sources->assets,e->bytes);e->bytes=0;}
 }
 size_t pp_content_sources_raster_bytes(const PPContentSources *s) {
   size_t bytes=0;for(ContentEntry *e=s?s->entries:NULL;e;e=e->next)bytes+=e->bytes;return bytes;
+}
+static bool visual_alpha(const PPFrame *frame) {
+  if(!frame||!frame->pixels)return false;
+  for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++)if(frame->pixels[(size_t)y*frame->stride+x*4+3])return true;
+  return false;
+}
+static PPContentFrame packet(const PPTextResult *r,uint64_t identity,uint64_t revision,bool svg) {
+  return(PPContentFrame){.frame=&r->frame,.content_id=identity,.source_revision=revision,.layout=r->layout_size,
+    .visual_alpha=visual_alpha(&r->frame),.source_rect=svg?(PPRect){0,0,r->layout_size.x,r->layout_size.y}:
+      (PPRect){r->layout_origin.x-r->raster_origin_px.x/r->raster_density,r->layout_origin.y-r->raster_origin_px.y/r->raster_density,
+        r->frame.width/r->raster_density,r->frame.height/r->raster_density}};
+}
+static ContentEntry *seed(PPContentConsumer *c,PPItemSnapshot *snapshot,bool svg,bool bitmap,PPError *error) {
+  PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);
+  ContentEntry *e=s->entries;while(e&&(e->key.content_revision!=identity||e->key.longest_dip!=0))e=e->next;
+  if(e){e->references++;return e;}
+  PPTextResult initial={.layout_size=pp_item_snapshot_size(snapshot),.raster_density=1};const PPTextResult *source=NULL;
+  if(bitmap) {if(!pp_item_snapshot_bitmap_source(snapshot,&source,error))return NULL;}
+  else if(!svg)source=pp_item_snapshot_text_result(snapshot);
+  else {
+    PPAsset *asset=pp_asset_retain(s->assets,pp_item_snapshot_item(snapshot)->image_asset);const PPFrame *available=pp_asset_cached_svg(asset);
+    if(available)initial.frame=*available;pp_asset_release(asset);source=&initial;
+    if(!available)return NULL;
+  }
+  if(s->next_owner==UINT64_MAX){fail(error,PP_ERROR_RESOURCE_LIMIT,"Content ownership IDs exhausted");return NULL;}
+  e=calloc(1,sizeof(*e));if(!e){fail(error,PP_ERROR_MEMORY,"Cannot retain available content source");return NULL;}
+  e->key=(PPRasterKey){s->generation,s->next_owner++,identity,1,0,0};e->result=*source;e->done=true;
+  if(svg) {
+    size_t rgba=source->frame.stride*(size_t)source->frame.height,alpha=source->frame.content_alpha?(size_t)source->frame.width*source->frame.height:0;
+    if(rgba>256u*1024*1024-alpha||!pp_assets_reserve_raster(s->assets,rgba+alpha,error)){free(e);return NULL;}
+    e->result.frame.pixels=malloc(rgba);e->result.frame.content_alpha=alpha?malloc(alpha):NULL;
+    if(!e->result.frame.pixels||(alpha&&!e->result.frame.content_alpha)) {
+      pp_frame_destroy(&e->result.frame);pp_assets_release_raster(s->assets,rgba+alpha);free(e);fail(error,PP_ERROR_MEMORY,"Cannot retain immutable SVG seed");return NULL;
+    }
+    memcpy(e->result.frame.pixels,source->frame.pixels,rgba);if(alpha)memcpy(e->result.frame.content_alpha,source->frame.content_alpha,alpha);
+    e->owns_frame=true;e->bytes=rgba+alpha;
+  }
+  e->snapshot=pp_item_snapshot_retain(snapshot);e->references=1;e->next=s->entries;s->entries=e;return e;
+}
+bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density,double elapsed,
+    PPContentFrame *out,double *next,PPError *error) {
+  if(!c||!snapshot||!out||!next||!isfinite(elapsed)||elapsed<0)return fail(error,PP_ERROR_ARGUMENT,"Invalid retained content source request");
+  if(c->snapshot!=snapshot){pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(c->snapshot);c->snapshot=snapshot;}
+  const PPItem *item=pp_item_snapshot_item(snapshot);uint64_t identity=pp_item_snapshot_revision(snapshot);
+  const PPTextResult *text=pp_item_snapshot_text_result(snapshot);bool bitmap=text&&text->artwork.bitmap_only,svg=false;
+  if(item->kind==PP_ITEM_IMAGE) {
+    PPAsset *asset=pp_asset_retain(c->sources->assets,item->image_asset);svg=pp_asset_kind(asset)==PP_ASSET_SVG;pp_asset_release(asset);
+    if(!svg) {
+      if(c->desired||c->seed)pp_content_cancel(c);
+      PPFrameSelection selected;if(!pp_item_snapshot_select_frame(snapshot,elapsed,1,&selected,error))return false;
+      *out=(PPContentFrame){.frame=selected.frame,.content_id=identity,.source_revision=selected.revision,
+        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=visual_alpha(selected.frame)};*next=selected.next_change;return true;
+    }
+  }
+  if(bitmap&&c->desired)pp_content_cancel(c);
+  if(!bitmap&&!pp_content_request(c,snapshot,longest,density,error))return false;
+  uint64_t revision=0;const PPTextResult *available=pp_content_candidate(c,&revision);
+  if(!available&&c->current&&c->current->key.content_revision==identity){available=&c->current->result;revision=c->current->key.instance_id+2;}
+  if(!available) {
+    if(c->seed&&c->seed->key.content_revision!=identity){release_entry(c->sources,c->seed);c->seed=NULL;}
+    if(!c->seed)c->seed=seed(c,snapshot,svg,bitmap,error);
+    if(c->seed&&c->seed->result.frame.pixels&&c->rejected!=c->seed->key.instance_id){available=&c->seed->result;revision=c->seed->key.instance_id+2;}
+    if(!available&&error&&error->code)return false;
+  }
+  *next=HUGE_VAL;
+  if(available)*out=packet(available,identity,revision,svg);
+  else *out=(PPContentFrame){.content_id=identity,.source_revision=1,.layout=pp_item_snapshot_size(snapshot)};
+  return true;
 }

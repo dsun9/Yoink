@@ -69,8 +69,8 @@ PPAssets *pp_item_snapshot_assets(const PPItemSnapshot *snapshot);
 /* Process-local immutable content revision. Retains preserve it; a freshly
  * created snapshot has a distinct revision, including after same-item edits. */
 uint64_t pp_item_snapshot_revision(const PPItemSnapshot *snapshot);
-/* Borrowed text raster/geometry, NULL for images. Canonical layout is fixed;
- * raster pixels expire on a different-resolution compatibility frame request. */
+/* Borrowed immutable canonical text raster/geometry, NULL for images.
+ * Compatibility frame requests never mutate these source bytes or mapping. */
 const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot);
 /* Borrowed immutable useful-strike source for completely bitmap artwork.
  * Source RGBA remains valid through all requested-resolution frame calls and

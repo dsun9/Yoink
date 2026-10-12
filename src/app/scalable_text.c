@@ -39,24 +39,9 @@ static PPSourcePresentation packet(const PPTextResult *r,uint64_t identity,uint6
 }
 bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,PPSourcePresentation *out,PPError *error) {
-  uint64_t identity=pp_item_snapshot_revision(instance->snapshot);double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
+  double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
   if(!pp_scalable_request(p,s,instance,display,target,error))return false;
-  uint64_t revision=0;const PPTextResult *result=pp_content_current(s->content,&revision,NULL);
-  bool current=result&&s->scalable_identity==identity;
-  if(s->retained.content_id==identity) {
-    *out=(PPSourcePresentation){.content_id=identity,.source_revision=s->retained.source_revision,
-      .layout=s->retained.layout,.source_rect=s->retained.source_rect,.visual_alpha=s->retained.visual_alpha};
-  } else {
-    PPTextResult initial={.layout_size=pp_item_snapshot_size(instance->snapshot),.raster_density=1};const PPFrame *borrowed=NULL;
-    bool svg=pp_snapshot_is_svg(instance->snapshot);
-    if(svg&&!current) {
-      PPAsset *asset=pp_asset_retain(p->assets,pp_item_snapshot_item(instance->snapshot)->image_asset);
-      borrowed=pp_asset_cached_svg(asset);if(borrowed)initial.frame=*borrowed;pp_asset_release(asset);
-    }
-    const PPTextResult *source=current?result:svg?&initial:pp_item_snapshot_text_result(instance->snapshot);
-    *out=packet(source,identity,current?revision:1,svg);if(svg&&!current)out->frame=borrowed;
-  }
-  return true;
+  double next;return pp_content_frame(s->content,instance->snapshot,target,display->drawable_pixels_per_dip,0,out,&next,error);
 }
 void pp_scalable_poll(PPAnchorPresenter *p) {
   /* Revalidate live consumers before the shared dispatcher consumes a result.

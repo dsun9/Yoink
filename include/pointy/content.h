@@ -5,6 +5,14 @@
 
 typedef struct PPContentSources PPContentSources;
 typedef struct PPContentConsumer PPContentConsumer;
+typedef struct PPContentFrame {
+  const PPFrame *frame;
+  uint64_t content_id,source_revision;
+  PPVec2 layout;
+  bool visual_alpha;
+  PPRect source_rect;
+  PPSharedTexture *shared_texture; /* Filled only by a compatible native GL adapter. */
+} PPContentFrame;
 /* Owner-thread source service. Assets outlive the service and its consumers.
  * Each consumer has its own lifetime, target and clock. Equal immutable
  * content/size/density requests share one charged CPU result. */
@@ -14,6 +22,12 @@ bool pp_content_consumer_create(PPContentSources *sources,PPContentConsumer **ou
 void pp_content_consumer_destroy(PPContentConsumer *consumer);
 bool pp_content_request(PPContentConsumer *consumer,PPItemSnapshot *snapshot,
     double longest_dip,double density,PPError *error);
+/* PNG/GIF keep native bytes; bitmap-only text keeps useful strike detail;
+ * scalable/mixed text and SVG keep canonical mapping while preparing the
+ * endpoint. Elapsed time belongs to this caller; drawer passes zero. */
+bool pp_content_frame(PPContentConsumer *consumer,PPItemSnapshot *snapshot,
+    double longest_dip,double density,double elapsed,PPContentFrame *out,
+    double *next_change,PPError *error);
 /* This is the only completion dispatcher. It publishes CPU entries only;
  * native/UI owners validate and commit their own GPU bindings afterwards. */
 void pp_content_sources_poll(PPContentSources *sources);

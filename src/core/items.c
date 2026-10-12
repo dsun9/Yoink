@@ -12,9 +12,10 @@ struct PPItemSnapshot {
     PPAsset *image, *primary, *fallback;
     PPVec2 size;
     PPTextResult text_result;
+    PPTextResult compatibility;
     PPTextResult bitmap_source;
     double text_scale;
-    size_t raster_bytes, bitmap_bytes;
+    size_t raster_bytes, bitmap_bytes,compatibility_bytes;
 };
 
 static bool item_error(PPError *error, int code, const char *message) {
@@ -63,10 +64,11 @@ static bool render_text(PPItemSnapshot *snapshot, double scale, PPError *error) 
         pp_frame_destroy(&candidate.frame);
         return false;
     }
-    pp_frame_destroy(&snapshot->text_result.frame);
-    pp_assets_release_raster(snapshot->assets, snapshot->raster_bytes);
-    snapshot->text_result = candidate;
-    snapshot->raster_bytes = bytes;
+    if(snapshot->text_result.frame.pixels) {
+        pp_frame_destroy(&snapshot->compatibility.frame);
+        pp_assets_release_raster(snapshot->assets,snapshot->compatibility_bytes);
+        snapshot->compatibility=candidate;snapshot->compatibility_bytes=bytes;
+    } else {snapshot->text_result=candidate;snapshot->raster_bytes=bytes;}
     snapshot->text_scale = scale;
     return true;
 }
@@ -130,9 +132,11 @@ PPItemSnapshot *pp_item_snapshot_retain(PPItemSnapshot *snapshot) {
 void pp_item_snapshot_release(PPItemSnapshot *snapshot) {
     if (!snapshot || --snapshot->references) return;
     pp_frame_destroy(&snapshot->text_result.frame);
+    pp_frame_destroy(&snapshot->compatibility.frame);
     pp_frame_destroy(&snapshot->bitmap_source.frame);
     pp_assets_release_raster(snapshot->assets, snapshot->raster_bytes);
     pp_assets_release_raster(snapshot->assets, snapshot->bitmap_bytes);
+    pp_assets_release_raster(snapshot->assets,snapshot->compatibility_bytes);
     pp_asset_release(snapshot->image);
     pp_asset_release(snapshot->primary);
     pp_asset_release(snapshot->fallback);
@@ -193,8 +197,11 @@ bool pp_item_snapshot_frame(PPItemSnapshot *snapshot, double elapsed, double sca
         return item_error(error, PP_ERROR_RESOURCE_LIMIT, "Raster exceeds 8192 pixels per axis");
     if (snapshot->item.kind == PP_ITEM_IMAGE)
         return pp_asset_frame(snapshot->image, elapsed, (int)fmax(1, width), (int)fmax(1, height), out, next, error);
-    if (snapshot->text_scale != scale && !render_text(snapshot, scale, error)) return false;
-    *out = &snapshot->text_result.frame;
+    if(scale==1)*out=&snapshot->text_result.frame;
+    else {
+        if((snapshot->text_scale!=scale||!snapshot->compatibility.frame.pixels)&&!render_text(snapshot,scale,error))return false;
+        *out=&snapshot->compatibility.frame;
+    }
     *next = INFINITY;
     return true;
 }
