@@ -42,6 +42,7 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
    * Entries have stable owner IDs, independent of sprite/item IDs. */
   for(size_t i=0;i<p->instance_count;i++) {
     PPSprite *s=p->instances+i;if(!s->content)continue;
+    if(s->pose.opacity<=0){pp_scalable_cancel(p,s);continue;}
     const PPSceneInstance *instance=pp_scene_get(p->scene,s->id);const PPDisplay *d=NULL;
     for(size_t j=0;j<p->display_count;j++)if(p->displays[j].id==s->display_id)d=p->displays+j;
     PPRasterKey key=pp_content_target(s->content);

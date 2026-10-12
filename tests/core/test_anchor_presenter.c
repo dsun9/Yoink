@@ -686,6 +686,29 @@ static void test_new_scalable_pull_survives_busy_worker(void) {
     CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS new scalable pull keeps canonical artwork when the worker is busy");
 }
+static void test_zero_opacity_cancels_only_its_source_target(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t hidden=source_sprite(p,scene,displays,1);wait_worker_idle(p,displays,1.3);
+    PPSprite *other=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{600,300},96,0,1},1.4,&error);CHECK(other);
+    uint64_t sibling=other->id;CHECK(pp_sprites_update(p,1.4,&error));
+    hold_next_worker();PPPlatformEvent wheel={.surface=other->surface,.instance_id=sibling,.kind=PP_EVENT_WHEEL,.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    event(p,other->surface,PP_EVENT_BUTTON_DOWN,600,300,2.01);CHECK(capture_owner==other->surface);
+    uint64_t requests=pp_anchor_presenter_metrics(p).worker_requests;
+    PPPose pose=pp_scene_get(scene,hidden)->pose;pose.opacity=0;pose.longest_dip=384;CHECK(pp_scene_set_pose(scene,hidden,pose,&error));
+    pp_sprites_sync(p);CHECK(pp_sprites_update(p,2.01,&error));
+    CHECK(!surface_for(hidden)->shown&&capture_owner==surface_for(sibling));
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==requests);
+    CHECK(pp_content_requested(pp_sprites_find(p,sibling)->content));
+    release_worker();wait_worker_idle(p,displays,2.2);finish_worker_control();
+    CHECK(surface_for(sibling)->shown&&!surface_for(hidden)->shown);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS zero-opacity size target starts no preparation and preserves another consumer's pending source and accepted input");
+}
 static void test_cached_source_survives_compatibility_request(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -1252,6 +1275,7 @@ static void test_hidden_obsolete_source_releases_its_reference(void) {
 int main(void) {
     test_hidden_obsolete_source_releases_its_reference();
     test_removed_pressed_anchor_cancels_pending_pull();
+    test_zero_opacity_cancels_only_its_source_target();
     test_anchor_pose_edits_keep_artwork_preparation();
     test_scalable_anchor_pull_reuses_prepared_content();
     test_equal_consumers_share_requested_source_preparation();
