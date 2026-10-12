@@ -40,7 +40,14 @@ extern "C" bool pp_test_desktop_capture_start(RECT rectangle) {
 extern "C" unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new) {
   if(!duplication||rectangle.left<screen.left||rectangle.top<screen.top||rectangle.right>screen.right||rectangle.bottom>screen.bottom){std::fprintf(stderr,"Capture out of bounds rect=%ld,%ld,%ld,%ld screen=%ld,%ld,%ld,%ld\n",rectangle.left,rectangle.top,rectangle.right,rectangle.bottom,screen.left,screen.top,screen.right,screen.bottom);return nullptr;}
   ComPtr<IDXGIResource> resource;DXGI_OUTDUPL_FRAME_INFO info{};
-  HRESULT result=duplication->AcquireNextFrame(250,&info,&resource);
+  HRESULT result;ULONGLONG deadline=GetTickCount64()+1000;
+  do {
+    resource.Reset();result=duplication->AcquireNextFrame(250,&info,&resource);
+    if(FAILED(result)||!require_new||info.LastPresentTime.QuadPart)break;
+    /* A pointer-only update carries the unchanged desktop texture. Require
+     * a desktop-image update after moving the sprite, within a bounded wait. */
+    duplication->ReleaseFrame();resource.Reset();result=DXGI_ERROR_WAIT_TIMEOUT;
+  }while(GetTickCount64()<deadline);
   bool acquired=SUCCEEDED(result);
   if(result==DXGI_ERROR_WAIT_TIMEOUT&&(require_new||!staging)){std::fprintf(stderr,"Capture timed out waiting for a fresh desktop frame\n");return nullptr;}
   if(!acquired&&result!=DXGI_ERROR_WAIT_TIMEOUT){std::fprintf(stderr,"Desktop Duplication acquire failed: %08lx\n",result);return nullptr;}

@@ -17,7 +17,8 @@ nonactivation, and unchanged raster/upload/transform/readback counters.
 
 Capture is diagnostic D3D11 code, linked only into this Windows test executable.
 Production rendering remains OpenGL. The capture requires a fresh desktop
-frame after movement and fails on an unavailable capture rather than accepting
+image update after movement, rejects pointer-only updates, and fails on an
+unavailable capture rather than accepting
 GL readback or a stale reference. After release, an unchanged desktop may reuse
 the last captured frame. The current helper requires Windows 10's Output5
 interface and a single unrotated capture output; physical mixed-monitor and
@@ -47,11 +48,19 @@ The ownership case uses real GL and checks that a target allocation is charged,
 an over-budget candidate preserves accepted native bounds/storage, replacement
 overlap contributes to the peak, hiding releases the target, reappearance
 allocates it again, and a GL error during exposure removes interception and
-releases output ownership.
+releases output ownership. Destroying a native sprite window must delete its
+actual output texture through the surviving share owner. A forced failure to
+bind both contexts keeps the GPU charge until the group's final context ends.
+The receiver starts suspended in a private kill-on-close job before creating
+its fullscreen window, so abrupt fixture termination also closes the receiver.
 
 On 2026-10-12 the Release build and all 36 tests outside the desktop suite passed.
-The native ownership case passed with verified cursor/input/foreground recovery.
+The native ownership case passed with verified cursor/input/foreground recovery,
+including destroyed-window shared-object cleanup and deferred group accounting.
 Desktop Duplication received no initial desktop frame on this host, so the new
 visible regression and 1536 DIP timing results remain unverified. Earlier
 diagnostic logs recorded 5,040 missing PNG pixels and 6,275 missing hand pixels;
 those logs establish the issue's reproduction, not a pass for this change.
+The existing bitmap GDI pixel check also failed with the same white sample in
+both this implementation and a probe using the original renderer. That check
+cannot supply visible recovery evidence on this host.

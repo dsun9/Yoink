@@ -27,6 +27,7 @@ static double ordinary_ms[256],exposure_ms[256];
 static unsigned ordinary_count,exposure_count;
 unsigned pp_test_exposure_input_wait(void);
 unsigned pp_test_exposure_input_count(void);
+void pp_test_exposure_context_unavailable(bool value);
 static double now(void){LARGE_INTEGER n,f;QueryPerformanceCounter(&n);QueryPerformanceFrequency(&f);return(double)n.QuadPart/f.QuadPart;}
 static void cleanup(void){
   pp_anchor_presenter_destroy(presenter);pp_renderer_destroy(renderer);pp_scene_destroy(scene);pp_project_destroy(project);pp_assets_destroy(assets);pp_displays_free(displays);
@@ -176,6 +177,14 @@ static void ownership(void){
   CHECK(DestroyWindow(native(s->surface)));remove_sprite(id);
   API(pp_renderer_complete(presenter->texture_owner,&error));CHECK(!glIsTexture((GLuint)name));
   CHECK(!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
+  id=spawn((PPVec2){screen.x+screen.w*.5,screen.y+screen.h*.5},96);s=pp_sprites_find(presenter,id);
+  charged=pp_anchor_presenter_gpu_resources(presenter).retained_bytes;
+  API(pp_renderer_complete(presenter->texture_owner,&error));SDL_Window *owner_window=SDL_GL_GetCurrentWindow();CHECK(owner_window);
+  HWND owner_native=SDL_GetPointerProperty(SDL_GetWindowProperties(owner_window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);CHECK(owner_native);
+  CHECK(DestroyWindow(native(s->surface)));CHECK(DestroyWindow(owner_native));
+  pp_test_exposure_context_unavailable(true);remove_sprite(id);pp_test_exposure_context_unavailable(false);
+  CHECK(presenter->retired_gpu_bytes==charged&&pp_anchor_presenter_gpu_resources(presenter).retained_bytes==charged);
+  pp_gif_clear(presenter);CHECK(!presenter->retired_gpu_bytes&&!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
   puts("PASS real GL output ownership, candidate overlap/rejection, hide/recreate and failed exposure cleanup");
 }
 int main(int argc,char **argv){
