@@ -152,6 +152,10 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
     if (!renderer->context || !SDL_GL_MakeCurrent(renderer->window, renderer->context)) {
         error_set(error, PP_ERROR_RENDER, SDL_GetError()); pp_renderer_destroy(renderer); return false;
     }
+    /* Native event delivery and the runtime scheduler pace interaction. A
+     * per-sprite swap must not wait for another refresh inside that owner work.
+     * Unsupported contexts retain their driver policy and remain measurable. */
+    if(window_id)SDL_GL_SetSwapInterval(0);
     if (!pp_gl_load(&renderer->gl, error)) { pp_renderer_destroy(renderer); return false; }
     PPGL *gl = &renderer->gl;
     renderer->program = pp_gl_program(gl, vertex_shader, window_id?color_shader:fragment_shader, error);
