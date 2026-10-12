@@ -149,7 +149,8 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       continue;
     }
     double scale = display->desktop_units_per_dip;
-    if (s->dirty || s->scale != scale || s->drawable_density!=display->drawable_pixels_per_dip || now >= s->next_frame) {
+    if (s->dirty || s->scale != scale || s->drawable_density!=display->drawable_pixels_per_dip || now >= s->next_frame ||
+        (s->raster_retry&&pp_raster_worker_can_request(p->worker,p->generation,s->id))) {
       if (!pp_scene_set_pose(p->scene, s->id, s->pose, error))
         return false;
       const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);

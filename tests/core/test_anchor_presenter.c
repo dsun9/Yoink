@@ -580,6 +580,44 @@ static void wait_worker_idle(PPAnchorPresenter *p,PPDisplay *displays,double now
     for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++) {SDL_Delay(1);update(p,displays,400,300,now);}
     update(p,displays,400,300,now);CHECK(!pp_anchor_presenter_metrics(p).worker_pending_jobs);
 }
+static void test_new_scalable_pull_survives_busy_worker(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));hold_next_worker();
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t first=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    uint64_t second=png_pull(p,scene,displays,2);CHECK(pp_scene_count(scene)==2);
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+    uint64_t third=png_pull(p,scene,displays,3);
+    CHECK(pp_scene_count(scene)==3&&first!=second&&second!=third);
+    CHECK(surface_for(first)->shown&&surface_for(second)->shown&&surface_for(third)->shown);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads+1);
+    CHECK(pp_anchor_presenter_metrics(p).worker_pending_jobs==2);
+    update(p,displays,400,300,3.5);
+    PPRendererMetrics waiting=pp_anchor_presenter_renderer_metrics(p);
+    for(int i=0;i<8;i++)update(p,displays,400,300,3.5+i*.01);
+    PPRendererMetrics unchanged=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(unchanged.source_uploads==waiting.source_uploads&&unchanged.transform_draws==waiting.transform_draws);
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==2);
+    double latest=pp_scene_get(scene,third)->pose.longest_dip*1.21;
+    PPPlatformEvent wheel={.surface=surface_for(third),.instance_id=third,.kind=PP_EVENT_WHEEL,
+      .wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=3.8};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));wheel.timestamp=3.81;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    update(p,displays,400,300,3.94);
+    CHECK(fabs(pp_scene_get(scene,third)->pose.longest_dip-latest)<1e-7);
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==2&&pp_anchor_presenter_metrics(p).worker_pending_jobs==2);
+    release_worker();
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_source_builds<3;i++){SDL_Delay(1);update(p,displays,400,300,3.94);}
+    CHECK(pp_anchor_presenter_metrics(p).worker_source_builds==3);
+    wait_worker_idle(p,displays,3.94);finish_worker_control();
+    CHECK(pp_scene_count(scene)==3&&surface_for(third)->shown);
+    PPPresentationMetrics sharp=pp_anchor_presenter_metrics(p);
+    CHECK(sharp.last_sharp_instance_id==third&&sharp.last_sharp_input_timestamp==3.81&&fabs(sharp.last_sharp_longest_dip-latest)<1e-7);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);
+    CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS new scalable pull keeps canonical artwork when the worker is busy");
+}
 static void test_cached_source_survives_compatibility_request(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -824,6 +862,7 @@ static void test_bitmap_candidate_context_preserves_usable_source(void) {
     puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
 }
 int main(void) {
+    test_new_scalable_pull_survives_busy_worker();
     test_settled_worker_matches_fresh_text();
     test_scalable_publication_failure_releases_interceptor();
     test_scalable_budget_failure_and_project_teardown();
