@@ -3,6 +3,16 @@
 #include <string.h>
 #include <stdlib.h>
 static bool import(PPAssets *,const char *,PPAssetId *,PPError *);
+static void test_fractional_svg_viewport(void) {
+    PPAssets *assets=NULL;PPError error={0};PPAssetId id;CHECK(pp_assets_create(&assets,&error));
+    CHECK(import(assets,"<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>",&id,&error));
+    PPAsset *asset=pp_asset_retain(assets,id);PPVec2 viewport=pp_asset_intrinsic_size(asset);
+    CHECK(viewport.x==13.5&&viewport.y==7.5);
+    const PPFrame *frame=pp_asset_cached_svg(asset);CHECK(frame&&frame->width==14&&frame->height==8);
+    CHECK(frame->pixels[0]==255&&frame->content_alpha[0]==255);
+    pp_asset_release(asset);pp_assets_destroy(assets);
+    puts("PASS fractional SVG viewport remains canonical independently of rounded cached pixel dimensions");
+}
 static void test_isolated_requested_svg(void) {
     const char *svg="<svg width='13' height='7' viewBox='0 0 13 7'><rect x='2' y='1' width='9' height='5' fill='red' fill-opacity='.5'/></svg>";
     PPBytes bytes={(const uint8_t *)svg,strlen(svg)};PPFrame owned={0};PPError error={0};
@@ -113,6 +123,6 @@ int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"--opacity")) test_svg_opacity_semantics();
     else if(argc==2 && !strcmp(argv[1],"--paint")) test_svg_paint_value_grammar();
     else if(argc==2 && !strcmp(argv[1],"--numeric")) test_svg_numeric_paint_grammar();
-    else { test_isolated_requested_svg(); test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
+    else { test_fractional_svg_viewport(); test_isolated_requested_svg(); test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
     puts("PASS SVG: supported rendering and paint grammar; unsupported opacity compositing and paint values rejected."); return 0;
 }

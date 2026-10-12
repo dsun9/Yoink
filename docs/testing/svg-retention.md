@@ -20,11 +20,21 @@ The worker has no shared asset, snapshot, reservation or GL reference. Private
 document and PlutoVG surface destruction finish before its result is returned.
 
 Rounded requested pixel dimensions map to the complete canonical viewport.
+SVG preflight keeps a fractional document viewport independently of the rounded
+intrinsic cache dimensions, so a 13.5 by 7.5 viewport keeps that aspect.
 The raster's aspect does not redefine the logical aspect, center, longest-side
 size, source padding or grabbed point. A fresh compatibility/preview request
 may replace the shared asset's single raster; existing sprite CPU endpoints and
 textures keep their own geometry and pixels. Two sprites sharing one SVG can
 therefore retain different resolutions.
+
+The CPU compatibility adapter and anchor previews also pass the canonical SVG
+viewport to the mapped GL export. They compute rotated extents from that
+viewport rather than rounded source pixels. A 13.5 by 7.5 SVG at 337 DIP and
+17.25 degrees has a 378 by 279 pixel extent at density one; interpreting its
+337 by 188 source pixels as the layout would incorrectly add a row. Native
+Mac geometry remains unverified; the adapter builds and its public presenter
+geometry check runs with a rendering boundary.
 
 SVG requests use the existing presenter generation, instance, snapshot revision,
 serial, endpoint size and density tags. Completion revalidates the live target.
@@ -54,9 +64,9 @@ compares an owned requested-resolution raster with the existing fresh asset
 renderer, checks exact output/scratch limits, and preserves unsupported-feature
 rejections. The runtime seam checks project generation cleanup.
 
-The real GL quality diagnostic adds two SVG fixtures to the existing scalable
-quality test: a non-square padded translucent/stroked viewport, and a gradient
-with a shifted viewBox. It compares full worker/fresh GL RGBA and alpha output at
+The real GL quality diagnostic adds three SVG fixtures to the existing scalable
+quality test: a non-square padded translucent/stroked viewport, a gradient
+with a shifted viewBox, and a fractional viewport. It compares full worker/fresh GL RGBA and alpha output at
 zero and 17.25-degree rotation and opacity 0.63. The independent bilinear color
 reference keeps the existing channel tolerance of two and separately counts
 the narrow float-boundary ambiguity policy. This quality check does not measure

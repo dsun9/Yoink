@@ -495,7 +495,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
   if(!pp_renderer_create(&renderer,&error)) goto done;
   const char *diagnostic_name=diagnostic_kind==0?"scalable":diagnostic_kind==2?"png":"gif";
   if(diagnostic) printf("SCOPE diagnostic=%s-retained-only required_cases=16 overall_96_case_acceptance=not-evaluated\n",diagnostic_name);
-  printf("PROTOCOL build=%s backend=source-dependent-text-png-gif-retained-svg-layered warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,diagnostic?"source-only-diagnostic":"default-emoji-1536-dip-150-percent");
+  printf("PROTOCOL build=%s backend=source-dependent-retained-gl warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,diagnostic?"source-only-diagnostic":"default-emoji-1536-dip-150-percent");
   printf("GPU renderer=\"%s\" vendor=\"%s\" version=\"%s\" renderer_cold_first_use_ms=%.3f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),pp_probe_clock()-renderer_start);
   static const char *names[]={"default-emoji","bitmap-noto","png","gif","svg","mixed-text"};
   const double sizes[]={96,384,768,1536},densities[]={1,1.5},angles[]={0,17.25};
@@ -515,7 +515,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       double values[7][ACCEPTANCE_SAMPLES]={{0}}; unsigned observed=0,observed_gpu=0;
       unsigned input_before=pp_probe_injected_hook_count; uint64_t builds_before=pp_assets_source_metrics(p.assets).raster_builds;
       PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(&p);
-      bool direct=kind!=4,scalable=pp_snapshot_is_scalable_text(snapshot);
+      bool direct=true,scalable=pp_snapshot_is_scalable(snapshot);
       if(!(direct?pp_surface_create_gl(&surface,&error):pp_surface_create(&surface,&error))) {printf("UNSUPPORTED native source=%s error=\"%s\"\n",names[kind],error.message);continue;}
       if(direct) {sprite.surface=surface;p.instances=&sprite;p.instance_count=1;}
       if(scalable) {

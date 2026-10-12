@@ -9,9 +9,11 @@ static plutosvg_document_t *document(PPBytes b,PPError *e) {
 }
 bool pp_svg_preflight(PPBytes b,PPMediaInfo *info,PPError *e) {
     if(!pp_svg_validate(b,e)) return false; plutosvg_document_t *d=document(b,e); if(!d) return false;
-    double w=ceil(plutosvg_document_get_width(d)),h=ceil(plutosvg_document_get_height(d)); plutosvg_document_destroy(d);
+    double viewport_w=plutosvg_document_get_width(d),viewport_h=plutosvg_document_get_height(d);
+    double w=ceil(viewport_w),h=ceil(viewport_h); plutosvg_document_destroy(d);
     if(!isfinite(w) || !isfinite(h) || w>PP_MEDIA_MAX_DIMENSION || h>PP_MEDIA_MAX_DIMENSION) return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"SVG intrinsic dimensions exceed 8192");
-    info->width=(int)w;info->height=(int)h;info->count=1;size_t bytes;return pp_media_size(info->width,info->height,1,&bytes,e);
+    info->width=(int)w;info->height=(int)h;info->count=1;info->svg_viewport=(PPVec2){viewport_w,viewport_h};
+    size_t bytes;return pp_media_size(info->width,info->height,1,&bytes,e);
 }
 bool pp_svg_raster(PPAsset *a,int w,int h,PPError *e) {
     size_t bytes; if(!pp_media_size(w,h,1,&bytes,e) || !pp_media_reserve(a,bytes,e)) return false;

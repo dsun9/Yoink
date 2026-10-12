@@ -116,6 +116,15 @@ bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,do
     }
     return true;
 }
+bool pp_renderer_transform_source(PPRenderer *r,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
+    (void)r;(void)opacity;(void)error;cpu_transforms++;int w,h;CHECK(pp_geometry_source_extent(layout,rect,longest,angle,scale,&w,&h));
+    *out=(PPFrame){calloc((size_t)w*h,4),calloc((size_t)w*h,1),w,h,(size_t)w*4};source_width=source->width;
+    for(int y=0;y<source->height;y++)for(int x=0;x<source->width;x++) {
+        const uint8_t *pixel=source->pixels+(size_t)y*source->stride+x*4;
+        if(pixel[3]==255){out->pixels[0]=pixel[0];out->pixels[2]=pixel[2];return true;}
+    }
+    return true;
+}
 void pp_frame_destroy(PPFrame *f) {free(f->pixels);free(f->content_alpha);*f=(PPFrame){0};}
 static PPSurface *instance_surface(void) {for(PPSurface *s=surfaces;s;s=s->next) if(s->id==1) return s;return NULL;}
 static PPItem gif_item(PPAssets *assets,const char *name) {
@@ -464,7 +473,7 @@ static void test_png_empty_source_releases_input(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
     puts("PASS fully transparent PNG source hides/releases accepted input; hidden translation/static reuses visibility metadata");
 }
-static void test_png_candidate_preserves_compatibility_clock(void) {
+static void test_png_candidate_preserves_svg_clock(void) {
     PPAssets *assets=NULL;PPError error={0};CHECK(pp_assets_create(&assets,&error));
     PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
     CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
@@ -480,7 +489,7 @@ static void test_png_candidate_preserves_compatibility_clock(void) {
     CHECK(pp_scene_get(p->scene,id)->animation_start==1);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==previous_gpu);
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
-    puts("PASS rejected PNG candidate preserves independent compatibility surface, immutable source and animation start");
+    puts("PASS rejected PNG candidate preserves independent retained SVG surface, immutable source and animation start");
 }
 static void test_gif_budget_sharing_and_png_transitions(void) {
     PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
@@ -835,7 +844,7 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
 }
-static void test_bitmap_candidate_context_preserves_usable_source(void) {
+static void test_bitmap_candidate_upload_preserves_usable_source(void) {
     PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
     CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     PPSprite *created=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{400,300},96,0,1},1,&error);CHECK(created);uint64_t id=created->id;
@@ -852,7 +861,7 @@ static void test_bitmap_candidate_context_preserves_usable_source(void) {
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==previous_gpu);
     CHECK(pp_scene_replace(p->scene,id,&bitmap,3,&error));update(p,displays,400,300,3);CHECK(surface_for(id)->window_id&&surface_for(id)->source_width==136);
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
-    puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
+    puts("PASS rejected bitmap GPU candidate preserves independent usable SVG source/clock and releases candidate ownership before successful retry");
 }
 static void test_svg_endpoint_worker_reuses_cached_artwork(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
@@ -961,7 +970,45 @@ static void test_svg_initial_source_is_cached(void) {
   }
     puts("PASS initial SVG sprite uses the available asset raster while its isolated requested-resolution endpoint prepares");
 }
+static void test_svg_full_queue_keeps_new_cached_sprite(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=svg_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    hold_next_worker();uint64_t ids[3];
+    for(int i=0;i<3;i++) {
+        PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400+i*30,300},96,0,1},1,&error);CHECK(s);ids[i]=s->id;
+        update(p,displays,400,300,1);if(!i)CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    }
+    CHECK(pp_scene_get(scene,ids[2])&&pp_scene_count(scene)==3&&pp_anchor_presenter_instance_count(p)==3);
+    CHECK(surface_for(ids[2])->shown&&surface_for(ids[2])->source_width==13);
+    CHECK(p->notice.code==PP_ERROR_RESOURCE_LIMIT&&pp_raster_worker_status(p->worker).pending_jobs==2);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    release_worker();wait_worker_idle(p,displays,1);finish_worker_control();
+    CHECK(pp_scene_count(scene)==3&&surface_for(ids[2])->shown&&!pp_raster_worker_status(p->worker).reserved_bytes);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS full SVG worker queue preserves a newly pulled cached sprite and bounds admitted captures");
+}
+static void test_svg_cpu_adapter_keeps_canonical_aspect(void) {
+    PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    const char *svg="<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>";
+    PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+    PPItemSnapshot *snapshot=NULL;CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
+    PPVec2 canonical=pp_item_snapshot_size(snapshot);CHECK(canonical.x==96&&fabs(canonical.y-53.333333333333333)<1e-12);
+    PPAnchorPresenter p={.assets=assets,.renderer=(PPRenderer *)1};PPSurface *surface=NULL;CHECK(pp_surface_create(&surface,&error));
+    PPDisplay display={.drawable_pixels_per_dip=1,.desktop_units_per_dip=1};size_t retained=0;double next;
+    CHECK(pp_present_content(&p,surface,snapshot,(PPPose){{400,300},337,17.25,.63},&display,0,&next,&retained,&error));
+    /* Worked viewport extent: ceil(337*cos + (337*5/9)*sin),
+     * ceil(337*sin + (337*5/9)*cos). Rounded source337x188 would be378x280. */
+    CHECK(surface->bounds.w==378&&surface->bounds.h==279&&retained==421848);
+    pp_assets_release_raster(assets,retained);pp_surface_destroy(surface);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS CPU compatibility SVG transform keeps fractional canonical aspect independently of rounded source texels");
+}
 int main(void) {
+    test_svg_cpu_adapter_keeps_canonical_aspect();
+    test_svg_full_queue_keeps_new_cached_sprite();
     test_svg_initial_source_is_cached();
     test_svg_endpoint_worker_reuses_cached_artwork();
     test_svg_shared_asset_keeps_independent_sizes();
@@ -989,13 +1036,13 @@ int main(void) {
     test_canonical_source_mapping();
 #if defined(_WIN32)
     test_bitmap_text_transform_reuses_useful_source();
-    test_bitmap_candidate_context_preserves_usable_source();
+    test_bitmap_candidate_upload_preserves_usable_source();
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();
     test_png_gpu_limit_and_overlap();
     test_png_broken_context_releases_interceptor();
     test_png_empty_source_releases_input();
-    test_png_candidate_preserves_compatibility_clock();
+    test_png_candidate_preserves_svg_clock();
 #endif
     test_latest_resize_sharp_observation();
     test_native_retention_contract();

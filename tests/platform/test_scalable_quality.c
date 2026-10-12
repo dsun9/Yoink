@@ -22,7 +22,7 @@ int main(void) {
   PPAssets *assets=NULL;PPRenderer *renderer=NULL;CHECK(pp_assets_create(&assets,&error));CHECK(pp_renderer_create(&renderer,&error));
   PPAssetId overhang=font(assets,PP_FONT_FIXTURES "/PointyOverhang.ttf"),hybrid=font(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");
   PPAssetId twemoji=font(assets,PP_RESOURCES "/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf"),noto=font(assets,PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
-  for(int kind=0;kind<5;kind++) {
+  for(int kind=0;kind<6;kind++) {
     PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81j\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb\nA",.opacity=1,
       .text_style={.requested_family="Pointy Overhang",.primary_asset=overhang,.fallback_asset=noto,.font_size_dip=96,.color={30,120,230,210}}};
     if(kind==0) {item.text="\xf0\x9f\x91\x89\xf0\x9f\x8f\xbd\n\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb";item.text_style.primary_asset=twemoji;item.text_style.fallback_asset=(PPAssetId){0};item.text_style.requested_family="Twemoji Mozilla";}
@@ -30,7 +30,8 @@ int main(void) {
     if(kind>=3) {
       const char *svg=kind==3?
         "<svg width='13' height='7' viewBox='0 0 13 7'><rect x='2' y='1' width='9' height='5' fill='#ef6f21' fill-opacity='.5'/><path d='M3 5L6 2L10 5' fill='none' stroke='#286ec8' stroke-width='.3'/></svg>":
-        "<svg width='96' height='64' viewBox='10 20 96 64'><defs><linearGradient id='g'><stop offset='0' stop-color='#ef6f21'/><stop offset='1' stop-color='#286ec8'/></linearGradient></defs><rect x='14' y='24' width='88' height='56' rx='12' fill='url(#g)'/><path d='M26 52L78 52M62 36L78 52L62 68' fill='none' stroke='white' stroke-width='6'/></svg>";
+        kind==4?"<svg width='96' height='64' viewBox='10 20 96 64'><defs><linearGradient id='g'><stop offset='0' stop-color='#ef6f21'/><stop offset='1' stop-color='#286ec8'/></linearGradient></defs><rect x='14' y='24' width='88' height='56' rx='12' fill='url(#g)'/><path d='M26 52L78 52M62 36L78 52L62 68' fill='none' stroke='white' stroke-width='6'/></svg>":
+        "<svg width='13.5' height='7.5'><rect x='2' y='1' width='9' height='5' fill='#ef6f21' fill-opacity='.5'/><path d='M3 5L6 2L10 5' fill='none' stroke='#286ec8' stroke-width='.3'/></svg>";
       item=(PPItem){.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
       CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
     }

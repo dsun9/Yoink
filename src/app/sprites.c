@@ -11,13 +11,15 @@ static const PPDisplay *display_by_id(const PPDisplay *d, size_t count,
       return d + i;
   return NULL;
 }
-bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
-                PPPose pose, const PPDisplay *display, size_t *retained, PPError *error) {
+static bool present_source(PPAnchorPresenter *p,PPSurface *surface,const PPFrame *source,
+                PPVec2 layout,PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
   double scale = display->drawable_pixels_per_dip;
   double desktop_per_pixel = display->desktop_units_per_dip / scale;
   int width, height;
-  if (!pp_geometry_extent(source, pose.longest_dip, pose.angle_deg, scale,
-                          &width, &height) ||
+  PPRect viewport={0,0,layout.x,layout.y};bool mapped=layout.x>0&&layout.y>0;
+  bool extent=mapped?pp_geometry_source_extent(layout,viewport,pose.longest_dip,pose.angle_deg,scale,&width,&height):
+    pp_geometry_extent(source,pose.longest_dip,pose.angle_deg,scale,&width,&height);
+  if (!extent ||
       width > 8192 || height > 8192) {
     if (error) {
       error->code = PP_ERROR_RESOURCE_LIMIT;
@@ -30,9 +32,8 @@ bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
   if (!pp_assets_reserve_raster(p->assets, frame_bytes, error))
     return false;
   PPFrame frame = {0};
-  bool ok =
-      pp_renderer_transform(p->renderer, source, pose.longest_dip,
-                            pose.angle_deg, pose.opacity, scale, &frame, error);
+  bool ok=mapped?pp_renderer_transform_source(p->renderer,source,layout,viewport,pose.longest_dip,pose.angle_deg,pose.opacity,scale,&frame,error):
+      pp_renderer_transform(p->renderer,source,pose.longest_dip,pose.angle_deg,pose.opacity,scale,&frame,error);
   /* Old + candidate copies overlap until native presentation commits. */
   size_t native_bytes = pp_surface_raster_bytes(width, height);
   bool reserved =
@@ -57,6 +58,10 @@ bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
   pp_assets_release_raster(p->assets, frame_bytes);
   return ok;
 }
+bool pp_present(PPAnchorPresenter *p,PPSurface *surface,const PPFrame *source,
+    PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
+  return present_source(p,surface,source,(PPVec2){0},pose,display,retained,error);
+}
 bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,
@@ -67,8 +72,10 @@ bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
   const PPFrame *source = NULL;
   if (!pp_item_snapshot_frame(snapshot, elapsed, scale, &source, next, error))
     return false;
-  return pp_present(p, surface, source, pose, display,
-                    bytes, error);
+  if(pp_snapshot_is_svg(snapshot)&&!pp_source_visual_alpha(source)) {
+    pp_surface_hide(surface);return true;
+  }
+  return present_source(p,surface,source,pp_snapshot_is_svg(snapshot)?size:(PPVec2){0},pose,display,bytes,error);
 }
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id) {
   for (size_t i = 0; i < p->instance_count; i++)

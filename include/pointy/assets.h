@@ -37,6 +37,8 @@ void pp_asset_release(PPAsset *asset);
 /* Source remains valid until manager destruction, including cache eviction. */
 PPBytes pp_asset_source(const PPAsset *asset);
 PPAssetKind pp_asset_kind(const PPAsset *asset);
+/* SVG returns its canonical viewport, which can be fractional. Initial cached
+ * raster dimensions are rounded independently; PNG/GIF return source pixels. */
 PPVec2 pp_asset_intrinsic_size(const PPAsset *asset);
 /* Borrows the last available SVG raster without parsing, rendering, eviction
  * or metric changes. NULL means no decoded cache is available. Retain the asset
