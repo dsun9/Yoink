@@ -20,6 +20,7 @@ static HANDLE receiver_job;
 static HWND old_foreground;
 static POINT old_cursor;
 static bool left_held;
+static bool capture_enabled=true;
 static unsigned downs[256],ups[256],moves[256];
 static uint64_t measuring_id;
 static bool measuring_exposure;
@@ -82,6 +83,7 @@ bool pp_test_desktop_capture_start(RECT rectangle);
 static HWND native(PPSurface *surface){SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(surface));CHECK(window);return SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);}
 static RECT rectangle(uint64_t id){PPSprite *s=pp_sprites_find(presenter,id);CHECK(s);RECT r;CHECK(GetWindowRect(native(s->surface),&r));return r;}
 static void compare(uint64_t id,const unsigned char *reference,const char *stage){
+  if(!capture_enabled)return;
   pump();RECT r=rectangle(id);PPRect screen=displays[0].bounds;
   RECT visible={SDL_max(r.left,(LONG)screen.x),SDL_max(r.top,(LONG)screen.y),SDL_min(r.right,(LONG)(screen.x+screen.w)),SDL_min(r.bottom,(LONG)(screen.y+screen.h))};
   CHECK(visible.right>visible.left&&visible.bottom>visible.top);
@@ -103,9 +105,12 @@ static void exercise(int side,double size){
   do {pump();}while(pp_anchor_presenter_metrics(presenter).worker_pending_jobs&&GetTickCount64()<until);
   CHECK(!pp_anchor_presenter_metrics(presenter).worker_pending_jobs);RECT ref=rectangle(reference_id);
   CHECK(ref.left>=screen.x&&ref.top>=screen.y&&ref.right<=screen.x+screen.w&&ref.bottom<=screen.y+screen.h);
-  unsigned char *reference=pp_test_desktop_capture(ref,true);CHECK(reference);
-  size_t colored=0;for(size_t i=0;i<(size_t)(ref.right-ref.left)*(ref.bottom-ref.top);i++)if(reference[i*4]<240||reference[i*4+1]<240||reference[i*4+2]<240)colored++;
-  CHECK(colored>100);
+  unsigned char *reference=NULL;
+  if(capture_enabled) {
+    reference=pp_test_desktop_capture(ref,true);CHECK(reference);
+    size_t colored=0;for(size_t i=0;i<(size_t)(ref.right-ref.left)*(ref.bottom-ref.top);i++)if(reference[i*4]<240||reference[i*4+1]<240||reference[i*4+2]<240)colored++;
+    CHECK(colored>100);
+  }
   /* Keep the independent reference's shared source alive while hiding its
    * window, so a large hand's settled endpoint is ready for the first draw. */
   pp_surface_hide(pp_sprites_find(presenter,reference_id)->surface);
@@ -189,6 +194,7 @@ static void ownership(void){
 }
 int main(int argc,char **argv){
   CHECK(argc==4||argc==5);setvbuf(stdout,NULL,_IONBF,0);old_foreground=GetForegroundWindow();CHECK(GetCursorPos(&old_cursor));atexit(cleanup);SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  bool timing_only=argc==5&&!strcmp(argv[4],"--timing-only");capture_enabled=!timing_only;
   SetThreadExecutionState(ES_CONTINUOUS|ES_DISPLAY_REQUIRED|ES_SYSTEM_REQUIRED);
   char name[80];snprintf(name,sizeof(name),"Local\\PointyExposureReceiver-%lu",GetCurrentProcessId());mapping=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(ReceiverState),name);CHECK(mapping);
   receiver=MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(*receiver));CHECK(receiver);char command[2048];snprintf(command,sizeof(command),"\"%s\" %s",argv[1],name);STARTUPINFOA startup={sizeof(startup)};
@@ -199,7 +205,7 @@ int main(int argc,char **argv){
   ULONGLONG until=GetTickCount64()+4000;while(!receiver->window&&GetTickCount64()<until)Sleep(10);CHECK(receiver->window);
   API(pp_assets_create(&assets,&error));API(pp_platform_displays(&displays,&display_count,&error));CHECK(display_count>0);
   bool only_ownership=!strcmp(argv[3],"--ownership");
-  if(!only_ownership)CHECK(pp_test_desktop_capture_start((RECT){(LONG)displays[0].bounds.x,(LONG)displays[0].bounds.y,(LONG)(displays[0].bounds.x+displays[0].bounds.w),(LONG)(displays[0].bounds.y+displays[0].bounds.h)}));
+  if(!only_ownership&&capture_enabled)CHECK(pp_test_desktop_capture_start((RECT){(LONG)displays[0].bounds.x,(LONG)displays[0].bounds.y,(LONG)(displays[0].bounds.x+displays[0].bounds.w),(LONG)(displays[0].bounds.y+displays[0].bounds.h)}));
   PPRect screen=displays[0].bounds;SetWindowLongPtrW((HWND)receiver->window,GWL_STYLE,WS_POPUP|WS_VISIBLE);
   CHECK(SetWindowPos((HWND)receiver->window,HWND_TOP,(int)screen.x,(int)screen.y,(int)screen.w,(int)screen.h,SWP_FRAMECHANGED|SWP_SHOWWINDOW));
   do{SetForegroundWindow((HWND)receiver->window);pump();}while(GetForegroundWindow()!=(HWND)receiver->window&&GetTickCount64()<until);CHECK(GetForegroundWindow()==(HWND)receiver->window);
@@ -210,8 +216,8 @@ int main(int argc,char **argv){
   }
   API(pp_scene_create(&scene,&error));API(pp_renderer_create(&renderer,&error));API(pp_anchor_presenter_create_shared(&presenter,renderer,project,scene,&error));pump();
   if(only_ownership){ownership();return 0;}
-  int side=atoi(argv[3]);CHECK(side>=0&&side<4);exercise(side,96);
-  if(argc==5){CHECK(!strcmp(argv[4],"--large"));exercise(side,1536);report_ms("ordinary position",ordinary_ms,ordinary_count);report_ms("exposure including GPU completion",exposure_ms,exposure_count);printf("INPUT tagged_hooks=%u arrival_max_ms=%u\n",pp_test_exposure_input_count(),pp_test_exposure_input_wait());CHECK(pp_test_exposure_input_count()>40&&pp_test_exposure_input_wait()<=50);}
+  int side=atoi(argv[3]);CHECK(side>=0&&side<4);if(!timing_only)exercise(side,96);
+  if(argc==5){CHECK(timing_only||!strcmp(argv[4],"--large"));exercise(side,1536);report_ms("ordinary position",ordinary_ms,ordinary_count);report_ms("exposure including GPU completion",exposure_ms,exposure_count);printf("INPUT tagged_hooks=%u arrival_max_ms=%u visible_correctness=%s\n",pp_test_exposure_input_count(),pp_test_exposure_input_wait(),capture_enabled?"checked":"UNVERIFIED timing-only diagnostic");CHECK(pp_test_exposure_input_count()>40&&pp_test_exposure_input_wait()<=50);}
   pp_anchor_presenter_destroy(presenter);presenter=NULL;
-  printf("PASS %s first-offscreen presentation and captured return at edge %d\n",argv[2],side);return 0;
+  printf("PASS %s %s at edge %d\n",argv[2],timing_only?"timing-only, visible correctness UNVERIFIED":"first-offscreen presentation and captured return",side);return 0;
 }

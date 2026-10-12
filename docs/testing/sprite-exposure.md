@@ -58,9 +58,38 @@ On 2026-10-12 the Release build and all 36 tests outside the desktop suite passe
 The native ownership case passed with verified cursor/input/foreground recovery,
 including destroyed-window shared-object cleanup and deferred group accounting.
 Desktop Duplication received no initial desktop frame on this host, so the new
-visible regression and 1536 DIP timing results remain unverified. Earlier
+visible regression remains unverified. Earlier
 diagnostic logs recorded 5,040 missing PNG pixels and 6,275 missing hand pixels;
 those logs establish the issue's reproduction, not a pass for this change.
 The existing bitmap GDI pixel check also failed with the same white sample in
 both this implementation and a probe using the original renderer. That check
 cannot supply visible recovery evidence on this host.
+
+The explicit `--timing-only` diagnostic skips desktop capture and labels visible
+correctness unverified. It runs the same initial edge placement, captured
+movement, GL refresh, GPU completion, zero raster/upload/transform/readback
+checks, and tagged input hook. Supervised temporary CTest registrations ran all
+eight timing cases on this host at 1536 DIP and actual 150% drawable density.
+Each case recorded 25 ordinary movement samples and 24 exposure samples.
+
+| Source | Edge | Ordinary p95 ms | Exposure p95 ms |
+| --- | --- | ---: | ---: |
+| Default hand | Left | 2.046 | 3.513 |
+| Default hand | Top | 1.817 | 3.249 |
+| Default hand | Right | 1.972 | 3.235 |
+| Default hand | Bottom | 2.002 | 3.080 |
+| PNG | Left | 2.016 | 2.851 |
+| PNG | Top | 2.035 | 3.076 |
+| PNG | Right | 2.028 | 3.047 |
+| PNG | Bottom | 2.129 | 3.358 |
+
+All eight timing diagnostics passed. Their worst completed exposure sample was
+4.864 ms and their tagged hook arrival maximum was 0 ms at the Windows tick
+clock's resolution. The existing complete rendering performance probe also
+passed all 96 cases and 1,920 warm samples: required target p95 1.190 ms,
+matrix worst p95 8.204 ms, maximum tagged input wait 31 ms, and maximum sharp
+settlement 143.890 ms. Its cold draw/completion/GPU counts matched 120/120/120.
+Neither diagnostic establishes compositor cadence or the pending desktop image
+comparison. Logs are `build/exposure-timing-details.log` and
+`build/exposure-rendering-performance-desktop.log`, with supervised input,
+cursor, and foreground restoration verified.
