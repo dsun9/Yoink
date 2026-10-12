@@ -1,4 +1,5 @@
 #include "presenter_internal.h"
+#include "../core/geometry_internal.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -47,17 +48,16 @@ static bool bounds(PPSourcePresentation source,PPPose pose,const PPDisplay *d,PP
      !isfinite(d->drawable_pixels_per_dip)||d->drawable_pixels_per_dip<=0 ||
      !isfinite(d->desktop_units_per_dip)||d->desktop_units_per_dip<=0)
     return fail(error,PP_ERROR_ARGUMENT,"Invalid canonical presentation layout or density");
-  double angle=fmod(pose.angle_deg,360)*3.14159265358979323846/180;
-  double scale=pose.longest_dip*d->drawable_pixels_per_dip/fmax(source.layout.x,source.layout.y);
-  double w=ceil(scale*(fabs(cos(angle))*source.layout.x+fabs(sin(angle))*source.layout.y)-1e-9);
-  double h=ceil(scale*(fabs(sin(angle))*source.layout.x+fabs(cos(angle))*source.layout.y)-1e-9);
-  if(!isfinite(w)||!isfinite(h)||w<1||h<1||w>8192||h>8192)
+  int w,h;
+  if(!pp_geometry_source_extent(source.layout,source.source_rect,pose.longest_dip,
+       pose.angle_deg,d->drawable_pixels_per_dip,&w,&h)||w>8192||h>8192)
     return fail(error,PP_ERROR_RESOURCE_LIMIT,"Presented raster exceeds 8192 pixels per axis");
   double native=d->desktop_units_per_dip/d->drawable_pixels_per_dip;
   *out=(PPRect){round(pose.center.x-w*native*.5),round(pose.center.y-h*native*.5),w*native,h*native};return true;
 }
 bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPresentation *r,
     PPSourcePresentation source,PPPose pose,const PPDisplay *display,PPError *error) {
+  if(!source.source_rect.w && !source.source_rect.h) source.source_rect=(PPRect){0,0,source.layout.x,source.layout.y};
   PPRect rectangle;if(!bounds(source,pose,display,&rectangle,error)) return false;
   bool changed=source.content_id!=r->content_id || source.source_revision!=r->source_revision;
   if(changed) {
@@ -91,13 +91,14 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   bool redraw=changed || !r->valid || !r->visible || pose.longest_dip!=r->drawn.longest_dip ||
     pose.angle_deg!=r->drawn.angle_deg || pose.opacity!=r->drawn.opacity ||
     display->drawable_pixels_per_dip!=r->density || source.layout.x!=r->layout.x || source.layout.y!=r->layout.y ||
+    memcmp(&source.source_rect,&r->source_rect,sizeof(source.source_rect)) ||
     rectangle.w!=r->bounds.w || rectangle.h!=r->bounds.h;
   bool place=!r->visible || memcmp(&rectangle,&r->bounds,sizeof(rectangle)) || !interactive;
   if(place && !pp_surface_place_gl(surface,rectangle,interactive,error)) goto native_failure;
-  if(interactive && redraw && !pp_renderer_draw(r->renderer,source.layout,pose.longest_dip,pose.angle_deg,
+  if(interactive && redraw && !pp_renderer_draw_source(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
       pose.opacity,display->drawable_pixels_per_dip,error)) goto native_failure;
   if(place || (redraw && interactive)) p->metrics.native_publications++;
-  r->drawn=pose;r->layout=source.layout;r->bounds=rectangle;
+  r->drawn=pose;r->layout=source.layout;r->source_rect=source.source_rect;r->bounds=rectangle;
   r->density=display->drawable_pixels_per_dip;r->visible=interactive;r->valid=true;
   return true;
 native_failure:

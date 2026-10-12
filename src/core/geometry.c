@@ -2,6 +2,23 @@
 #include "geometry_internal.h"
 #include <math.h>
 static int clamp(int x,int limit) { return x<0?0:(x>=limit?limit-1:x); }
+bool pp_geometry_source_extent(PPVec2 layout,PPRect rect,double longest,double angle_deg,
+        double density,int *width,int *height) {
+    if(!isfinite(layout.x)||!isfinite(layout.y)||layout.x<=0||layout.y<=0||
+        !isfinite(rect.x)||!isfinite(rect.y)||!isfinite(rect.w)||!isfinite(rect.h)||rect.w<=0||rect.h<=0||
+        !isfinite(longest)||longest<=0||!isfinite(angle_deg)||!isfinite(density)||density<=0) return false;
+    double left=fmin(0,rect.x)-layout.x*.5,top=fmin(0,rect.y)-layout.y*.5;
+    double right=fmax(layout.x,rect.x+rect.w)-layout.x*.5,bottom=fmax(layout.y,rect.y+rect.h)-layout.y*.5;
+    double angle=fmod(angle_deg,360)*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
+    double mx=0,my=0,scale=longest*density/fmax(layout.x,layout.y);
+    for(int i=0;i<4;i++) {
+        double x=i&1?right:left,y=i&2?bottom:top;
+        mx=fmax(mx,fabs(c*x-s*y));my=fmax(my,fabs(s*x+c*y));
+    }
+    double w=ceil(2*mx*scale-1e-9),h=ceil(2*my*scale-1e-9);
+    if(!isfinite(w)||!isfinite(h)||w<1||h<1||w>16384||h>16384) return false;
+    *width=(int)w;*height=(int)h;return true;
+}
 bool pp_geometry_extent(const PPFrame *source,double longest,double angle_deg,double pixels_per_dip,int *width,int *height) {
     if(!source || source->width<=0 || source->height<=0 || source->width>16384 || source->height>16384 ||
         !isfinite(longest) || longest<=0 || !isfinite(angle_deg) || !isfinite(pixels_per_dip) || pixels_per_dip<=0) return false;

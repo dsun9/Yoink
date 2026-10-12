@@ -66,4 +66,10 @@ bool pp_text_default_style(PPAssets *assets, PPTextStyle *out, PPError *error);
  * together with asset caches. This owned frame is outside the asset cache. */
 bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
     double pixels_per_dip, PPFrame *out, PPTextDiagnostics *diagnostics, PPError *error);
+bool pp_text_render_result(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+    double pixels_per_dip,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error);
+/* Same fixed canonical shaping, with an allocation limit checked before the
+ * final RGBA/coverage raster. Used for owner-reserved asynchronous candidates. */
+bool pp_text_render_result_bounded(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+    double pixels_per_dip,size_t max_raster_bytes,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error);
 #endif
