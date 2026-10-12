@@ -2,19 +2,6 @@
 #define POINTY_PRESENTER_INTERNAL_H
 #include "anchors.h"
 #include "raster_worker.h"
-typedef struct AnchorSurface {
-  PPSurface *target, *preview;
-  PPDisplay display;
-  PPAnchor anchor;
-  PPInteraction interaction;
-  PPVec2 grab_dip;
-  uint64_t pulled_id;
-  double opacity, scale;
-  double next_frame, animation_start;
-  uint64_t revision;
-  size_t target_bytes, preview_bytes;
-  bool shown, failed;
-} AnchorSurface;
 /* Source acquisition policy stays outside retained placement/drawing. GIF
  * frame and scalable raster replacements provide their own source revision. */
 typedef struct PPSourcePresentation {
@@ -39,6 +26,20 @@ typedef struct PPRetainedPresentation {
   struct PPGifEntry *gif_entry;
   PPRect source_rect;
 } PPRetainedPresentation;
+typedef struct AnchorSurface {
+  PPSurface *target, *preview;
+  PPDisplay display;
+  PPAnchor anchor;
+  PPInteraction interaction;
+  PPVec2 grab_dip;
+  uint64_t pulled_id;
+  double opacity, scale, density;
+  double next_frame, animation_start;
+  uint64_t revision;
+  size_t target_bytes, preview_bytes;
+  bool shown, failed;
+  PPRetainedPresentation retained, target_retained;
+} AnchorSurface;
 typedef struct PPSprite {
   PPSurface *surface;
   uint64_t id, display_id;

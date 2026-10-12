@@ -93,6 +93,8 @@ bool pp_anchor_presenter_create_shared(PPAnchorPresenter **out,
   return true;
 }
 static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
+  pp_retained_release(p,&a->retained);
+  pp_retained_release(p,&a->target_retained);
   pp_surface_destroy(a->target);
   pp_surface_destroy(a->preview);
   a->target = a->preview = NULL;
@@ -100,6 +102,38 @@ static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
   pp_assets_release_raster(p->assets, a->preview_bytes);
   a->target_bytes = a->preview_bytes = 0;
   a->shown = false;
+}
+static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot *snapshot,
+    PPPose pose,double elapsed,double *next,PPError *error) {
+  bool direct=false;
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  direct=pp_snapshot_is_png(snapshot)||pp_snapshot_is_gif(snapshot);
+#endif
+  if(direct!=(pp_surface_window_id(a->preview)!=0)) {
+    PPSurface *surface=NULL;
+    if(!(direct?pp_surface_create_gl(&surface,error):pp_surface_create(&surface,error)))return false;
+    pp_surface_inherit_order(surface,a->preview);
+    pp_retained_release(p,&a->retained);pp_surface_destroy(a->preview);a->preview=surface;
+    pp_assets_release_raster(p->assets,a->preview_bytes);a->preview_bytes=0;
+  }
+  if(!direct)return pp_present_content(p,a->preview,snapshot,pose,&a->display,elapsed,next,&a->preview_bytes,error);
+  PPSourcePresentation source={.content_id=pp_item_snapshot_revision(snapshot),.source_revision=1,.layout=pp_item_snapshot_size(snapshot)};
+  bool gif=pp_snapshot_is_gif(snapshot);struct PPGifEntry *candidate=NULL;
+  bool ok=gif?pp_gif_acquire(p,snapshot,elapsed,&source,next,&candidate,error):
+    pp_item_snapshot_frame(snapshot,elapsed,1,&source.frame,next,error);
+  if(ok) {
+    if(!gif)source.visual_alpha=pp_source_visual_alpha(source.frame);
+    ok=pp_retained_present(p,a->preview,&a->retained,source,pose,&a->display,error);
+  }
+  if(ok){pp_gif_release(p,a->retained.gif_entry);a->retained.gif_entry=candidate;candidate=NULL;}
+  pp_gif_release(p,candidate);return ok;
+}
+static bool create_anchor_target(PPSurface **out,PPError *error) {
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  return pp_surface_create_gl(out,error);
+#else
+  return pp_surface_create(out,error);
+#endif
 }
 static bool failed_anchor(PPAnchorPresenter *p, AnchorSurface *a,
                           uint64_t revision, double scale, PPError *error) {
@@ -159,7 +193,7 @@ static bool sync_displays(PPAnchorPresenter *p, const PPDisplay *d,
       a->display = d[i / 8];
       a->anchor = (PPAnchor)(i % 8);
       if (!pp_surface_create(&a->preview, error) ||
-          !pp_surface_create(&a->target, error)) {
+          !create_anchor_target(&a->target, error)) {
         free(copy);
         close_anchors(p);
         return false;
@@ -254,13 +288,16 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
   for (size_t i = 0; i < p->anchor_count; i++) {
     AnchorSurface *a = p->anchors + i;
     PPAnchorReveal *r = p->runtime.entries + i;
-    uint64_t revision = pp_project_revision(p->project);
+    const PPItem *item=pp_project_target(p->project,a->anchor);
+    PPItemSnapshot *current=item?pp_project_snapshot(p->project,item->id):NULL;
+    uint64_t revision=pp_item_snapshot_revision(current);
+    pp_item_snapshot_release(current);
     double scale = a->display.desktop_units_per_dip;
     if (a->failed) {
       if (a->revision == revision && a->scale == scale)
         continue;
       if (!pp_surface_create(&a->preview, error) ||
-          !pp_surface_create(&a->target, error)) {
+          !create_anchor_target(&a->target, error)) {
         if (!failed_anchor(p, a, revision, scale, error))
           return false;
         continue;
@@ -273,11 +310,16 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
       if (a->shown) {
         pp_surface_hide(a->target);
         pp_surface_hide(a->preview);
+        pp_retained_release(p,&a->retained);
+        pp_retained_release(p,&a->target_retained);
+        pp_assets_release_raster(p->assets,a->target_bytes);
+        pp_assets_release_raster(p->assets,a->preview_bytes);
+        a->target_bytes=a->preview_bytes=0;
         a->shown = false;
       }
       continue;
     }
-    if (!a->shown || a->opacity != r->opacity || a->scale != scale ||
+    if (!a->shown || a->opacity != r->opacity || a->scale != scale || a->density!=a->display.drawable_pixels_per_dip ||
         a->revision != revision || now >= a->next_frame) {
       if (!a->shown || a->revision != revision)
         a->animation_start = now;
@@ -289,9 +331,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
           item->angle_deg,
           item->opacity * r->opacity};
       double next;
-      bool ok = pp_present_content(p, a->preview, snapshot, pose, &a->display,
-                                   fmax(0, now - a->animation_start), &next,
-                                   &a->preview_bytes, error);
+      bool ok = anchor_preview(p,a,snapshot,pose,fmax(0,now-a->animation_start),&next,error);
       if (ok)
         a->next_frame = a->animation_start + next;
       pp_item_snapshot_release(snapshot);
@@ -305,14 +345,17 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
           settings->activation_dip,
           0,
           r->opacity};
-      if (!pp_present(p, a->target, &p->target_source, pose, &a->display,
-                      &a->target_bytes, error)) {
+      bool target_ok=pp_surface_window_id(a->target)?
+        pp_retained_present(p,a->target,&a->target_retained,(PPSourcePresentation){.frame=&p->target_source,.content_id=UINT64_MAX,.source_revision=1,.layout={1,1},.visual_alpha=true},pose,&a->display,error):
+        pp_present(p,a->target,&p->target_source,pose,&a->display,&a->target_bytes,error);
+      if (!target_ok) {
         if (!failed_anchor(p, a, revision, scale, error))
           goto failed;
         continue;
       }
       a->opacity = r->opacity;
       a->scale = scale;
+      a->density=a->display.drawable_pixels_per_dip;
       a->shown = true;
       a->revision = revision;
     }

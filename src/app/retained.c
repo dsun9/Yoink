@@ -28,6 +28,10 @@ PPRendererMetrics pp_anchor_presenter_renderer_metrics(const PPAnchorPresenter *
   PPRendererMetrics sum=p->retired_renderer_metrics;add_metrics(&sum,pp_renderer_metrics(p->renderer));
   add_metrics(&sum,pp_renderer_metrics(p->texture_owner));
   for(size_t i=0;i<p->instance_count;i++) add_metrics(&sum,pp_renderer_metrics(p->instances[i].retained.renderer));
+  for(size_t i=0;i<p->anchor_count;i++) {
+    add_metrics(&sum,pp_renderer_metrics(p->anchors[i].retained.renderer));
+    add_metrics(&sum,pp_renderer_metrics(p->anchors[i].target_retained.renderer));
+  }
   return sum;
 }
 PPGpuResources pp_anchor_presenter_gpu_resources(const PPAnchorPresenter *p) {

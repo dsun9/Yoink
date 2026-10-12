@@ -422,14 +422,19 @@ static void test_png_gpu_limit_and_overlap(void) {
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     uint64_t first=0;
-    for(int i=0;i<4;i++) {uint64_t id=png_pull(p,scene,displays,1+i);if(!i)first=id;CHECK(pp_scene_count(scene)==(size_t)i+1);}
+    p->displays=malloc(sizeof(displays));CHECK(p->displays);memcpy(p->displays,displays,sizeof(displays));p->display_count=2;
+    for(int i=0;i<4;i++) {
+      PPSprite *sprite=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400+i*100,300},96,0,1},1+i,&error);CHECK(sprite);
+      if(!i)first=sprite->id;CHECK(pp_sprites_update(p,1+i,&error));CHECK(pp_scene_count(scene)==(size_t)i+1);
+    }
     PPGpuResources full=pp_anchor_presenter_gpu_resources(p);CHECK(full.retained_bytes==268435456 && full.peak_bytes==full.retained_bytes && full.limit_bytes==268435456);
     PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(p);PPSurface *old=surface_for(first);
     uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,first)->snapshot);
     CHECK(pp_scene_replace(scene,first,&item,5,&error));update(p,displays,400,300,5);
     CHECK(surface_for(first)==old && pp_item_snapshot_revision(pp_scene_get(scene,first)->snapshot)==revision && pp_anchor_presenter_gpu_resources(p).retained_bytes==full.retained_bytes);
     CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads);
-    png_pull(p,scene,displays,6);CHECK(pp_scene_count(scene)==4 && pp_anchor_presenter_instance_count(p)==4);
+    CHECK(pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{800,300},96,0,1},6,&error));
+    CHECK(pp_sprites_update(p,6,&error));CHECK(pp_scene_count(scene)==4 && pp_anchor_presenter_instance_count(p)==4);
     pp_scene_delete(scene,pp_scene_at(scene,3)->id);update(p,displays,400,300,7);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==201326592);
     CHECK(pp_scene_replace(scene,first,&item,8,&error));update(p,displays,400,300,8);
@@ -497,7 +502,13 @@ static void test_gif_budget_sharing_and_png_transitions(void) {
     PPItem png=png_item(assets,"budget-0.png",96),gif=gif_item(assets,"finite.gif");
     CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&png,NULL,&error));CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
-    uint64_t ids[4];for(int i=0;i<4;i++)ids[i]=png_pull(p,scene,displays,1+i);
+    p->displays=malloc(sizeof(displays));CHECK(p->displays);memcpy(p->displays,displays,sizeof(displays));p->display_count=2;
+    /* Fill exactly the sprite budget. A visible retained anchor now correctly
+     * charges its own source/target overlap and cannot be a free pull fixture. */
+    uint64_t ids[4];for(int i=0;i<4;i++) {
+      PPSprite *sprite=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400+i*100,300},96,0,1},1+i,&error);CHECK(sprite);
+      ids[i]=sprite->id;CHECK(pp_sprites_update(p,1+i,&error));CHECK(pp_scene_count(scene)==(size_t)i+1);
+    }
     uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,ids[0])->snapshot);
     double accepted_start=pp_scene_get(scene,ids[0])->animation_start;
     PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(p);
@@ -742,6 +753,9 @@ static void test_scalable_budget_failure_and_project_teardown(void) {
     CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);PPSprite *s=pp_sprites_find(p,id);
+    /* Let the source anchor finish its fade before measuring the stable scene.
+     * Hidden previews release their owned raster/binding resources. */
+    update(p,displays,400,300,1.5);
     size_t retained=s->scalable_bytes,baseline=pp_assets_external_raster_bytes(assets);PPPose usable=s->pose;PPRendererMetrics renderer=pp_anchor_presenter_renderer_metrics(p);
     /* Fill the combined retained CPU budget using valid reservations. */
     size_t fill=512u*1024*1024-pp_assets_raster_bytes(assets);CHECK(fill>256u*1024*1024);
@@ -1046,7 +1060,31 @@ static void test_svg_cpu_adapter_keeps_canonical_aspect(void) {
     pp_assets_release_raster(assets,retained);pp_surface_destroy(surface);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS CPU compatibility SVG transform keeps fractional canonical aspect independently of rounded source texels");
 }
+static void test_anchor_retains_gif_clock_across_unrelated_edits(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=gif_item(assets,"finite.gif");uint64_t id;
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,&id,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay display={1,{0,0,1920,1080},1,1};
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1.08,&error));
+    PPSurface *preview=p->anchors[PP_ANCHOR_TOP_LEFT].preview;
+    CHECK(preview->shown&&preview->red==0);
+    double deadline=p->anchors[PP_ANCHOR_TOP_LEFT].next_frame;
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(pp_project_set_name(project,"Presentation",&error));
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1.081,&error));
+    CHECK(preview->red==0&&p->anchors[PP_ANCHOR_TOP_LEFT].next_frame==deadline);
+    PPRendererMetrics after=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(after.source_uploads==before.source_uploads&&after.transform_draws==before.transform_draws&&after.readbacks==before.readbacks);
+    CHECK(preview->window_id&&before.readbacks==0);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);
+    CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS retained anchor keeps GIF clock and native artwork through an unrelated project edit");
+}
 int main(void) {
+    test_anchor_retains_gif_clock_across_unrelated_edits();
     test_svg_cpu_adapter_keeps_canonical_aspect();
     test_svg_full_queue_keeps_new_cached_sprite();
     test_svg_initial_source_is_cached();
