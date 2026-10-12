@@ -275,7 +275,7 @@ bool pp_project_edit_item(PPProject *project, uint64_t id, const PPItem *replace
     PPItem candidate = *replacement;
     candidate.id = id;
     PPItemSnapshot *snapshot = NULL;
-    if (!pp_item_snapshot_create(project->assets, &candidate, &snapshot, error)) return false;
+    if (!pp_item_snapshot_update(project->items[at], &candidate, &snapshot, error)) return false;
     pp_item_snapshot_release(project->items[at]);
     project->items[at] = snapshot;
     project->revision++;

@@ -23,21 +23,22 @@ Rounded requested pixel dimensions map to the complete canonical viewport.
 SVG preflight keeps a fractional document viewport independently of the rounded
 intrinsic cache dimensions, so a 13.5 by 7.5 viewport keeps that aspect.
 The raster's aspect does not redefine the logical aspect, center, longest-side
-size, source padding or grabbed point. A fresh compatibility/preview request
-may replace the shared asset's single raster; existing sprite CPU endpoints and
-textures keep their own geometry and pixels. Two sprites sharing one SVG can
-therefore retain different resolutions.
+size, source padding or grabbed point. The shared source service owns cached
+seed copies and endpoint entries independently of the asset's compatibility
+raster. Equal artwork/target requests share one CPU charge; different endpoints
+retain their own mapping. See [shared preview checks](preview-retention.md).
 
-The CPU compatibility adapter and anchor previews also pass the canonical SVG
-viewport to the mapped GL export. They compute rotated extents from that
+The color-only Cocoa compatibility adapter and direct Windows anchor previews
+also use the canonical SVG viewport. They compute rotated extents from that
 viewport rather than rounded source pixels. A 13.5 by 7.5 SVG at 337 DIP and
 17.25 degrees has a 378 by 279 pixel extent at density one; interpreting its
 337 by 188 source pixels as the layout would incorrectly add a row. Native
 Mac geometry remains unverified; the adapter builds and its public presenter
 geometry check runs with a rendering boundary.
 
-SVG requests use the existing presenter generation, instance, snapshot revision,
-serial, endpoint size and density tags. Completion revalidates the live target.
+Worker SVG requests use app-service generation and stable content-entry IDs.
+Consumers separately retain snapshot revision, latest endpoint and density;
+the sole dispatcher routes entries and native/UI owners revalidate publication.
 Cancellation, coalescing, bounded admission, project retirement and final join
 follow the same owner contracts as scalable text. Successful private work counts
 once, including completed work discarded after cancellation. A failed generator

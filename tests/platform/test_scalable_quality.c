@@ -36,10 +36,13 @@ int main(void) {
       CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
     }
     PPItemSnapshot *snapshot=NULL;CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));PPVec2 layout=pp_item_snapshot_size(snapshot);
-    PPAnchorPresenter presenter={.assets=assets,.generation=1};PPSprite sprite={.id=1};PPSceneInstance instance={.snapshot=snapshot};PPDisplay display={.drawable_pixels_per_dip=1.5};
-    CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,384,&error));
-    for(int i=0;i<5000&&pp_raster_worker_status(presenter.worker).pending_jobs;i++)SDL_Delay(1);
-    PPRasterCompletion completion={0};CHECK(pp_raster_worker_poll(presenter.worker,1,&completion));CHECK(completion.success);
+    PPContentSources *sources=NULL;PPContentConsumer *consumer=NULL;
+    CHECK(pp_content_sources_create(&sources,assets,&error));CHECK(pp_content_consumer_create(sources,&consumer,&error));
+    CHECK(pp_content_request(consumer,snapshot,384,1.5,&error));
+    for(int i=0;i<5000&&pp_content_requested(consumer);i++){pp_content_sources_poll(sources);SDL_Delay(1);}
+    CHECK(!pp_content_error(consumer,&error));const PPTextResult *prepared=pp_content_candidate(consumer,NULL);CHECK(prepared);
+    PPRasterStatus status=pp_raster_worker_status(pp_content_sources_worker(sources));
+    CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
     PPTextResult fresh={0};
     if(kind>=3) {
       const PPFrame *frame=NULL;double next;CHECK(pp_item_snapshot_frame(snapshot,0,384*1.5/fmax(layout.x,layout.y),&frame,&next,&error));
@@ -48,18 +51,23 @@ int main(void) {
       CHECK(fresh.frame.pixels&&fresh.frame.content_alpha);
       memcpy(fresh.frame.pixels,frame->pixels,frame->stride*frame->height);memcpy(fresh.frame.content_alpha,frame->content_alpha,(size_t)frame->width*frame->height);
     } else CHECK(pp_text_render_result(assets,item.text,&item.text_style,384*1.5/fmax(layout.x,layout.y),&fresh,NULL,&error));
-    CHECK(completion.result.frame.width==fresh.frame.width&&completion.result.frame.height==fresh.frame.height);
-    CHECK(!memcmp(completion.result.frame.pixels,fresh.frame.pixels,fresh.frame.stride*fresh.frame.height));
+    CHECK(prepared->frame.width==fresh.frame.width&&prepared->frame.height==fresh.frame.height);
+    CHECK(!memcmp(prepared->frame.pixels,fresh.frame.pixels,fresh.frame.stride*fresh.frame.height));
     PPRect rect={fresh.layout_origin.x-fresh.raster_origin_px.x/fresh.raster_density,fresh.layout_origin.y-fresh.raster_origin_px.y/fresh.raster_density,
       fresh.frame.width/fresh.raster_density,fresh.frame.height/fresh.raster_density};
     if(kind>=3)rect=(PPRect){0,0,layout.x,layout.y};
     for(int angle=0;angle<2;angle++) {
       double degrees=angle?17.25:0,radians=degrees*3.14159265358979323846/180,c=cos(radians),s=sin(radians),scale=384*1.5/fmax(layout.x,layout.y),opacity=.63;
-      PPFrame output={0};CHECK(pp_renderer_transform_source(renderer,&completion.result.frame,layout,rect,384,degrees,opacity,1.5,&output,&error));
+      PPFrame output={0};CHECK(pp_renderer_transform_source(renderer,&prepared->frame,layout,rect,384,degrees,opacity,1.5,&output,&error));
       PPFrame reference={0};CHECK(pp_renderer_transform_source(renderer,&fresh.frame,layout,rect,384,degrees,opacity,1.5,&reference,&error));
       CHECK(output.width==reference.width&&output.height==reference.height);
       CHECK(!memcmp(output.pixels,reference.pixels,output.stride*output.height));
       CHECK(!memcmp(output.content_alpha,reference.content_alpha,(size_t)output.width*output.height));pp_frame_destroy(&reference);
+      PPFrame color={0};PPRendererMetrics before=pp_renderer_metrics(renderer);
+      CHECK(pp_renderer_transform_color_source(renderer,&prepared->frame,layout,rect,384,degrees,opacity,1.5,&color,&error));
+      CHECK(color.width==output.width&&color.height==output.height&&!color.content_alpha);
+      CHECK(!memcmp(color.pixels,output.pixels,output.stride*output.height));pp_frame_destroy(&color);
+      CHECK(pp_renderer_metrics(renderer).readbacks==before.readbacks+1);
       double right=fmax(layout.x,rect.x+rect.w)-layout.x*.5,left=fmin(0,rect.x)-layout.x*.5;
       double bottom=fmax(layout.y,rect.y+rect.h)-layout.y*.5,top=fmin(0,rect.y)-layout.y*.5;
       double extent_x=fmax(fmax(fabs(c*left-s*top),fabs(c*left-s*bottom)),fmax(fabs(c*right-s*top),fabs(c*right-s*bottom)));
@@ -99,7 +107,7 @@ int main(void) {
       if(raw_max_error>2)printf("QUALITY difference x=%d y=%d channel=%d actual=%d expected=%d u=%.17g v=%.17g source=%dx%d rect=%.17g,%.17g,%.17g,%.17g\n",worst_x,worst_y,worst_channel,worst_actual,worst_expected,worst_u,worst_v,fresh.frame.width,fresh.frame.height,rect.x,rect.y,rect.w,rect.h);
       CHECK(max_error<=2&&numerical_edges<=4&&visible>100&&edges>10);pp_frame_destroy(&output);
     }
-    pp_frame_destroy(&fresh.frame);pp_raster_completion_release(&completion);pp_raster_worker_destroy(presenter.worker);pp_item_snapshot_release(snapshot);
+    pp_frame_destroy(&fresh.frame);pp_content_consumer_destroy(consumer);pp_content_sources_destroy(sources);pp_item_snapshot_release(snapshot);
   }
   CHECK(!pp_assets_external_raster_bytes(assets));pp_renderer_destroy(renderer);pp_assets_destroy(assets);
   puts("PASS settled worker color/mixed/hybrid/SVG sources match fresh zero/fractional GL output, canonical padding/viewport/overhang, premultiplied alpha and edge colors");return 0;

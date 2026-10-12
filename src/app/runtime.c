@@ -81,13 +81,11 @@ bool pp_runtime_create(PPRuntime **out, PPApp *app, PPError *error) {
   }
   r->app = app;
   r->generation = pp_app_generation(app);
-  if(!pp_raster_worker_create(&r->worker,error)) {free(r);return false;}
+  if(!pp_app_content_sources(app,error)){free(r);return false;}
   if (!pp_renderer_create(&r->renderer, error)) {
-    pp_raster_worker_destroy(r->worker);
     free(r);
     return false;
   }
-  r->drawer_cache.renderer=r->renderer;
   *out = r;
   return true;
 }
@@ -138,7 +136,9 @@ void pp_runtime_tick(PPRuntime *r, double now) {
     failure(r);
     return;
   }
-  r->presenter->worker=r->worker;r->presenter->borrowed_worker=true;
+  r->presenter->sources=pp_app_content_sources(r->app,&r->error);
+  r->presenter->borrowed_sources=true;r->presenter->borrowed_worker=true;
+  r->presenter->worker=pp_content_sources_worker(r->presenter->sources);
   PPDisplay *displays = NULL;
   size_t count = 0;
   PPVec2 pointer = {0};
@@ -149,6 +149,7 @@ void pp_runtime_tick(PPRuntime *r, double now) {
   pp_platform_pointer(&pointer);
   bool ok = pp_anchor_presenter_update(r->presenter, displays, count, pointer,
                                        now, &r->error);
+  r->worker=pp_content_sources_worker(r->presenter->sources);
   if (ok && r->drawer)
     pp_drawer_layout(r->drawer, displays, count);
   pp_displays_free(displays);
@@ -177,7 +178,6 @@ void pp_runtime_destroy(PPRuntime *r) {
   pp_drawer_close(r->drawer);
   pp_drawer_cache_destroy(&r->drawer_cache);
   pp_anchor_presenter_destroy(r->presenter);
-  pp_raster_worker_destroy(r->worker);
   pp_renderer_destroy(r->renderer);
   free(r);
 }

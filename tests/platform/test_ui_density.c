@@ -3,8 +3,13 @@
  * Every window remains hidden; no OS input is injected. */
 #include "../../src/ui/settings_internal.h"
 #include "../../src/ui/shaped_edit.h"
+#include "../../src/app/content_sources.h"
 #include "../test.h"
 #include <string.h>
+#include <math.h>
+static void cleanup(void);
+#undef CHECK
+#define CHECK(expr) do {if(!(expr)){fprintf(stderr,"%s:%d: CHECK(%s) failed\n",__FILE__,__LINE__,#expr);cleanup();exit(1);}}while(0)
 
 static float density = 1;
 float SDLCALL pp_test_window_density(SDL_Window *window) {
@@ -14,8 +19,9 @@ float SDLCALL pp_test_window_density(SDL_Window *window) {
 static PPApp *app;
 static PPSettings *settings;
 static void cleanup(void) {
-  pp_settings_destroy(settings);
-  pp_app_destroy(app);
+  PPSettings *owned_settings=settings;settings=NULL;
+  PPApp *owned_app=app;app=NULL;
+  pp_settings_destroy(owned_settings);pp_app_destroy(owned_app);
 }
 static void draw(void) {
   pp_settings_draw(settings);
@@ -48,6 +54,24 @@ int main(void) {
   SDL_Window *window = ui->window;
   CHECK(SDL_SetWindowSize(window, 1040, 1800));
   draw();
+  CHECK(pp_renderer_metrics(settings->editor.renderer).readbacks==0);
+  for(int i=0;i<1000&&pp_content_requested(settings->editor.retained.consumer);i++){SDL_Delay(1);draw();}
+  CHECK(!pp_content_requested(settings->editor.retained.consumer));
+  double source_clock=settings->editor.animation_start;
+  PPContentSources *sources=pp_app_content_sources(app,&error);
+  PPRasterStatus worker_before=pp_raster_worker_status(pp_content_sources_worker(sources));
+  PPRendererMetrics render_before=pp_renderer_metrics(settings->editor.renderer);
+  SDL_Delay(20);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Preview identity"},&error));draw();
+  CHECK(settings->editor.animation_start==source_clock);
+  CHECK(pp_raster_worker_status(pp_content_sources_worker(sources)).source_builds==worker_before.source_builds);
+  PPRendererMetrics render_after=pp_renderer_metrics(settings->editor.renderer);
+  CHECK(render_after.source_uploads==render_before.source_uploads&&render_after.transform_draws==render_before.transform_draws);
+  PPItem appearance=*pp_project_item(pp_app_project(app),settings->editor.id);appearance.opacity=.63;
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,.item_id=appearance.id,.item=&appearance},&error));draw();
+  CHECK(settings->editor.animation_start==source_clock);
+  CHECK(pp_raster_worker_status(pp_content_sources_worker(sources)).source_builds==worker_before.source_builds);
+  CHECK(pp_renderer_metrics(settings->editor.renderer).source_uploads==render_before.source_uploads);
   pp_ui_focus(ui, "item-text");
   key(PP_KEY_END, 0);
   pp_settings_event(
@@ -56,6 +80,7 @@ int main(void) {
                                    .codepoint = 'X'});
   draw();
   CHECK(pp_ui_shaped_state(ui)->undo_count == 1);
+  CHECK(settings->editor.animation_start>source_clock&&pp_ui_focused(ui,"item-text"));
   size_t edit_caret = pp_ui_shaped_state(ui)->caret;
   pp_ui_focus(ui, "item-size");
   draw();
@@ -104,7 +129,10 @@ int main(void) {
         if (view->rows[row].frame.width == reused_width &&
             view->rows[row].frame.height == reused_height)
           row_texture = true;
-      CHECK(row_texture);
+      const PPUIContentPreview *retained=&settings->editor.retained;
+      bool preview_texture=(reused_width==retained->width&&reused_height==retained->height)||
+        (reused_width==retained->source_width&&reused_height==retained->source_height);
+      CHECK(row_texture||preview_texture);
     }
     GLint atlas_width = 0, atlas_height = 0;
     glBindTexture(GL_TEXTURE_2D, ui->font_texture);
@@ -145,10 +173,31 @@ int main(void) {
     CHECK(ui->font_texture == stable_texture); /* No needless rebuild. */
   }
   pp_settings_close(settings);
+  CHECK(!settings->editor.retained.consumer&&!settings->editor.preview_texture);
   CHECK(pp_app_ui(app)->geometry.w == 1040 &&
         pp_app_ui(app)->geometry.h == 1800);
-  puts("PASS hidden Settings density 1->2->1: real font/preview rasters "
+  pp_settings_revert(settings);
+  PPItemSnapshot *independent=settings->editor.preview;pp_item_snapshot_retain(independent);
+  PPContentConsumer *consumer=NULL;CHECK(pp_content_consumer_create(sources,&consumer,&error));
+  PPContentFrame retained={0};double next;PPVec2 layout=pp_item_snapshot_size(independent);
+  CHECK(pp_content_frame(consumer,independent,fmax(layout.x,layout.y),1,0,&retained,&next,&error));CHECK(retained.frame);pp_content_accept(consumer);
+  uint64_t identity=retained.content_id;int source_width=retained.frame->width,source_height=retained.frame->height;
+  size_t bytes=retained.frame->stride*retained.frame->height;uint8_t *pixels=malloc(bytes);CHECK(pixels);memcpy(pixels,retained.frame->pixels,bytes);
+  uint64_t generation=pp_app_generation(app);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  pp_settings_draw(settings);CHECK(!settings->failed&&pp_app_generation(app)!=generation);
+  CHECK(settings->generation==pp_app_generation(app)&&settings->editor.generation==pp_app_generation(app));
+  CHECK(!settings->editor.retained.consumer&&!settings->editor.preview_texture);
+  CHECK(pp_content_frame(consumer,independent,fmax(layout.x,layout.y),1,0,&retained,&next,&error));
+  CHECK(retained.content_id==identity&&retained.frame->width==source_width&&retained.frame->height==source_height&&!memcmp(pixels,retained.frame->pixels,bytes));
+  free(pixels);pp_content_consumer_destroy(consumer);pp_item_snapshot_release(independent);
+  puts("PASS hidden Settings project epoch cancels obsolete preview work and keeps an independent source consumer's owned pixels");
+  puts("PASS Settings artwork clock changes only on content commit, rename/opacity reuse sources, closure releases its consumer; hidden density 1->2->1: real font/preview rasters "
        "refresh, old texture released; drafts, selection, focus, window and "
        "geometry preserved");
+  /* Join private source work before CRT exit callbacks acquire the onexit
+   * lock; HarfBuzz may register its own finalizer during that work. */
+  cleanup();
   return 0;
 }

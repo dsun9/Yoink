@@ -2,6 +2,13 @@
 
 GIF sprites on Windows use native-resolution decoded canvases and direct transparent GL windows. The decoded asset remains immutable and shared. `pp_asset_select_frame` and `pp_item_snapshot_select_frame` return the selected frame index, revision `index + 1`, and next elapsed-time deadline. Selection depends only on the caller's clock. Looping back to a frame reuses its revision; finite playback keeps the final revision with an infinite deadline.
 
+Ticket #10 shares this CPU policy with anchors, Settings and drawer. Each
+consumer keeps its own clock; drawer samples frame zero. UI contexts remain
+independent and never borrow native GIF GLuint names. Native/UI content sources
+and UI output targets share the app's 256 MiB GPU ledger; shared entries charge
+once and release only after their last live consumer. See
+[preview verification](preview-retention.md).
+
 Each presenter owns an explicit GL context group. Its hidden keeper context owns immutable RGBA textures, keyed by the full asset digest and selected revision. Direct sprite contexts join this group. Two sprites displaying the same source frame share one texture, while retaining separate clocks, poses, windows, draw state, and replacement ownership. PNG and bitmap-text textures remain owned by their sprite renderers within the compatible group.
 
 An immutable cache miss uploads once and completes producer work before publication. Changing a consumer binding completes its previous use before dropping the old frame reference. A renderer destructor releases its bindings before the last shared reference can delete the texture. These completion waits establish ownership correctness; this ticket makes no claim that they remove swap pacing costs. Context-specific VAOs, framebuffers and timer queries remain separate.

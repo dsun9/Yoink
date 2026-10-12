@@ -120,17 +120,18 @@ transparent visual-only Cocoa view, and a public SDL wrapper using
 `SDL_PROP_WINDOW_CREATE_COCOA_WINDOW_POINTER` and the corresponding view
 property. Frames are drawn as premultiplied RGBA CGImages into native point
 bounds. The adapter commits the view and flushes the window on each frame;
-there is no polling timer for routing. The panel rejects SDL's whole-window
-`ignoresMouseEvents` samples so they cannot replace the native pixel alpha with
-a stale hover result. WindowServer's current transparent-window selection is
-the candidate authority. Tiny-alpha behavior and event/compositor timing are
-still unverified and must pass the separate receiver before parity is claimed.
+there is no polling timer for routing. The current adapter uses the visible
+native rectangle, including transparent padding/interiors, with scoped capture
+and accepted input. Entirely transparent content/zero opacity/hiding/failure
+remove interception. Native event/compositor timing is still unverified and
+must pass the separate receiver before parity is claimed.
 
-SDL keeps an ARGB shape copy and the CGImage provider owns a separate RGBA copy:
-the platform reports **8 bytes per raster pixel**, reserved in the shared
-budget before allocation. CGImage borrows its provider memory. Old and candidate
-copies overlap until commit. Shared transform RGBA+coverage uses an additional
-temporary 5 bytes/pixel reservation. Native Cocoa backing/WindowServer and GPU
+The compatibility adapter conservatively reports **8 bytes per raster pixel**
+for native provider/legacy shape storage, reserved before allocation. Normal
+rectangular publication does not allocate the SDL shape. CGImage borrows its
+RGBA provider memory. Old and candidate copies overlap until commit. Color-only
+GL compatibility output reserves four bytes/pixel and performs one RGBA
+readback; normal presentation never transforms coverage. Native Cocoa backing/WindowServer and GPU
 memory remain outside the existing retained CPU budget. Destruction clears
 input, unregisters the SDL wrapper before releasing its externally owned panel
 and view, and releases the CGImage/provider.
@@ -180,16 +181,16 @@ different directory and launch `PointyPointer.app/Contents/MacOS/PointyPointer
 and verify accessory/tray-only startup, retained Settings drafts, dirty Quit,
 private font discovery and file dialogs. Signing/notarization is not included.
 
-All Apple configure/compile/link/bundle execution, physical Retina/Spaces,
-tiny-alpha first-click and changing-frame selection, background drag capture and
-capture-wheel behavior remain **NOT RUN** on the Windows implementation host.
-The source/CI configuration is best effort; no hosted CI run was triggered here.
-Task 10 candidate-routing risks remain functional acceptance gates.
+Hosted Apple configure/build and headless checks have passed for the integration.
+Physical Retina/Spaces, native bundle execution, first-click/rectangle routing,
+changing-frame selection, drag capture and capture-wheel remain **NOT RUN** on
+the Windows implementation host. Shared GL/source checks do not establish
+native Cocoa behavior; see [preview checks](preview-retention.md).
 
 The shared default-font path now searches actual family and collection metadata
 for Segoe UI Emoji independently from Aptos. Without installed Segoe it selects
 bundled Noto and retains the item-preview fallback diagnostic in portable
 projects. The deterministic `default_fonts` test uses original OFL fixtures and
 is part of the headless suite. The native Segoe production probe is Windows
-only. Apple compilation, local font acquisition and preview/runtime behavior
-for this change remain **NOT RUN** until checked on a Mac.
+only. Local font acquisition and native preview/runtime behavior remain
+**NOT RUN** until checked on a Mac.

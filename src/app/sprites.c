@@ -12,13 +12,11 @@ static const PPDisplay *display_by_id(const PPDisplay *d, size_t count,
   return NULL;
 }
 static bool present_source(PPAnchorPresenter *p,PPSurface *surface,const PPFrame *source,
-                PPVec2 layout,PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
+                PPVec2 layout,PPRect viewport,PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
   double scale = display->drawable_pixels_per_dip;
   double desktop_per_pixel = display->desktop_units_per_dip / scale;
   int width, height;
-  PPRect viewport={0,0,layout.x,layout.y};bool mapped=layout.x>0&&layout.y>0;
-  bool extent=mapped?pp_geometry_source_extent(layout,viewport,pose.longest_dip,pose.angle_deg,scale,&width,&height):
-    pp_geometry_extent(source,pose.longest_dip,pose.angle_deg,scale,&width,&height);
+  bool extent=pp_geometry_source_extent(layout,viewport,pose.longest_dip,pose.angle_deg,scale,&width,&height);
   if (!extent ||
       width > 8192 || height > 8192) {
     if (error) {
@@ -28,12 +26,11 @@ static bool present_source(PPAnchorPresenter *p,PPSurface *surface,const PPFrame
     }
     return false;
   }
-  size_t frame_bytes = (size_t)width * height * 5;
+  size_t frame_bytes = (size_t)width * height * 4;
   if (!pp_assets_reserve_raster(p->assets, frame_bytes, error))
     return false;
   PPFrame frame = {0};
-  bool ok=mapped?pp_renderer_transform_source(p->renderer,source,layout,viewport,pose.longest_dip,pose.angle_deg,pose.opacity,scale,&frame,error):
-      pp_renderer_transform(p->renderer,source,pose.longest_dip,pose.angle_deg,pose.opacity,scale,&frame,error);
+  bool ok=pp_renderer_transform_color_source(p->renderer,source,layout,viewport,pose.longest_dip,pose.angle_deg,pose.opacity,scale,&frame,error);
   /* Old + candidate copies overlap until native presentation commits. */
   size_t native_bytes = pp_surface_raster_bytes(width, height);
   bool reserved =
@@ -60,9 +57,18 @@ static bool present_source(PPAnchorPresenter *p,PPSurface *surface,const PPFrame
 }
 bool pp_present(PPAnchorPresenter *p,PPSurface *surface,const PPFrame *source,
     PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
-  return present_source(p,surface,source,(PPVec2){0},pose,display,retained,error);
+  PPVec2 layout={source->width,source->height};
+  pp_surface_set_rectangular(surface,true);
+  return present_source(p,surface,source,layout,(PPRect){0,0,layout.x,layout.y},pose,display,retained,error);
 }
-bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
+bool pp_present_source(PPAnchorPresenter *p,PPSurface *surface,PPSourcePresentation source,
+    PPPose pose,const PPDisplay *display,size_t *retained,PPError *error) {
+  pp_surface_set_rectangular(surface,true);
+  if(!source.frame||!source.visual_alpha||pose.opacity<=0){pp_surface_hide(surface);return true;}
+  PPRect rect=source.source_rect;if(!rect.w&&!rect.h)rect=(PPRect){0,0,source.layout.x,source.layout.y};
+  return present_source(p,surface,source.frame,source.layout,rect,pose,display,retained,error);
+}
+bool pp_capture_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,
                         size_t *bytes, PPError *error) {
@@ -75,7 +81,9 @@ bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
   if(pp_snapshot_is_svg(snapshot)&&!pp_source_visual_alpha(source)) {
     pp_surface_hide(surface);return true;
   }
-  return present_source(p,surface,source,pp_snapshot_is_svg(snapshot)?size:(PPVec2){0},pose,display,bytes,error);
+  PPVec2 layout=pp_snapshot_is_svg(snapshot)?size:(PPVec2){source->width,source->height};
+  pp_surface_set_rectangular(surface,true);
+  return present_source(p,surface,source,layout,(PPRect){0,0,layout.x,layout.y},pose,display,bytes,error);
 }
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id) {
   for (size_t i = 0; i < p->instance_count; i++)
@@ -85,6 +93,13 @@ PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id) {
 }
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                             double now, PPError *error) {
+  const PPItem *item=pp_project_target(p->project,anchor);
+  PPItemSnapshot *snapshot=item?pp_project_snapshot(p->project,item->id):NULL;
+  PPSprite *sprite=pp_sprites_create_snapshot(p,snapshot,anchor,pose,now,error);
+  pp_item_snapshot_release(snapshot);return sprite;
+}
+PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapshot,
+    PPAnchor anchor,PPPose pose,double now,PPError *error) {
   PPSprite *items =
       realloc(p->instances, (p->instance_count + 1) * sizeof(*items));
   if (!items) {
@@ -97,7 +112,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
   memset(s, 0, sizeof(*s));
   s->pose = pose;
   s->dirty = true;
-  if (!pp_scene_spawn(p->scene, p->project, anchor, pose.center, now, &s->id,
+  if (!pp_scene_spawn_snapshot(p->scene, snapshot, anchor, pose.center, now, &s->id,
                       error))
     return NULL;
   bool direct=false;
@@ -157,7 +172,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
     }
     double scale = display->desktop_units_per_dip;
     if (s->dirty || s->scale != scale || s->drawable_density!=display->drawable_pixels_per_dip || now >= s->next_frame ||
-        (s->raster_retry&&pp_raster_worker_can_request(p->worker,p->generation,s->id))) {
+        (s->raster_retry&&pp_raster_worker_can_request(p->worker,p->generation,pp_content_target(s->content).instance_id))) {
       if (!pp_scene_set_pose(p->scene, s->id, s->pose, error))
         return false;
       const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);

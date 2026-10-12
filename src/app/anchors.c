@@ -12,7 +12,9 @@ static void finish_anchor_pull(PPAnchorPresenter *p, AnchorSurface *anchor,
     instance->dragging = false;
   if (reveal)
     reveal->held = false;
+  pp_surface_cancel_input(anchor->target);pp_surface_cancel_input(anchor->preview);
   anchor->pulled_id = 0;
+  pp_item_snapshot_release(anchor->pull_snapshot);anchor->pull_snapshot=NULL;
 }
 
 static bool anchor_source_available(const PPAnchorPresenter *p,
@@ -21,9 +23,9 @@ static bool anchor_source_available(const PPAnchorPresenter *p,
   if (!target || target->opacity <= 0)
     return false;
   const PPSceneInstance *instance = pp_scene_get(p->scene, anchor->pulled_id);
-  if (!instance)
-    return true;
-  uint64_t source_id = pp_item_snapshot_item(instance->snapshot)->id;
+  PPItemSnapshot *pressed=anchor->pull_snapshot?anchor->pull_snapshot:instance?instance->snapshot:NULL;
+  if(!pressed)return true;
+  uint64_t source_id = pp_item_snapshot_item(pressed)->id;
   const PPItem *source = pp_project_item(p->project, source_id);
   return source && source->opacity > 0;
 }
@@ -93,6 +95,11 @@ bool pp_anchor_presenter_create_shared(PPAnchorPresenter **out,
   return true;
 }
 static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
+  pp_item_snapshot_release(a->pull_snapshot);a->pull_snapshot=NULL;
+  pp_content_consumer_destroy(a->content);a->content=NULL;
+  pp_item_snapshot_release(a->snapshot);a->snapshot=NULL;a->source=(PPSourcePresentation){0};
+  pp_retained_release(p,&a->retained);
+  pp_retained_release(p,&a->target_retained);
   pp_surface_destroy(a->target);
   pp_surface_destroy(a->preview);
   a->target = a->preview = NULL;
@@ -100,6 +107,45 @@ static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
   pp_assets_release_raster(p->assets, a->preview_bytes);
   a->target_bytes = a->preview_bytes = 0;
   a->shown = false;
+}
+static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot *snapshot,
+    PPPose pose,double elapsed,double *next,PPError *error) {
+  bool direct=false;
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  direct=true;
+#endif
+  if(direct!=(pp_surface_window_id(a->preview)!=0)) {
+    PPSurface *surface=NULL;
+    if(!(direct?pp_surface_create_gl(&surface,error):pp_surface_create(&surface,error)))return false;
+    pp_surface_inherit_order(surface,a->preview);
+    pp_retained_release(p,&a->retained);pp_surface_destroy(a->preview);a->preview=surface;
+    pp_assets_release_raster(p->assets,a->preview_bytes);a->preview_bytes=0;
+  }
+  if(!pp_presenter_sources(p,error)||(!a->content&&!pp_content_consumer_create(p->sources,&a->content,error)))return false;
+  PPSourcePresentation source={0};
+  if(!pp_content_frame(a->content,snapshot,pose.longest_dip,a->display.drawable_pixels_per_dip,elapsed,&source,next,error))return false;
+  p->worker=pp_content_sources_worker(p->sources);
+  bool gif=direct&&pp_snapshot_is_gif(snapshot);struct PPGifEntry *candidate=NULL;
+  bool ok=!gif||pp_gif_acquire(p,snapshot,elapsed,&source,next,&candidate,error);
+  if(ok) {
+    if(!source.frame){pp_surface_hide(a->preview);ok=true;}
+    else if(direct)ok=pp_retained_present(p,a->preview,&a->retained,source,pose,&a->display,error);
+    else {ok=pp_present_source(p,a->preview,source,pose,&a->display,&a->preview_bytes,error);if(ok)a->retained.visible=source.visual_alpha&&pose.opacity>0;}
+  }
+  if(ok){
+    pp_gif_release(p,a->retained.gif_entry);a->retained.gif_entry=candidate;candidate=NULL;
+    pp_content_accept(a->content);pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(a->snapshot);a->snapshot=snapshot;a->source=source;
+    pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(a->retained.snapshot);a->retained.snapshot=snapshot;
+    if(!a->retained.visible){finish_anchor_pull(p,a,p->runtime.entries+(size_t)(a-p->anchors));a->interaction=(PPInteraction){0};}
+  } else pp_content_reject(a->content);
+  pp_gif_release(p,candidate);return ok;
+}
+static bool create_anchor_target(PPSurface **out,PPError *error) {
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+  return pp_surface_create_gl(out,error);
+#else
+  return pp_surface_create(out,error);
+#endif
 }
 static bool failed_anchor(PPAnchorPresenter *p, AnchorSurface *a,
                           uint64_t revision, double scale, PPError *error) {
@@ -159,7 +205,7 @@ static bool sync_displays(PPAnchorPresenter *p, const PPDisplay *d,
       a->display = d[i / 8];
       a->anchor = (PPAnchor)(i % 8);
       if (!pp_surface_create(&a->preview, error) ||
-          !pp_surface_create(&a->target, error)) {
+          !create_anchor_target(&a->target, error)) {
         free(copy);
         close_anchors(p);
         return false;
@@ -232,6 +278,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
   }
   if (!sync_displays(p, d, count, error))
     return false;
+  pp_content_sources_poll(p->sources);
   const PPProjectSettings *settings = pp_project_settings(p->project);
   p->gestures.rotation_step_deg = settings->rotation_step_deg;
   p->gestures.resize_factor = settings->resize_factor;
@@ -254,13 +301,18 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
   for (size_t i = 0; i < p->anchor_count; i++) {
     AnchorSurface *a = p->anchors + i;
     PPAnchorReveal *r = p->runtime.entries + i;
-    uint64_t revision = pp_project_revision(p->project);
+    const PPItem *item=pp_project_target(p->project,a->anchor);
+    PPItemSnapshot *current=item?pp_project_snapshot(p->project,item->id):NULL;
+    uint64_t revision=pp_item_snapshot_revision(current);
+    uint64_t content_id=pp_item_snapshot_content_id(current);
+    PPAssetId artwork=pp_item_snapshot_artwork_id(current);
+    pp_item_snapshot_release(current);
     double scale = a->display.desktop_units_per_dip;
     if (a->failed) {
       if (a->revision == revision && a->scale == scale)
         continue;
       if (!pp_surface_create(&a->preview, error) ||
-          !pp_surface_create(&a->target, error)) {
+          !create_anchor_target(&a->target, error)) {
         if (!failed_anchor(p, a, revision, scale, error))
           return false;
         continue;
@@ -273,13 +325,24 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
       if (a->shown) {
         pp_surface_hide(a->target);
         pp_surface_hide(a->preview);
+        pp_retained_release(p,&a->retained);
+        pp_retained_release(p,&a->target_retained);
+        pp_assets_release_raster(p->assets,a->target_bytes);
+        pp_assets_release_raster(p->assets,a->preview_bytes);
+        a->target_bytes=a->preview_bytes=0;
         a->shown = false;
+      }
+      pp_content_cancel(a->content);
+      PPAssetId accepted=pp_item_snapshot_artwork_id(a->snapshot);
+      if(!item||memcmp(&accepted,&artwork,sizeof(artwork))) {
+        pp_content_consumer_destroy(a->content);a->content=NULL;
+        pp_item_snapshot_release(a->snapshot);a->snapshot=NULL;a->source=(PPSourcePresentation){0};
       }
       continue;
     }
-    if (!a->shown || a->opacity != r->opacity || a->scale != scale ||
-        a->revision != revision || now >= a->next_frame) {
-      if (!a->shown || a->revision != revision)
+    if (!a->shown || a->opacity != r->opacity || a->scale != scale || a->density!=a->display.drawable_pixels_per_dip ||
+        a->revision != revision || now >= a->next_frame || pp_content_candidate(a->content,NULL) || pp_content_retry(a->content)) {
+      if (!a->shown || !a->snapshot || pp_item_snapshot_content_id(a->snapshot)!=content_id)
         a->animation_start = now;
       const PPItem *item = pp_project_target(p->project, a->anchor);
       PPItemSnapshot *snapshot = pp_project_snapshot(p->project, item->id);
@@ -289,9 +352,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
           item->angle_deg,
           item->opacity * r->opacity};
       double next;
-      bool ok = pp_present_content(p, a->preview, snapshot, pose, &a->display,
-                                   fmax(0, now - a->animation_start), &next,
-                                   &a->preview_bytes, error);
+      bool ok = anchor_preview(p,a,snapshot,pose,fmax(0,now-a->animation_start),&next,error);
       if (ok)
         a->next_frame = a->animation_start + next;
       pp_item_snapshot_release(snapshot);
@@ -305,14 +366,17 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
           settings->activation_dip,
           0,
           r->opacity};
-      if (!pp_present(p, a->target, &p->target_source, pose, &a->display,
-                      &a->target_bytes, error)) {
+      bool target_ok=pp_surface_window_id(a->target)?
+        pp_retained_present(p,a->target,&a->target_retained,(PPSourcePresentation){.frame=&p->target_source,.content_id=UINT64_MAX,.source_revision=1,.layout={1,1},.visual_alpha=true},pose,&a->display,error):
+        pp_present(p,a->target,&p->target_source,pose,&a->display,&a->target_bytes,error);
+      if (!target_ok) {
         if (!failed_anchor(p, a, revision, scale, error))
           goto failed;
         continue;
       }
       a->opacity = r->opacity;
       a->scale = scale;
+      a->density=a->display.drawable_pixels_per_dip;
       a->shown = true;
       a->revision = revision;
     }
@@ -331,40 +395,27 @@ failed:
 }
 static bool target_grab(PPAnchorPresenter *p, AnchorSurface *a, PPVec2 point,
                         double now, PPVec2 *out, PPError *error) {
-  const PPItem *item = pp_project_target(p->project, a->anchor);
-  PPItemSnapshot *snapshot =
-      item ? pp_project_snapshot(p->project, item->id) : NULL;
-  const PPFrame *source = NULL;
-  double next;
-  if (!pp_item_snapshot_frame(snapshot, fmax(0, now - a->animation_start), 1,
-                              &source, &next, error)) {
-    pp_item_snapshot_release(snapshot);
-    return false;
+  (void)p;(void)now;
+  const PPFrame *source=a->source.frame;
+  if(!source||!source->pixels) {
+    if(error)*error=(PPError){PP_ERROR_ARGUMENT,"Anchor artwork is still preparing"};return false;
   }
-  PPRect b = p->runtime.entries[(size_t)(a - p->anchors)].preview;
-  double longest = a->interaction.displayed_pose.longest_dip;
-  double pixel_dip = longest / fmax(source->width, source->height);
-  double radians = item->angle_deg * 3.14159265358979323846 / 180;
-  double c = cos(radians), s = sin(radians);
-  double scale = a->display.desktop_units_per_dip, best = HUGE_VAL;
-  PPVec2 grab = {0};
-  for (int y = 0; y < source->height; y++)
-    for (int x = 0; x < source->width; x++)
-      if (source->content_alpha[(size_t)y * source->width + x]) {
-        double local_x = (x + .5 - source->width * .5) * pixel_dip,
-               local_y = (y + .5 - source->height * .5) * pixel_dip;
-        PPVec2 candidate = {c * local_x - s * local_y,
-                            s * local_x + c * local_y};
-        double dx = b.x + b.w * .5 + candidate.x * scale - point.x,
-               dy = b.y + b.h * .5 + candidate.y * scale - point.y;
-        if (dx * dx + dy * dy < best) {
-          best = dx * dx + dy * dy;
-          grab = candidate;
-        }
-      }
-  pp_item_snapshot_release(snapshot);
-  *out = grab;
-  return true;
+  PPRect rect=a->source.source_rect;
+  PPVec2 layout=a->source.layout;
+  if(rect.w<=0||rect.h<=0)rect=(PPRect){0,0,layout.x,layout.y};
+  double factor=a->interaction.displayed_pose.longest_dip/fmax(layout.x,layout.y);
+  double radians=a->interaction.displayed_pose.angle_deg*3.14159265358979323846/180;
+  double c=cos(radians),s=sin(radians),scale=a->display.desktop_units_per_dip,best=HUGE_VAL;
+  PPVec2 grab={0},center=a->interaction.displayed_pose.center;
+  for(int y=0;y<source->height;y++)for(int x=0;x<source->width;x++)
+    if(source->pixels[(size_t)y*source->stride+x*4+3]) {
+      double local_x=(rect.x+(x+.5)*rect.w/source->width-layout.x*.5)*factor;
+      double local_y=(rect.y+(y+.5)*rect.h/source->height-layout.y*.5)*factor;
+      PPVec2 candidate={c*local_x-s*local_y,s*local_x+c*local_y};
+      double dx=center.x+candidate.x*scale-point.x,dy=center.y+candidate.y*scale-point.y;
+      if(dx*dx+dy*dy<best){best=dx*dx+dy*dy;grab=candidate;}
+    }
+  *out=grab;return true;
 }
 bool pp_anchor_presenter_event(PPAnchorPresenter *p,
                                const PPPlatformEvent *event, PPError *error) {
@@ -406,8 +457,8 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
       a->interaction = (PPInteraction){0};
       return true;
     }
-    const PPItem *item = pp_project_target(p->project, a->anchor);
-    a->interaction.displayed_pose =
+    const PPItem *item = pp_item_snapshot_item(a->pull_snapshot?a->pull_snapshot:a->snapshot);
+    if(!a->pull_snapshot)a->interaction.displayed_pose =
         (PPPose){{bounds.x + bounds.w * .5, bounds.y + bounds.h * .5},
                  p->runtime.preview_dip[a->anchor],
                  item->angle_deg,
@@ -421,7 +472,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
                          &a->grab_dip, error)) {
           if (error)
             p->notice = *error;
-          pp_platform_release_capture();
+          pp_surface_cancel_input(event->surface);
           return true;
         }
       } else
@@ -432,6 +483,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
                 a->display.desktop_units_per_dip};
       reveal->held = true;
       a->pulled_id = 0;
+      pp_item_snapshot_release(a->pull_snapshot);a->pull_snapshot=pp_item_snapshot_retain(a->snapshot);
       /* A completed queued gesture can have already released its native
        * accepted press. Its remaining queued trajectory still runs. */
       pp_platform_capture(event->surface, NULL);
@@ -456,16 +508,14 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
            * * its queued trajectory until a fresh source press begins. */
           finish_anchor_pull(p, a, reveal);
           a->interaction = (PPInteraction){0};
-          pp_platform_release_capture();
           return true;
         }
-        s = pp_sprites_create(p, a->anchor, pose, event->timestamp, error);
+        s = pp_sprites_create_snapshot(p,a->pull_snapshot,a->anchor,pose,event->timestamp,error);
         if (!s) {
           if (error)
             p->notice = *error;
           finish_anchor_pull(p, a, reveal);
           a->interaction = (PPInteraction){0};
-          pp_platform_release_capture();
           return true;
         }
         a->pulled_id = s->id;
@@ -506,7 +556,7 @@ PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *p) {
   metrics.worker_stale_results+=worker.stale_results;metrics.worker_source_builds=worker.source_builds;
   metrics.worker_pending_jobs=worker.pending_jobs;metrics.worker_reserved_bytes=worker.reserved_bytes;
   metrics.worker_source_ms=worker.source_ms;metrics.worker_source_max_ms=worker.source_max_ms;
-  for(size_t i=0;i<p->instance_count;i++)metrics.scalable_retained_bytes+=p->instances[i].scalable_bytes;
+  metrics.scalable_retained_bytes=pp_content_sources_raster_bytes(p->sources);
   return metrics;
 }
 bool pp_anchor_presenter_instance_pose(const PPAnchorPresenter *p, size_t i,
@@ -524,9 +574,12 @@ void pp_anchor_presenter_destroy(PPAnchorPresenter *p) {
     return;
   close_anchors(p);
   pp_sprites_clear(p);
-  pp_raster_worker_cancel(p->worker,p->generation,0);
-  if(!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
   pp_gif_clear(p);
+  if(!p->borrowed_sources) {
+    if(p->borrowed_worker)pp_content_sources_detach_worker(p->sources);
+    pp_content_sources_destroy(p->sources);
+  }
+  if(!p->sources&&!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
   free(p->displays);
   pp_anchors_destroy(&p->runtime);
   if (p->owns_scene)

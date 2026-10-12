@@ -121,10 +121,28 @@ redistribution, as described in [Microsoft's font FAQ](https://learn.microsoft.c
 
 The loader validates the entire archive and model in a temporary asset manager. It reserves the app manager's existing raster usage in the temporary manager before decoding, limiting combined retained CPU rasters to 512 MiB. This is conservative under pressure, including app caches that could otherwise be evicted. Staged snapshots are destroyed and unretained caches are trimmed before source bytes transfer to the app manager; temporary reservations and sources are always released on exit. Imported resources are decoded again under the app's normal budget. A late allocation failure during transfer can leave zero-retain imported sources in the app manager until destruction, and zero-retain raster caches until eviction. Active project/scene objects and their retained snapshots remain unchanged.
 
-The raster limit counts retained RGBA/coverage and explicitly charged presenter memory. It does **not** count source copies, the bounded ZIP directory, extraction buffers, JSON representation, temporary font-inspection/text frames, decoder scratch, or GPU memory. Source totals and individual extraction buffers have the separate archive bounds above; existing app-owned source bytes persist according to the asset contract.
+The 512 MiB raster limit counts retained canonical RGBA/source alpha, decoded
+assets, shared preview/endpoint caches, worker candidates, explicit native
+presentation copies and field-upload scratch. Equal shared entries are charged
+once, with old/candidate overlap reserved before publication. Worker candidates
+are capped at 64 MiB; copied immutable captures at 32 MiB each/64 MiB total;
+worker scratch follows a separate 384 MiB policy. Native/UI content source and
+UI output textures share an app-owned 256 MiB GPU ledger. Control-label atlases,
+SDL/driver contexts and compositor backing are separate from content retention.
+Source copies, ZIP/JSON/extraction buffers and decoder/library bookkeeping have
+the archive/source bounds above rather than an exact process allocator cap.
+
+These caches, consumer ownership IDs, GPU objects, snapshot revisions and clocks
+are runtime data and are never serialized. Actual artwork bytes/styles/fonts
+and requested raster geometry determine reuse; metadata edits and reorder do
+not invalidate them. A saved image's logical size and SVG viewport retain their
+canonical aspect independently of rounded raster dimensions. Existing sprites
+retain immutable snapshots after item edits/removal. The app source owner
+outlives UI/runtime/project consumers and joins its worker before assets die;
+see [rendering ownership](architecture/rendering-content.md).
 
 `pp_project_save(project, path, error)` creates an exclusively owned temporary file next to the target. It writes and finalizes the ZIP, flushes the C stream and native storage handle, closes the writer, and then atomically replaces the target. Only that operation's temporary file is removed on failure. Project revision/dirty tracking and scenes are not mutated; callers update their saved-revision marker only on success. A failed cleanup does not justify deleting other files. An abrupt process termination can leave an unreferenced temporary file, while replacement happens only after a complete flush/close.
 
-Windows paths are decoded strictly from UTF-8 and passed to wide-path APIs. Replacement uses same-directory `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`; no delete-then-rename sequence is used. Atomicity and durability depend on the destination filesystem's native rename/flush guarantees. The macOS file adapter remains Task 10 work and has not been hardware-verified here.
+Windows paths are decoded strictly from UTF-8 and passed to wide-path APIs. Replacement uses same-directory `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`; no delete-then-rename sequence is used. Atomicity and durability depend on the destination filesystem's native rename/flush guarantees. The macOS file adapter has hosted build/headless coverage; native filesystem and runtime behavior still require platform verification.
 
 `PPProjectStoreHooks` and `pp_project_save_with_hooks` are a test-only seam for write, flush, and replacement failures. Ordinary API calls use native defaults. The storage tests verify old-file SHA-256 and reopen after each injected failure, including a partial write and a read-only target.

@@ -14,6 +14,21 @@ typedef struct PPUIVertex {
   float position[2], uv[2];
   nk_byte color[4];
 } PPUIVertex;
+typedef struct PPUITextureCharge {struct PPUITextureCharge *next;GLuint texture;size_t bytes;} PPUITextureCharge;
+void pp_ui_premultiplied_texture(PPUIBackend *ui,GLuint previous,GLuint current) {
+  for(size_t i=0;i<16;i++)if(previous&&ui->premultiplied_textures[i]==previous)ui->premultiplied_textures[i]=0;
+  if(!current)return;
+  for(size_t i=0;i<16;i++)if(ui->premultiplied_textures[i]==current)return;
+  for(size_t i=0;i<16;i++)if(!ui->premultiplied_textures[i]){ui->premultiplied_textures[i]=current;return;}
+  ui->failed=true;
+}
+void pp_ui_release_texture_charges(PPUIBackend *ui,size_t count,const GLuint *textures) {
+  for(size_t i=0;i<count;i++) {
+    PPUITextureCharge **link=&ui->texture_charges;
+    while(*link&&(*link)->texture!=textures[i])link=&(*link)->next;
+    if(*link){PPUITextureCharge *charge=*link;*link=charge->next;pp_content_gpu_release(ui->content_sources,charge->bytes);free(charge);}
+  }
+}
 static bool fail(PPError *error, const char *message) {
   if (error) {
     error->code = PP_ERROR_RENDER;
@@ -196,8 +211,10 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
       "main(){UV=TexCoord;Tint=Color;gl_Position=Projection*vec4(Position,0,1);"
       "}";
   const char *fragment =
-      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; out "
-      "vec4 color; void main(){color=Tint*texture(Texture,UV);}";
+      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; uniform int Premultiplied; out "
+      "vec4 color; void main(){vec4 sample_color=texture(Texture,UV);"
+      "if(Premultiplied!=0){if(sample_color.a>0)sample_color.rgb/=sample_color.a;else sample_color.rgb=vec3(0);}"
+      "color=Tint*sample_color;}";
   ui->program = pp_gl_program(&ui->gl, vertex, fragment, error);
   if (!ui->program)
     goto failed;
@@ -252,6 +269,7 @@ failed:
 void pp_ui_backend_destroy(PPUIBackend *ui) {
   if (!ui)
     return;
+  while(ui->texture_charges){GLuint texture=ui->texture_charges->texture;pp_ui_release_texture_charges(ui,1,&texture);}
   pp_ui_shaped_destroy(ui);
   pp_ui_poll_reset(pp_ui_backend_window_id(ui));
   if (ui->gl_context && SDL_GL_MakeCurrent(ui->window, ui->gl_context)) {
@@ -530,6 +548,9 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error) {
     if (!command->elem_count)
       continue;
     glBindTexture(GL_TEXTURE_2D, (GLuint)command->texture.id);
+    bool premultiplied=false;
+    for(size_t i=0;i<16;i++)if(ui->premultiplied_textures[i]&&(GLuint)command->texture.id==ui->premultiplied_textures[i])premultiplied=true;
+    ui->gl.Uniform1i(ui->gl.GetUniformLocation(ui->program,"Premultiplied"),premultiplied?1:0);
     glScissor(
         (GLint)(command->clip_rect.x * sx),
         (GLint)((ui->height - command->clip_rect.y - command->clip_rect.h) *
@@ -837,9 +858,18 @@ bool pp_ui_upload_frame(PPUIBackend *ui, GLuint *texture, const PPFrame *frame,
   if (!SDL_GL_MakeCurrent(ui->window, ui->gl_context))
     return fail(error, SDL_GetError());
   size_t size = (size_t)frame->width * frame->height * 4;
+  bool reserved=ui->text_assets&&pp_assets_reserve_raster(ui->text_assets,size,error);
+  if(ui->text_assets&&!reserved)return false;
+  PPUITextureCharge *charge=ui->content_sources?calloc(1,sizeof(*charge)):NULL;
+  if(ui->content_sources&&(!charge||!pp_content_gpu_reserve(ui->content_sources,size,error))) {
+    free(charge);if(reserved)pp_assets_release_raster(ui->text_assets,size);return false;
+  }
   uint8_t *straight = malloc(size);
-  if (!straight)
-    return fail(error, "Cannot allocate preview upload");
+  if (!straight) {
+    if(reserved)pp_assets_release_raster(ui->text_assets,size);
+    if(charge){pp_content_gpu_release(ui->content_sources,size);free(charge);}
+    return fail(error, "Cannot allocate text upload");
+  }
   for (int y = 0; y < frame->height; y++)
     for (int x = 0; x < frame->width; x++) {
       const uint8_t *source = frame->pixels + y * frame->stride + x * 4;
@@ -849,16 +879,21 @@ bool pp_ui_upload_frame(PPUIBackend *ui, GLuint *texture, const PPFrame *frame,
             source[3] ? (uint8_t)fmin(255, source[c] * 255.0 / source[3]) : 0;
       target[3] = source[3];
     }
-  if (!*texture)
-    glGenTextures(1, texture);
-  glBindTexture(GL_TEXTURE_2D, *texture);
+  GLuint candidate=0;glGenTextures(1,&candidate);
+  glBindTexture(GL_TEXTURE_2D, candidate);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, frame->width, frame->height, 0,
                GL_RGBA, GL_UNSIGNED_BYTE, straight);
   free(straight);
-  return glGetError() == GL_NO_ERROR ||
-         fail(error, "Cannot upload item preview");
+  if(reserved)pp_assets_release_raster(ui->text_assets,size);
+  if(glGetError()!=GL_NO_ERROR) {
+    glDeleteTextures(1,&candidate);if(charge){pp_content_gpu_release(ui->content_sources,size);free(charge);}
+    return fail(error,"Cannot upload text artwork");
+  }
+  pp_ui_release_texture_charges(ui,1,texture);glDeleteTextures(1,texture);*texture=candidate;
+  if(charge){charge->texture=candidate;charge->bytes=size;charge->next=ui->texture_charges;ui->texture_charges=charge;}
+  return true;
 }
 bool pp_ui_capture(PPUIBackend *ui, const char *path, PPError *error) {
   if (!SDL_GL_MakeCurrent(ui->window, ui->gl_context))

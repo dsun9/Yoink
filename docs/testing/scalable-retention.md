@@ -16,20 +16,21 @@ publishes with the current pose on the next owner update, including while
 easing continues. There is no debounce or 200-ms publication delay. Static
 updates and translation alone do not draw, upload or regenerate content.
 
-The available source keeps its own mapping even if a compatibility request
-changes the snapshot's mutable text raster. Once an owned endpoint arrives,
-each sprite retains one endpoint raster and one texture. A candidate overlaps
+The available source keeps its own canonical mapping independently of an
+explicit compatibility raster. Equal immutable artwork/target consumers share
+one CPU endpoint; each native/UI context retains suitable GPU storage. A candidate overlaps
 the previous usable source until upload succeeds. Source failure preserves the
 usable source and records a notice. A broken native context removes the failed
 sprite and releases input, textures, CPU state and reservations.
 
 ## Service, cancellation and limits
 
-The runtime owns one raster service across project changes. A standalone
-presenter owns its service. Requests carry presenter generation, sprite ID,
-immutable snapshot revision, request serial, endpoint longest size and drawable
-density. Results must still match the live scene, target and display when the
-owner consumes them. Replacement, deletion, external size changes, density
+The app owns one content service across project/runtime/UI changes. A standalone
+presenter owns its service. Worker requests carry stable content-entry IDs and
+service generation/serial; consumer targets separately retain immutable snapshot
+revision, endpoint size and drawable density. `pp_content_sources_poll` is the
+sole bounded dispatcher. Results must still match the live consumer before GPU
+publication. Replacement, deletion, external size changes, density
 changes, display removal and presenter destruction cancel obsolete work.
 
 The owner deep-copies text, the requested family, every style value, complete
@@ -67,8 +68,10 @@ The limits are explicit:
   releases or transfers its exact charge once. The conservative reservation
   includes 32 physical pixels on each edge for destination hinting. A larger
   glyph union rejects before the final frame allocation.
-- Retained GPU sources share the existing 256 MiB presenter limit, including
-  old and candidate storage when a replacement needs new texture storage.
+- Native/UI content sources and UI output targets share the 256 MiB app limit,
+  including old/candidate storage. Equal CPU entries are charged once and
+  compatible native GIF textures share their source charge. See
+  [shared ownership](../architecture/rendering-content.md).
 - Each immutable capture is at most 32 MiB and all captures together are at
   most 64 MiB. Each copied font is at most 16 MiB; text is at most 64 KiB and
   the requested family is at most 4 KiB. A private worker import copies only

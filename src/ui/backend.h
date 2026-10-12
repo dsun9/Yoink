@@ -3,6 +3,7 @@
 #include "../render/gl_api.h"
 #include "nuklear_config.h"
 #include "pointy/ui.h"
+#include "pointy/content.h"
 typedef struct PPUIControl {
   uint64_t id;
   struct nk_rect bounds;
@@ -18,6 +19,9 @@ extern const PPUITheme pp_ui_theme;
 struct PPUIBackend {
   struct PPUIShapedEdit *shaped;
   PPAssets *text_assets; /* Borrowed app raster budget; outlives this field. */
+  PPContentSources *content_sources;
+  struct PPUITextureCharge *texture_charges;
+  GLuint premultiplied_textures[16];
   SDL_Window *window;
   SDL_GLContext gl_context;
   PPGL gl;
@@ -69,6 +73,8 @@ void pp_ui_reveal_focus(PPUIBackend *ui, const char *group,
 void pp_ui_error(PPUIBackend *ui, const char *text);
 bool pp_ui_upload_frame(PPUIBackend *ui, GLuint *texture, const PPFrame *frame,
                         PPError *error);
+void pp_ui_release_texture_charges(PPUIBackend *ui,size_t count,const GLuint *textures);
+void pp_ui_premultiplied_texture(PPUIBackend *ui,GLuint previous,GLuint current);
 /* Test instrumentation and later drawer layout inspection; copies control
  * geometry in logical units, does not synthesize or execute any action. */
 bool pp_ui_control_rect(const PPUIBackend *ui, const char *id, PPRect *bounds);

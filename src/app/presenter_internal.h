@@ -2,29 +2,10 @@
 #define POINTY_PRESENTER_INTERNAL_H
 #include "anchors.h"
 #include "raster_worker.h"
-typedef struct AnchorSurface {
-  PPSurface *target, *preview;
-  PPDisplay display;
-  PPAnchor anchor;
-  PPInteraction interaction;
-  PPVec2 grab_dip;
-  uint64_t pulled_id;
-  double opacity, scale;
-  double next_frame, animation_start;
-  uint64_t revision;
-  size_t target_bytes, preview_bytes;
-  bool shown, failed;
-} AnchorSurface;
+#include "content_sources.h"
 /* Source acquisition policy stays outside retained placement/drawing. GIF
  * frame and scalable raster replacements provide their own source revision. */
-typedef struct PPSourcePresentation {
-  const PPFrame *frame;
-  uint64_t content_id, source_revision;
-  PPVec2 layout;
-  bool visual_alpha;
-  PPRect source_rect; /* Source texels mapped into canonical local DIPs. Zero means full layout. */
-  PPSharedTexture *shared_texture;
-} PPSourcePresentation;
+typedef PPContentFrame PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
   PPItemSnapshot *snapshot;
@@ -39,6 +20,23 @@ typedef struct PPRetainedPresentation {
   struct PPGifEntry *gif_entry;
   PPRect source_rect;
 } PPRetainedPresentation;
+typedef struct AnchorSurface {
+  PPSurface *target, *preview;
+  PPDisplay display;
+  PPAnchor anchor;
+  PPInteraction interaction;
+  PPVec2 grab_dip;
+  uint64_t pulled_id;
+  double opacity, scale, density;
+  double next_frame, animation_start;
+  uint64_t revision;
+  size_t target_bytes, preview_bytes;
+  bool shown, failed;
+  PPRetainedPresentation retained, target_retained;
+  PPContentConsumer *content;
+  PPItemSnapshot *snapshot,*pull_snapshot;
+  PPSourcePresentation source;
+} AnchorSurface;
 typedef struct PPSprite {
   PPSurface *surface;
   uint64_t id, display_id;
@@ -62,6 +60,7 @@ typedef struct PPSprite {
   uint64_t scalable_identity, scalable_revision, raster_serial;
   PPRasterKey raster_target;
   bool raster_requested, raster_retry;
+  PPContentConsumer *content;
 } PPSprite;
 struct PPAnchorPresenter {
   PPRenderer *renderer;
@@ -89,7 +88,10 @@ struct PPAnchorPresenter {
   bool borrowed_worker;
   PPRenderer *texture_owner;
   struct PPGifEntry *gif_entries;
+  PPContentSources *sources;
+  bool borrowed_sources;
 };
+bool pp_presenter_sources(PPAnchorPresenter *p,PPError *error);
 bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_svg(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_scalable(const PPItemSnapshot *snapshot);
@@ -118,17 +120,25 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *sprite);
 void pp_sprite_hide(PPSprite *sprite);
 bool pp_source_visual_alpha(const PPFrame *source);
+bool pp_present_source(PPAnchorPresenter *p,PPSurface *surface,PPSourcePresentation source,
+    PPPose pose,const PPDisplay *display,size_t *retained,PPError *error);
 bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,
     PPRetainedPresentation *retained,PPSourcePresentation source,PPPose pose,
     const PPDisplay *display,PPError *error);
 void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *retained);
+bool pp_presenter_gpu_reserve(PPAnchorPresenter *p,size_t bytes,PPError *error);
+void pp_presenter_gpu_release(PPAnchorPresenter *p,size_t bytes);
 
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                             double now, PPError *error);
+PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapshot,
+    PPAnchor anchor,PPPose pose,double now,PPError *error);
 bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
                 PPPose pose, const PPDisplay *display, size_t *retained, PPError *error);
-bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
+/* Explicit legacy comparison/capture adapter; no normal production callers.
+ * Native compatibility consumers use shared PPSourcePresentation instead. */
+bool pp_capture_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,
                         size_t *bytes, PPError *error);

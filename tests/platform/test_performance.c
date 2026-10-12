@@ -200,7 +200,7 @@ static void raster_reference(PPApp *app, bool save) {
 static void drawer_first_layout_density(PPApp *app) {
   PPError error={0};PPRenderer *renderer=NULL;
   CHECK(pp_renderer_create(&renderer,&error));
-  PPDrawerCache cache={.renderer=renderer};
+  PPDrawerCache cache={0};
   uint64_t id=0;
   CHECK(pp_scene_spawn(pp_app_scene(app),pp_app_project(app),PP_ANCHOR_TOP_LEFT,
       (PPVec2){-19000,-19000},0,&id,&error));
@@ -309,7 +309,7 @@ static bool native_profile(PPApp *app) {
   const double sizes[]={96,384,768,1536}; bool stopped=false;
   for(int size=0;size<4 && !stopped;size++) for(int frame=0;frame<3;frame++) {
     pump(); memset(pp_probe_metrics,0,sizeof(pp_probe_metrics)); double start=pp_probe_clock();
-    CHECK(pp_present_content(&presenter,surface,snapshot,(PPPose){{-19000+frame*2,-19000},sizes[size]+frame*.1,0,1},&display,0,&next,&retained,&error));
+    CHECK(pp_capture_present_content(&presenter,surface,snapshot,(PPPose){{-19000+frame*2,-19000},sizes[size]+frame*.1,0,1},&display,0,&next,&retained,&error));
     samples[count].ms=pp_probe_clock()-start;samples[count].dip=sizes[size]+frame*.1;
     memcpy(samples[count].metrics,pp_probe_metrics,sizeof(pp_probe_metrics));count++;
     pump();
@@ -482,7 +482,7 @@ done:
   if(production_loop)pp_probe_completion_enabled=true;
   if(alt) send_alt(false);
   pp_sprites_clear(&p); pp_scene_delete(p.scene,id);
-  pp_raster_worker_destroy(p.worker);pp_gif_clear(&p);
+  pp_gif_clear(&p);pp_content_sources_destroy(p.sources);
   printf("SHARP native_observations=%u max_ms=%.3f error=\"%s\" compositor_visible=unobserved\n",acceptance->sharp_observations,acceptance->max_sharp_ms,error.message);
   fflush(stdout); return ok;
 }
@@ -535,7 +535,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
         sprite.pose=pose;instance.pose=pose;
         if(scalable)pp_scene_set_pose(p.scene,sprite.id,pose,NULL);
         bool ok=direct?pp_sprite_present(&p,&sprite,&instance,&display,kind==3?fmax(0,frame)*.04:0,&next,&error):
-          pp_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
+          pp_capture_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
         double elapsed=pp_probe_clock()-start; pump();
         if(!ok) {printf("INCOMPLETE presentation error=\"%s\"\n",error.message);break;}
         if(frame==-1) printf("COLD first_presentation_ms=%.3f source_request_ms=%.3f transform_ms=%.3f native_publication_ms=%.3f\n",elapsed,pp_probe_metrics[PROBE_SOURCE_REQUEST].ms,pp_probe_metrics[PROBE_TRANSFORM].ms,pp_probe_metrics[PROBE_SURFACE].ms);
@@ -576,8 +576,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
         (unsigned long long)(renderer_after.readbacks-renderer_before.readbacks),
         (unsigned long long)p.metrics.native_publications,pp_probe_injected_hook_count-input_before);
       if(direct) pp_sprite_release_presentation(&p,&sprite);
-      pp_raster_worker_destroy(p.worker);pp_scene_destroy(p.scene);
-      pp_gif_clear(&p);
+      pp_scene_destroy(p.scene);pp_gif_clear(&p);pp_content_sources_destroy(p.sources);
       pp_surface_destroy(surface); pp_assets_release_raster(p.assets,retained); fflush(stdout);
     }
     pp_item_snapshot_release(snapshot);
@@ -623,23 +622,23 @@ static int worker_probe_isolation(bool default_font) {
   if(default_font) {CHECK(pp_text_default_style(assets,&item.text_style,&error));item.text="\xf0\x9f\x91\x89";}
   else CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));SDL_free(bytes);
   CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
-  PPAnchorPresenter presenter={.assets=assets,.generation=1};PPSprite sprite={.id=1};
-  PPSceneInstance instance={.snapshot=snapshot};PPDisplay display={.drawable_pixels_per_dip=1.5};
+  PPContentSources *sources=NULL;PPContentConsumer *consumer=NULL;
+  CHECK(pp_content_sources_create(&sources,assets,&error));CHECK(pp_content_consumer_create(sources,&consumer,&error));
   PPProbeMetric before[PROBE_COUNT];memcpy(before,pp_probe_metrics,sizeof(before));
   MSG message;while(PeekMessageW(&message,NULL,WM_NULL,WM_NULL,PM_REMOVE)) {}
-  CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,default_font?1536:768,&error));
+  CHECK(pp_content_request(consumer,snapshot,default_font?1536:768,1.5,&error));
   double wake_deadline=pp_probe_clock()+5000;bool owner_woken=false;
   while(!owner_woken&&pp_probe_clock()<wake_deadline) {
     MsgWaitForMultipleObjectsEx(0,NULL,50,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
     while(PeekMessageW(&message,NULL,0,0,PM_REMOVE))if(message.message==WM_NULL)owner_woken=true;
   }
   CHECK(owner_woken); /* Production tray wait must wake without SDL_WaitEvent. */
-  PPRasterStatus status=pp_raster_worker_status(presenter.worker);
-  PPRasterCompletion completion={0};CHECK(pp_raster_worker_poll(presenter.worker,1,&completion));
-  if(!completion.success)fprintf(stderr,"Worker failed: %s\n",completion.error.message);CHECK(completion.success);
-  pp_raster_completion_release(&completion);CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
+  pp_content_sources_poll(sources);CHECK(!pp_content_error(consumer,&error));
+  const PPTextResult *prepared=pp_content_candidate(consumer,NULL);CHECK(prepared&&prepared->frame.pixels);
+  PPRasterStatus status=pp_raster_worker_status(pp_content_sources_worker(sources));
+  CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
   CHECK(!memcmp(before,pp_probe_metrics,sizeof(before)));
-  pp_raster_worker_cancel(presenter.worker,1,0);pp_raster_worker_destroy(presenter.worker);
+  pp_content_consumer_destroy(consumer);pp_content_sources_destroy(sources);
   pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
   printf("PASS worker timing wrappers keep owner TLS observations unchanged, aggregate builds=%llu generation_ms=%.3f\n",(unsigned long long)status.source_builds,status.source_ms);return 0;
 }

@@ -1,5 +1,17 @@
 # Bounded rendering performance acceptance
 
+Ticket #10 changed source ownership, not these acceptance thresholds. Worker
+keys identify app-lived shared content entries; only `pp_content_sources_poll`
+consumes completions. Diagnostic quality and worker isolation now observe
+consumer candidates through that dispatcher and release the source owner once.
+Native/export timer queries are scoped to their owning completion wrappers;
+borrowed UI FBO draws do not create an unresolved global query. UI correctness
+checks remain separate from the one-active-sprite matrix. The full visible
+96-case active protocol, exact latest-input/endpoint correlation and complete
+warm/input/sharp acceptance remain ticket #11. See
+[preview evidence](preview-retention.md) for passed correctness checks and
+preserved failures; submission timings do not establish acceptance.
+
 This is the repeatable Windows acceptance protocol for [issue #1](https://github.com/dsun9/Yoink/issues/1) and [ticket #3](https://github.com/dsun9/Yoink/issues/3). It uses the production presenter, content pipeline, OpenGL renderer, native surface, and input hook. The initial implementation is expected to fail until the rendering changes meet the budgets. A successful source-only diagnostic is insufficient.
 
 Build the Release probe, then run the tracked supervisor from the repository root:

@@ -7,10 +7,9 @@
 #include <string.h>
 
 static void release_thumbnails(PPDrawer *d) {
-  if (d->backend && SDL_GL_MakeCurrent(d->backend->window,d->backend->gl_context))
-    glDeleteTextures(8,d->textures);
   memset(d->textures,0,sizeof(d->textures));
   for(size_t i=0;i<8;i++) {
+    pp_ui_preview_release(&d->thumbnails[i].retained);
     pp_item_snapshot_release(d->thumbnails[i].snapshot);
     d->thumbnails[i]=(PPDrawerThumbnail){0};
   }
@@ -22,7 +21,6 @@ static void close_backend(PPDrawer *d) {
   if (d->backend->visible)
     pp_platform_drawer_close(d->restore_focus);
   release_thumbnails(d);
-  if (!d->cache) {pp_renderer_destroy(d->renderer);d->renderer=NULL;}
   pp_ui_backend_destroy(d->backend);
   d->backend = NULL;
 }
@@ -45,7 +43,6 @@ bool pp_drawer_use_cache(PPDrawer *d,PPDrawerCache *cache,PPError *error) {
     pp_drawer_cache_destroy(cache); return false;
   }
   d->cache=cache; cache->in_use=true;
-  d->renderer=cache->renderer;
   d->backend=cache->backend; cache->backend=NULL;
   if (d->backend) {
     d->scale=d->backend->window_scale;
@@ -99,9 +96,9 @@ bool pp_drawer_select(PPDrawer *d, uint64_t item_id, double now,
       pp_project_anchor(pp_app_project(d->app), d->anchor);
   for (size_t i = 0; i < list->count; i++)
     if (list->item_ids[i] == item_id) {
-      bool ok = pp_scene_replace(
-          pp_app_scene(d->app), d->instance_id,
-          pp_project_item(pp_app_project(d->app), item_id), now, error);
+      PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(d->app),item_id);
+      bool ok=pp_scene_replace_snapshot(pp_app_scene(d->app),d->instance_id,snapshot,now,error);
+      pp_item_snapshot_release(snapshot);
       if (ok)
         d->dismissed = true;
       return ok;
@@ -177,50 +174,24 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
                       struct nk_rect bounds, PPError *error) {
   PPItemSnapshot *snapshot =
       pp_project_snapshot(pp_app_project(d->app), item->id);
+  for(size_t i=slot+1;i<8;i++)
+    if(d->thumbnails[i].snapshot&&pp_item_snapshot_item(d->thumbnails[i].snapshot)->id==item->id) {
+      PPDrawerThumbnail swap=d->thumbnails[slot];d->thumbnails[slot]=d->thumbnails[i];d->thumbnails[i]=swap;
+      unsigned texture=d->textures[slot];d->textures[slot]=d->textures[i];d->textures[i]=texture;break;
+    }
   PPDrawerThumbnail *cached=&d->thumbnails[slot];
-  bool ok=true;
-  if (cached->snapshot == snapshot && cached->scale == d->backend->scale)
-    goto draw;
-  /* A retained snapshot distinguishes edits and slot reuse even if an allocator
-   * reuses an old address. Its scale-dependent CPU raster may change in another
-   * consumer without changing the immutable content represented by this texture.
-   * GIF thumbnails intentionally sample time zero and stay static. */
-  pp_item_snapshot_release(cached->snapshot);
-  *cached=(PPDrawerThumbnail){0};
-  PPVec2 size = pp_item_snapshot_size(snapshot);
-  const PPFrame *source = NULL;
-  double next;
-  double pixels = 48 * d->backend->scale;
-  ok = pp_item_snapshot_frame(snapshot, 0, pixels / fmax(size.x, size.y),
-                                   &source, &next, error);
-  PPFrame small = {0};
-  int width = 0, height = 0;
-  if (ok)
-    ok = pp_geometry_extent(source, 48, 0, d->backend->scale, &width, &height);
-  size_t charge = (size_t)width * height * 5;
-  bool reserved =
-      ok && pp_assets_reserve_raster(pp_app_assets(d->app), charge, error);
-  if (reserved) {
-    ok = pp_renderer_transform(d->renderer, source, 48, 0, 1, d->backend->scale,
-                               &small, error);
-    if (ok)
-      ok = pp_ui_upload_frame(d->backend, &d->textures[slot], &small, error);
-    if (ok)
-      *cached=(PPDrawerThumbnail){pp_item_snapshot_retain(snapshot),d->backend->scale,small.width,small.height};
-    pp_frame_destroy(&small);
-    pp_assets_release_raster(pp_app_assets(d->app), charge);
-  } else
-    ok = false;
-  /* Transform failure can leave the renderer's context current. The UI
-   * still needs its own context to display the diagnostic and controls. */
+  double next;bool ok=pp_ui_preview_update(d->backend,d->app,&cached->retained,snapshot,
+      48,0,1,d->backend->scale,0,&next,error);
+  pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(cached->snapshot);cached->snapshot=snapshot;
+  d->textures[slot]=cached->retained.texture;cached->width=cached->retained.width;cached->height=cached->retained.height;
+  cached->scale=(float)cached->retained.density;
   if (!SDL_GL_MakeCurrent(d->backend->window, d->backend->gl_context)) {
     if (error)
       *error =
           (PPError){PP_ERROR_RENDER, "Cannot restore drawer graphics context"};
     ok = false;
   }
-draw:
-  if (ok && cached->snapshot) {
+  if (d->textures[slot]&&cached->width&&cached->height) {
     float factor=fminf(bounds.w/cached->width,bounds.h/cached->height);
     float w=cached->width*factor,h=cached->height*factor;
     struct nk_rect image_bounds=nk_rect(bounds.x+(bounds.w-w)/2,bounds.y+(bounds.h-h)/2,w,h);
@@ -232,6 +203,7 @@ draw:
 }
 bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
   if (!pp_drawer_valid(d) || d->dismissed) {
+    release_thumbnails(d);
     d->dismissed = true;
     return true;
   }
@@ -244,15 +216,16 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
                                  .compact = true};
     if (!pp_ui_backend_create(&d->backend, &options, error))
       return false;
-    if (!d->renderer && !pp_renderer_create(&d->renderer, error))
-      return false;
     d->backend->focus_id = d->focus_id;
     d->backend->keyboard_focus = d->focus_id != 0;
   }
   PPUIBackend *ui = d->backend;
+  ui->content_sources=pp_app_content_sources(d->app,error);ui->text_assets=pp_app_assets(d->app);
+  if(!ui->content_sources)return false;
   if (!pp_ui_begin(ui, error))
     return false;
   struct nk_context *ctx = &ui->context;
+  size_t slot=0;
   if (nk_begin(ctx, "Replace sprite", nk_rect(0, 0, ui->width, ui->height),
                NK_WINDOW_NO_SCROLLBAR)) {
     pp_ui_heading(ui, "Replace sprite");
@@ -269,7 +242,6 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
         nk_label_wrap(ctx, "No items at this position. Add items in Settings "
                            "to choose a replacement.");
       }
-      size_t slot = 0;
       for (size_t i = 0; i < list->count; i++) {
         const PPItem *item =
             pp_project_item(pp_app_project(d->app), list->item_ids[i]);
@@ -310,6 +282,10 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
       d->dismissed = true;
   }
   nk_end(ctx);
+  for(size_t i=slot;i<8;i++) {
+    pp_ui_preview_release(&d->thumbnails[i].retained);pp_item_snapshot_release(d->thumbnails[i].snapshot);
+    d->thumbnails[i]=(PPDrawerThumbnail){0};d->textures[i]=0;
+  }
   if (!pp_ui_end(ui, error))
     return false;
   if (!d->render_hidden && !d->dismissed && !ui->visible) {

@@ -22,7 +22,7 @@ void pp_gif_release(PPAnchorPresenter *p,struct PPGifEntry *entry) {
     if(!entry || --entry->refs)return;
     struct PPGifEntry **link=&p->gif_entries;while(*link && *link!=entry)link=&(*link)->next;
     if(*link)*link=entry->next;
-    pp_shared_texture_destroy(entry->texture);p->gpu.retained_bytes-=entry->bytes;free(entry);
+    pp_shared_texture_destroy(entry->texture);pp_presenter_gpu_release(p,entry->bytes);free(entry);
 }
 void pp_gif_clear(PPAnchorPresenter *p) {
     while(p->gif_entries) {p->gif_entries->refs=1;pp_gif_release(p,p->gif_entries);}
@@ -38,19 +38,15 @@ bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed
     const PPItem *item=pp_item_snapshot_item(snapshot);struct PPGifEntry *entry=p->gif_entries;
     while(entry && (entry->revision!=selected.revision || memcmp(&entry->asset,&item->image_asset,sizeof(entry->asset))))entry=entry->next;
     if(!entry) {
-        if(!p->gpu.limit_bytes)p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
         size_t bytes=(size_t)selected.frame->width*selected.frame->height*4;
-        if(bytes>p->gpu.limit_bytes || p->gpu.retained_bytes>p->gpu.limit_bytes-bytes) {
-            if(error)*error=(PPError){PP_ERROR_RESOURCE_LIMIT,"Shared GIF candidate exceeds retained GPU budget"};return false;
-        }
-        entry=calloc(1,sizeof(*entry));if(!entry){if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot own shared GIF frame"};return false;}
-        if(!pp_presenter_texture_owner(p,error) || !pp_shared_texture_create(p->texture_owner,selected.frame,&entry->texture,error)){free(entry);return false;}
+        if(!pp_presenter_gpu_reserve(p,bytes,error))return false;
+        entry=calloc(1,sizeof(*entry));if(!entry){pp_presenter_gpu_release(p,bytes);if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot own shared GIF frame"};return false;}
+        if(!pp_presenter_texture_owner(p,error) || !pp_shared_texture_create(p->texture_owner,selected.frame,&entry->texture,error)){pp_presenter_gpu_release(p,bytes);free(entry);return false;}
         entry->asset=item->image_asset;entry->revision=selected.revision;entry->bytes=bytes;entry->visual_alpha=pp_source_visual_alpha(selected.frame);
-        p->gpu.retained_bytes+=bytes;if(p->gpu.retained_bytes>p->gpu.peak_bytes)p->gpu.peak_bytes=p->gpu.retained_bytes;
         entry->next=p->gif_entries;p->gif_entries=entry;
     }
     entry->refs++;*out=entry;*next=selected.next_change;
-    *source=(PPSourcePresentation){.frame=selected.frame,.content_id=pp_item_snapshot_revision(snapshot),.source_revision=selected.revision,
+    *source=(PPSourcePresentation){.frame=selected.frame,.content_id=pp_item_snapshot_content_id(snapshot),.source_revision=selected.revision,
         .layout=pp_item_snapshot_size(snapshot),.visual_alpha=entry->visual_alpha,.shared_texture=entry->texture};
     return true;
 }

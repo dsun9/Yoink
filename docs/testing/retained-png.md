@@ -1,6 +1,6 @@
 # Retained PNG presentation
 
-[Ticket #5](https://github.com/dsun9/Yoink/issues/5) adopts the Windows direct transparent OpenGL path after the [native feasibility gate](direct-gl-feasibility.md) passed. Placed PNG sprites retain their original decoded resolution and one RGBA texture. Other content and anchor previews keep the existing CPU-frame path while their rendering tickets are implemented.
+[Ticket #5](https://github.com/dsun9/Yoink/issues/5) adopts the Windows direct transparent OpenGL path after the [native feasibility gate](direct-gl-feasibility.md) passed. Placed PNG sprites retain their original decoded resolution and one RGBA texture. Ticket #10 extends retained source policies to anchors, Settings and drawer; see [shared preview checks](preview-retention.md) and [ownership](../architecture/rendering-content.md).
 
 ## Ownership and reusable presenter seam
 
@@ -10,7 +10,7 @@
 
 `PPRetainedPresentation` owns the renderer, retained immutable snapshot, source key, GPU charge, accepted pose, bounds, density and visibility. Release the renderer before its native surface. GIF can supply a selected-frame revision alongside snapshot identity without changing placement. Scalable source work can supply a replacement packet after its generation/revision checks; source requests and asynchronous publication remain separate later work. Contexts currently remain independent, so textures are per sprite. Shared immutable GPU entries are not implemented.
 
-`pp_anchor_presenter_renderer_metrics` and `pp_runtime_renderer_metrics` sum the shared compatibility renderer, active sprite renderers and retired direct renderers. `gpu_resources` accessors report retained bytes, peak bytes and limit. The presenter caps retained source RGBA at 256 MiB. It reserves old plus candidate textures before immutable-source or dimension replacement, commits the new charge only after successful upload, and releases charges on deletion, scene clear and project changes. This budget covers application source texture storage; SDL/driver contexts, drawable backing and compositor storage remain OS-managed. Existing 8192-axis presentation and CPU raster/cache limits remain in force.
+`pp_anchor_presenter_renderer_metrics` and `pp_runtime_renderer_metrics` sum the shared compatibility renderer, active sprite/anchor renderers and retired direct renderers. `gpu_resources` accessors report the app aggregate retained bytes, peak bytes and limit. Native/UI content sources and UI output targets share 256 MiB, including old/candidate overlap. Charges release on their consumer's replacement/deletion/closure; a live sibling keeps shared storage charged once. Control-label atlases, SDL/driver contexts, drawable backing and compositor storage remain separate. Existing 8192-axis presentation and CPU raster/cache limits remain in force.
 
 A preflight size/budget rejection or transactional allocation rejection restores the exact previous snapshot, pose and animation start through `pp_scene_restore`. A broken GL upload/context, draw or native surface immediately hides and removes that interceptor. Other usable sprites continue. Matching right-button release after deletion remains owned and consumed. Surface cancellation is scoped to the affected sprite.
 

@@ -1,6 +1,7 @@
 #ifndef POINTY_SETTINGS_INTERNAL_H
 #define POINTY_SETTINGS_INTERNAL_H
 #include "backend.h"
+#include "preview.h"
 typedef struct PPItemEditor {
   uint64_t id, generation, revision;
   char *text;
@@ -11,6 +12,7 @@ typedef struct PPItemEditor {
   PPItem draft;
   PPItemSnapshot *preview;
   PPRenderer *renderer;
+  PPUIContentPreview retained;
   GLuint preview_texture;
   int preview_width, preview_height;
   double animation_start, next_frame;
@@ -58,6 +60,7 @@ void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
 void pp_item_editor(PPSettings *settings);
 void pp_item_editor_destroy(PPSettings *settings);
 void pp_item_editor_sync(PPSettings *settings);
+void pp_item_editor_release_preview(PPSettings *settings);
 bool pp_ui_number(const char *text, double low, double high, double *out);
 bool pp_settings_invalid(const PPSettings *settings);
 void pp_settings_revert(PPSettings *settings);

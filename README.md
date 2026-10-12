@@ -3,7 +3,8 @@
 PointyPointer is a desktop presentation helper written in C, SDL3 and OpenGL.
 Pull PNGs, animated GIFs, static SVGs, text or emoji from eight small positions
 around each display. Placed sprites stay above ordinary windows and accept
-mouse input only on their visible content. They do not take keyboard focus
+mouse input within their native rectangular bounds, including transparent
+padding and holes. They do not take keyboard focus
 from the presentation. The same eight item lists are shared by every display.
 
 ## Run
@@ -49,9 +50,18 @@ installed Segoe UI Emoji or Aptos bytes.
 
 Replacement keeps the instance's center, rotation, opacity and longest side,
 uses the new content's aspect ratio, and restarts a GIF. Editing/removing a list
-item affects future pulls; existing sprites keep their snapshots. Transparent
-padding, holes and letter gaps pass the original click and wheel to the window
-below. Changing projects clears temporary sprites only after a successful load.
+item affects future pulls; existing sprites keep their snapshots. Original input
+outside visible sprite and preview rectangles reaches the window below. Hidden,
+disabled, empty-frame and zero-opacity content releases its accepted input.
+Changing projects clears temporary sprites only after a successful load.
+
+Previews and sprites share immutable artwork and cached CPU sources. PNG/GIF
+keep native resolution, bitmap text keeps useful strike detail, and scalable
+text/SVG prepare the latest size while retaining available artwork. Windows
+anchors and sprites draw directly into transparent GL windows; Settings and
+drawer retain context-local GL preview textures without normal readback.
+Settings content commits restart its own clock. Rename, reorder and pose-only
+edits reuse sources; drawer GIF thumbnails intentionally show frame zero.
 
 ## Projects and supported content
 
@@ -83,7 +93,13 @@ images. Convert unsupported SVGs to PNG before import.
 
 Media is limited to 8192 pixels per axis, 4096 GIF frames, 256 MiB decoded per
 resource and 512 MiB of retained CPU raster data across assets, text and native
-presentation copies. GPU allocations and source/decoder scratch are separate.
+presentation copies, shared preview sources, and pending candidates. Worker
+candidates have a 64 MiB cap; immutable captures have 32 MiB per job and 64 MiB
+total caps, with one running and one waiting job. Worker scratch has a separate
+384 MiB policy. App-owned native/UI content source and UI output textures share
+a 256 MiB GPU budget, including old/candidate overlap. Driver/compositor memory
+and the control-label atlas are outside these content budgets. See
+[rendering ownership](docs/architecture/rendering-content.md).
 An import accepts at most 256 MiB of source bytes; portable packages are stricter:
 64 MiB per source, 512 MiB total declared/extracted data, 2 MiB manifest, and
 4096 ZIP entries/items. Project names are 1–255 UTF-8 bytes. Font embedding must
@@ -142,9 +158,12 @@ core/media/storage tests, separately from real pointer-routing acceptance.
 Windows is the first validated platform. The available host has one 3840×2160
 display at 150%; simulated geometry/density checks do not establish physical
 mixed-monitor behavior. Physical two-display traversal/disconnect/fullscreen
-acceptance remains not run. No Mac, Apple SDK or Mac runtime was available:
-Mac configure/compile/link, tiny-alpha/first-click routing, capture/wheel,
-Retina traversal and Spaces remain unverified. See the concrete evidence and
+acceptance remains not run. Hosted Mac builds and headless checks have passed
+for the integration; native Mac runtime, first-click routing, capture/wheel,
+Retina traversal and Spaces remain unverified. Cocoa uses the shared source
+policy with a color-only compatibility readback. The complete 16.7 ms warm,
+50 ms input and 200 ms sharp gates remain ticket #11 acceptance work. See
+[preview verification](docs/testing/preview-retention.md), the concrete evidence and
 follow-up instructions in [Windows testing](docs/testing/windows.md) and
 [macOS testing](docs/testing/macos.md).
 
