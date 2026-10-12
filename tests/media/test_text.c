@@ -72,7 +72,12 @@ static void test_hybrid_selected_bitmap(void) {
     CHECK(!diagnostics.artwork.bitmap_only&&diagnostics.artwork.scalable_glyphs==1&&!diagnostics.artwork.bitmap_glyphs);pp_frame_destroy(&frame);
     CHECK(pp_text_render(assets,"AB",&style,1,&frame,&diagnostics,&error));
     CHECK(!diagnostics.artwork.bitmap_only&&diagnostics.artwork.scalable_glyphs==1&&diagnostics.artwork.bitmap_glyphs==1);
-    pp_frame_destroy(&frame);pp_assets_destroy(assets);
+    pp_frame_destroy(&frame);
+    PPTextResult enlarged={0};
+    CHECK(pp_text_render_result(assets,"B",&style,6,&enlarged,&diagnostics,&error));
+    CHECK(enlarged.artwork.bitmap_only&&enlarged.frame.width>=96);
+    CHECK(visible(&enlarged.frame)>6000);
+    pp_frame_destroy(&enlarged.frame);pp_assets_destroy(assets);
     puts("PASS hybrid face classifies selected bitmap, outline and mixed glyphs independently");
 }
 static void test_canonical_raster_geometry(void) {

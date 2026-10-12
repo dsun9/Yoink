@@ -66,6 +66,13 @@ static int left_bearing(FT_GlyphSlot slot) {
 static int top_bearing(FT_GlyphSlot slot) {
     return slot->format == FT_GLYPH_FORMAT_BITMAP ? slot->bitmap_top : floor26(slot->metrics.horiBearingY);
 }
+static bool bitmap_operation(RasterFont *font,const TTF_CopyOperation *op) {
+    if(!font->native) return true;
+    /* A scalable face can contain a selected embedded bitmap. Keep that
+     * shaped source instead of loading its empty/different native outline. */
+    return !FT_Load_Glyph(font->base,op->glyph_index,FT_LOAD_DEFAULT|FT_LOAD_COLOR) &&
+        font->base->glyph->format==FT_GLYPH_FORMAT_BITMAP;
+}
 
 static void over(PPFrame *out, int x, int y, const uint8_t rgba[4]) {
     if (x < 0 || y < 0 || x >= out->width || y >= out->height) return;
@@ -230,7 +237,7 @@ static bool raster(TTF_Text *text, const PPTextRasterFont fonts[2],
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
         RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
         int x, y, glyph_right, glyph_bottom;
-        if (font->native) {
+        if (!bitmap_operation(font,&op->copy)) {
             if (!native_glyph(font, &op->copy, scale, &x, &y, error)) goto done;
             FT_Bitmap *bitmap = &font->native->glyph->bitmap;
             if (!bitmap->width || !bitmap->rows) continue;
@@ -269,7 +276,7 @@ static bool raster(TTF_Text *text, const PPTextRasterFont fonts[2],
         const TTF_DrawOperation *op = &text->internal->ops[i];
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
         RasterFont *font = op->copy.glyph_font == raster_fonts[0].shaped ? &raster_fonts[0] : &raster_fonts[1];
-        if (!font->native) {
+        if (bitmap_operation(font,&op->copy)) {
             if (!draw_bitmap(out, &op->copy, scale, origin_x, origin_y, color, error)) goto done;
             continue;
         }
