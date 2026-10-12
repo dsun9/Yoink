@@ -62,7 +62,9 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     PPRasterKey key=pp_content_target(s->content);
     PPSourcePresentation source={0};double next;
     if(!pp_content_frame(s->content,instance->snapshot,key.longest_dip,key.density,0,&source,&next,&error)){p->notice=error;i++;continue;}
-    if(!pp_retained_present(p,s->surface,&s->retained,source,s->pose,d,&error)) {
+    bool published=pp_surface_window_id(s->surface)?pp_retained_present(p,s->surface,&s->retained,source,s->pose,d,&error):
+        pp_present_source(p,s->surface,source,s->pose,d,&s->raster_bytes,&error);
+    if(!published) {
       p->notice=error;pp_content_reject(s->content);
       if(p->failed_surface==s->surface) {
         pp_surface_cancel_input(s->surface);pp_scene_delete(p->scene,s->id);pp_sprite_release_presentation(p,s);

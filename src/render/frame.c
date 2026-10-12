@@ -5,10 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+typedef struct PPRenderUniforms {GLint image,alpha,destination_size,source_size,rotation,scale,source_offset,opacity;} PPRenderUniforms;
 struct PPRenderer {
     SDL_Window *window; SDL_GLContext context; PPGL gl;
     GLuint program, vao, fbo, textures[4];
-    struct {GLint image,alpha,destination_size,source_size,rotation,scale,source_offset,opacity;} uniforms;
+    PPRenderUniforms uniforms,color_uniforms;
+    GLuint color_program;
     PFNGLDEBUGMESSAGECALLBACKPROC error_callback;
     bool draw_error;
     uint32_t window_id;
@@ -50,6 +52,15 @@ static const char *fragment_shader =
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
+static const char *color_shader =
+    "#version 150\n"
+    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 source_size;"
+    "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
+    "out vec4 color; void main() {"
+    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
+    "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
+    "vec2 uv=(s-source_offset)/source_size+0.5;"
+    "color=(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1))))?vec4(0):texture(image,uv)*opacity; }";
 static const char *preview_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 source_size;"
@@ -143,7 +154,7 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
     }
     if (!pp_gl_load(&renderer->gl, error)) { pp_renderer_destroy(renderer); return false; }
     PPGL *gl = &renderer->gl;
-    renderer->program = pp_gl_program(gl, vertex_shader, fragment_shader, error);
+    renderer->program = pp_gl_program(gl, vertex_shader, window_id?color_shader:fragment_shader, error);
     if (!renderer->program) { pp_renderer_destroy(renderer); return false; }
 #define CACHE(name) renderer->uniforms.name=gl->GetUniformLocation(renderer->program,#name)
     CACHE(image);CACHE(alpha);CACHE(destination_size);CACHE(source_size);
@@ -355,7 +366,7 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->shared?renderer->shared->name:renderer->textures[0]);
     gl->UseProgram(renderer->program);
 #define LOCATION(name) renderer->uniforms.name
-    gl->Uniform1i(LOCATION(image),0);gl->Uniform1i(LOCATION(alpha),1);
+    gl->Uniform1i(LOCATION(image),0);
     gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
     gl->Uniform2f(LOCATION(source_size),(float)renderer->source_width,(float)renderer->source_height);
     gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
@@ -377,9 +388,9 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     PPVec2 layout={source->width,source->height};PPRect rect={0,0,source->width,source->height};
     return pp_renderer_transform_source(renderer,source,layout,rect,longest_dip,angle_deg,opacity,pixels_per_dip,out,error);
 }
-bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,
-    double longest_dip,double angle_deg,double opacity,double pixels_per_dip,PPFrame *out,PPError *error) {
-    if (!renderer || !renderer->owns_window || !source || !source->pixels || !source->content_alpha || !out || out->pixels || out->content_alpha ||
+static bool transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,
+    double longest_dip,double angle_deg,double opacity,double pixels_per_dip,bool coverage,PPFrame *out,PPError *error) {
+    if (!renderer || !renderer->owns_window || !source || !source->pixels || (coverage&&!source->content_alpha) || !out || out->pixels || out->content_alpha ||
         source->width <= 0 || source->height <= 0 || source->width > 16384 || source->height > 16384 ||
         source->stride < (size_t)source->width*4 || source->stride % 4 || source->stride/4 > 2147483647 ||
         !isfinite(longest_dip) || longest_dip <= 0 || !isfinite(angle_deg) || !isfinite(opacity) || opacity < 0 || opacity > 1 ||
@@ -393,33 +404,40 @@ bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPV
     double w=drawable_w,h=drawable_h;
     PPFrame frame = {0}; frame.width = (int)w; frame.height = (int)h; frame.stride = (size_t)frame.width*4;
     size_t count = (size_t)frame.width*frame.height;
-    frame.pixels = malloc(count*4); frame.content_alpha = malloc(count);
+    frame.pixels = malloc(count*4); if(coverage)frame.content_alpha = malloc(count);
     uint8_t *readback = malloc(count*4);
-    if (!frame.pixels || !frame.content_alpha || !readback) {
+    if (!frame.pixels || (coverage&&!frame.content_alpha) || !readback) {
         pp_frame_destroy(&frame); free(readback); return error_set(error, PP_ERROR_MEMORY, "Cannot allocate transformed pixels");
     }
     if (!current(renderer,error)) {
         pp_frame_destroy(&frame); free(readback); return error_set(error, PP_ERROR_RENDER, SDL_GetError());
     }
     PPGL *gl = &renderer->gl;
+    if(!coverage&&!renderer->color_program) {
+        renderer->color_program=pp_gl_program(gl,vertex_shader,color_shader,error);
+        if(!renderer->color_program){pp_frame_destroy(&frame);free(readback);return false;}
+#define CACHE(name) renderer->color_uniforms.name=gl->GetUniformLocation(renderer->color_program,#name)
+        CACHE(image);CACHE(destination_size);CACHE(source_size);CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
+#undef CACHE
+    }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1); glPixelStorei(GL_PACK_ALIGNMENT, 1);
     gl->ActiveTexture(GL_TEXTURE0); glPixelStorei(GL_UNPACK_ROW_LENGTH, (GLint)(source->stride/4));
     texture(renderer->textures[0], GL_RGBA8, GL_RGBA, source->width,source->height,source->pixels);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0); gl->ActiveTexture(GL_TEXTURE1);
-    texture(renderer->textures[1], GL_R8, GL_RED, source->width,source->height,source->content_alpha);
+    if(coverage)texture(renderer->textures[1], GL_R8, GL_RED, source->width,source->height,source->content_alpha);
     texture(renderer->textures[2], GL_RGBA8, GL_RGBA, frame.width,frame.height,NULL);
-    texture(renderer->textures[3], GL_R8, GL_RED, frame.width,frame.height,NULL);
+    if(coverage)texture(renderer->textures[3], GL_R8, GL_RED, frame.width,frame.height,NULL);
     gl->BindFramebuffer(GL_FRAMEBUFFER, renderer->fbo);
     gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,renderer->textures[2],0);
-    gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,renderer->textures[3],0);
-    GLenum buffers[] = {GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1}; gl->DrawBuffers(2, buffers);
+    gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,coverage?renderer->textures[3]:0,0);
+    GLenum buffers[] = {GL_COLOR_ATTACHMENT0,GL_COLOR_ATTACHMENT1}; gl->DrawBuffers(coverage?2:1, buffers);
     if (gl->CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
         pp_frame_destroy(&frame); free(readback); return error_set(error, PP_ERROR_RENDER, "Incomplete frame framebuffer");
     }
-    gl->ActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,renderer->textures[1]);
-    gl->UseProgram(renderer->program);
-#define LOCATION(name) renderer->uniforms.name
-    gl->Uniform1i(LOCATION(image),0); gl->Uniform1i(LOCATION(alpha),1);
+    if(coverage){gl->ActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,renderer->textures[1]);}
+    gl->UseProgram(coverage?renderer->program:renderer->color_program);
+#define LOCATION(name) (coverage?renderer->uniforms.name:renderer->color_uniforms.name)
+    gl->Uniform1i(LOCATION(image),0); if(coverage)gl->Uniform1i(LOCATION(alpha),1);
     gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
     gl->Uniform2f(LOCATION(source_size),(float)source->width,(float)source->height);
     gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
@@ -431,12 +449,20 @@ bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPV
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
     glReadBuffer(GL_COLOR_ATTACHMENT0); glReadPixels(0,0,frame.width,frame.height,GL_RGBA,GL_UNSIGNED_BYTE,readback);
     for (int y = 0; y < frame.height; y++) memcpy(frame.pixels+(size_t)y*frame.stride,readback+(size_t)(frame.height-1-y)*frame.stride,frame.stride);
-    glReadBuffer(GL_COLOR_ATTACHMENT1); glReadPixels(0,0,frame.width,frame.height,GL_RED,GL_UNSIGNED_BYTE,readback);
-    for (int y = 0; y < frame.height; y++) memcpy(frame.content_alpha+(size_t)y*frame.width,readback+(size_t)(frame.height-1-y)*frame.width,frame.width);
+    if(coverage){glReadBuffer(GL_COLOR_ATTACHMENT1); glReadPixels(0,0,frame.width,frame.height,GL_RED,GL_UNSIGNED_BYTE,readback);
+      for (int y = 0; y < frame.height; y++) memcpy(frame.content_alpha+(size_t)y*frame.width,readback+(size_t)(frame.height-1-y)*frame.width,frame.width);}
     free(readback);
     if (glGetError() != GL_NO_ERROR) { pp_frame_destroy(&frame); return error_set(error,PP_ERROR_RENDER,"OpenGL frame rendering failed"); }
-    renderer->metrics.source_uploads++;renderer->metrics.transform_draws++;renderer->metrics.readbacks+=2;
+    renderer->metrics.source_uploads++;renderer->metrics.transform_draws++;renderer->metrics.readbacks+=coverage?2:1;
     *out = frame; return true;
+}
+bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,
+    double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
+    return transform_source(renderer,source,layout,rect,longest,angle,opacity,density,true,out,error);
+}
+bool pp_renderer_transform_color_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,
+    double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
+    return transform_source(renderer,source,layout,rect,longest,angle,opacity,density,false,out,error);
 }
 void pp_renderer_destroy(PPRenderer *renderer) {
     if (!renderer) return;
@@ -450,6 +476,7 @@ void pp_renderer_destroy(PPRenderer *renderer) {
         PPGL *gl = &renderer->gl;
         if (renderer->program) gl->DeleteProgram(renderer->program);
         if (renderer->preview_program) gl->DeleteProgram(renderer->preview_program);
+        if (renderer->color_program) gl->DeleteProgram(renderer->color_program);
         if (renderer->vao) gl->DeleteVertexArrays(1,&renderer->vao);
         if (renderer->fbo) gl->DeleteFramebuffers(1,&renderer->fbo);
         glDeleteTextures(4,renderer->textures);

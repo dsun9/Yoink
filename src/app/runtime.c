@@ -86,7 +86,6 @@ bool pp_runtime_create(PPRuntime **out, PPApp *app, PPError *error) {
     free(r);
     return false;
   }
-  r->drawer_cache.renderer=r->renderer;
   *out = r;
   return true;
 }

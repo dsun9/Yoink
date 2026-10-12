@@ -11,7 +11,6 @@ typedef struct PPDrawerThumbnail {
 } PPDrawerThumbnail;
 typedef struct PPDrawerCache {
   PPUIBackend *backend; /* Owned when no drawer has checked it out. */
-  PPRenderer *renderer; /* Borrowed serialized runtime service. */
   bool in_use;
 } PPDrawerCache;
 bool pp_drawer_cache_warm(PPDrawerCache *cache,const PPDisplay *display,PPError *error);
@@ -23,7 +22,6 @@ struct PPDrawer {
   uint64_t focus_id;
   PPAnchor anchor;
   PPUIBackend *backend;
-  PPRenderer *renderer;
   PPDrawerCache *cache; /* Borrowed until close; cache outlives this drawer. */
   unsigned
       textures[8]; /* Only visible rows; GPU textures, no retained CPU copy. */

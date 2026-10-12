@@ -120,6 +120,8 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *sprite);
 void pp_sprite_hide(PPSprite *sprite);
 bool pp_source_visual_alpha(const PPFrame *source);
+bool pp_present_source(PPAnchorPresenter *p,PPSurface *surface,PPSourcePresentation source,
+    PPPose pose,const PPDisplay *display,size_t *retained,PPError *error);
 bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,
     PPRetainedPresentation *retained,PPSourcePresentation source,PPPose pose,
     const PPDisplay *display,PPError *error);

@@ -63,6 +63,11 @@ int main(void) {
       CHECK(output.width==reference.width&&output.height==reference.height);
       CHECK(!memcmp(output.pixels,reference.pixels,output.stride*output.height));
       CHECK(!memcmp(output.content_alpha,reference.content_alpha,(size_t)output.width*output.height));pp_frame_destroy(&reference);
+      PPFrame color={0};PPRendererMetrics before=pp_renderer_metrics(renderer);
+      CHECK(pp_renderer_transform_color_source(renderer,&prepared->frame,layout,rect,384,degrees,opacity,1.5,&color,&error));
+      CHECK(color.width==output.width&&color.height==output.height&&!color.content_alpha);
+      CHECK(!memcmp(color.pixels,output.pixels,output.stride*output.height));pp_frame_destroy(&color);
+      CHECK(pp_renderer_metrics(renderer).readbacks==before.readbacks+1);
       double right=fmax(layout.x,rect.x+rect.w)-layout.x*.5,left=fmin(0,rect.x)-layout.x*.5;
       double bottom=fmax(layout.y,rect.y+rect.h)-layout.y*.5,top=fmin(0,rect.y)-layout.y*.5;
       double extent_x=fmax(fmax(fabs(c*left-s*top),fabs(c*left-s*bottom)),fmax(fabs(c*right-s*top),fabs(c*right-s*bottom)));

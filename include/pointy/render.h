@@ -66,5 +66,11 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source,
 bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,
     PPVec2 layout,PPRect source_rect,double longest_dip,double angle_deg,
     double opacity,double pixels_per_dip,PPFrame *out,PPError *error);
+/* Color-only Cocoa compatibility publication. Produces one RGBA readback;
+ * source coverage remains owned for source validation/grab mapping and is
+ * never transformed for rectangular presentation. */
+bool pp_renderer_transform_color_source(PPRenderer *renderer,const PPFrame *source,
+    PPVec2 layout,PPRect source_rect,double longest_dip,double angle_deg,
+    double opacity,double pixels_per_dip,PPFrame *out,PPError *error);
 void pp_renderer_destroy(PPRenderer *renderer);
 #endif

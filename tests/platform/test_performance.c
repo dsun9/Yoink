@@ -200,7 +200,7 @@ static void raster_reference(PPApp *app, bool save) {
 static void drawer_first_layout_density(PPApp *app) {
   PPError error={0};PPRenderer *renderer=NULL;
   CHECK(pp_renderer_create(&renderer,&error));
-  PPDrawerCache cache={.renderer=renderer};
+  PPDrawerCache cache={0};
   uint64_t id=0;
   CHECK(pp_scene_spawn(pp_app_scene(app),pp_app_project(app),PP_ANCHOR_TOP_LEFT,
       (PPVec2){-19000,-19000},0,&id,&error));

@@ -125,6 +125,10 @@ bool pp_renderer_transform_source(PPRenderer *r,const PPFrame *source,PPVec2 lay
     }
     return true;
 }
+bool pp_renderer_transform_color_source(PPRenderer *r,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
+    bool ok=pp_renderer_transform_source(r,source,layout,rect,longest,angle,opacity,scale,out,error);
+    free(out->content_alpha);out->content_alpha=NULL;return ok;
+}
 void pp_frame_destroy(PPFrame *f) {free(f->pixels);free(f->content_alpha);*f=(PPFrame){0};}
 static PPSurface *instance_surface(void) {for(PPSurface *s=surfaces;s;s=s->next) if(s->id==1) return s;return NULL;}
 static PPItem gif_item(PPAssets *assets,const char *name) {

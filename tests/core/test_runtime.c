@@ -193,6 +193,10 @@ bool pp_renderer_transform_source(PPRenderer *r,const PPFrame *source,PPVec2 lay
   }
   return true;
 }
+bool pp_renderer_transform_color_source(PPRenderer *r,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
+  bool ok=pp_renderer_transform_source(r,source,layout,rect,longest,angle,opacity,scale,out,error);
+  free(out->content_alpha);out->content_alpha=NULL;return ok;
+}
 
 static void step(PPRuntime *r, PPSurface *s, PPPlatformEventKind kind, double x,
                  double y, double t) {

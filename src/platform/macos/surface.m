@@ -103,7 +103,7 @@ bool pp_surface_create(PPSurface **out,PPError *error) {
 }
 static void free_pixels(void *info,const void *data,size_t size) { (void)info;(void)size;free((void *)data); }
 bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect b,PPError *error) {
-    if(!s || !s->window || !frame || !frame->pixels || !frame->content_alpha ||
+    if(!s || !s->window || !frame || !frame->pixels || (!s->rectangular&&!frame->content_alpha) ||
        frame->width<=0 || frame->height<=0 || frame->width>8192 || frame->height>8192 ||
        frame->stride<(size_t)frame->width*4 || !isfinite(b.x)||!isfinite(b.y)||!isfinite(b.w)||!isfinite(b.h)||b.w<=0||b.h<=0) {
         release_native(s); return pp_mac_error(error,PP_ERROR_ARGUMENT,"Invalid Cocoa frame or bounds");
@@ -118,7 +118,7 @@ bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect b,PPError *erro
     CGImageRef image=CGImageCreate(frame->width,frame->height,8,32,(size_t)frame->width*4,color,
         kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big,provider,NULL,false,kCGRenderingIntentDefault);
     CGColorSpaceRelease(color); CGDataProviderRelease(provider);
-    SDL_Surface *shape=SDL_CreateSurfaceFrom(frame->width,frame->height,SDL_PIXELFORMAT_RGBA32,frame->pixels,(int)frame->stride);
+    SDL_Surface *shape=s->rectangular?NULL:SDL_CreateSurfaceFrom(frame->width,frame->height,SDL_PIXELFORMAT_RGBA32,frame->pixels,(int)frame->stride);
     bool ok=image && (s->rectangular?SDL_SetWindowShape(s->window,NULL):(shape && SDL_SetWindowShape(s->window,shape)));
     SDL_DestroySurface(shape);
     if(!ok) {if(image)CGImageRelease(image);release_native(s);return pp_mac_error(error,PP_ERROR_PLATFORM,"Cannot present Cocoa alpha shape");}

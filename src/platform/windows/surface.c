@@ -55,7 +55,7 @@ static void release_bitmap(PPSurface *surface) {
     surface->bitmap = NULL; surface->bits = NULL;
 }
 bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds, PPError *error) {
-    if (!surface || !surface->window || !frame || !frame->pixels || !frame->content_alpha || frame->width <= 0 || frame->height <= 0 ||
+    if (!surface || !surface->window || !frame || !frame->pixels || (!surface->rectangular&&!frame->content_alpha) || frame->width <= 0 || frame->height <= 0 ||
         frame->width > 16384 || frame->height > 16384 || frame->stride < (size_t)frame->width*4 ||
         !isfinite(bounds.x) || !isfinite(bounds.y) || bounds.x < -2147483647.0 || bounds.x > 2147483647.0 ||
         bounds.y < -2147483647.0 || bounds.y > 2147483647.0 || bounds.w != frame->width || bounds.h != frame->height)

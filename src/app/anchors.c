@@ -121,16 +121,16 @@ static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot 
     pp_retained_release(p,&a->retained);pp_surface_destroy(a->preview);a->preview=surface;
     pp_assets_release_raster(p->assets,a->preview_bytes);a->preview_bytes=0;
   }
-  if(!direct)return pp_present_content(p,a->preview,snapshot,pose,&a->display,elapsed,next,&a->preview_bytes,error);
   if(!pp_presenter_sources(p,error)||(!a->content&&!pp_content_consumer_create(p->sources,&a->content,error)))return false;
   PPSourcePresentation source={0};
   if(!pp_content_frame(a->content,snapshot,pose.longest_dip,a->display.drawable_pixels_per_dip,elapsed,&source,next,error))return false;
   p->worker=pp_content_sources_worker(p->sources);
-  bool gif=pp_snapshot_is_gif(snapshot);struct PPGifEntry *candidate=NULL;
+  bool gif=direct&&pp_snapshot_is_gif(snapshot);struct PPGifEntry *candidate=NULL;
   bool ok=!gif||pp_gif_acquire(p,snapshot,elapsed,&source,next,&candidate,error);
   if(ok) {
     if(!source.frame){pp_surface_hide(a->preview);ok=true;}
-    else ok=pp_retained_present(p,a->preview,&a->retained,source,pose,&a->display,error);
+    else if(direct)ok=pp_retained_present(p,a->preview,&a->retained,source,pose,&a->display,error);
+    else {ok=pp_present_source(p,a->preview,source,pose,&a->display,&a->preview_bytes,error);if(ok)a->retained.visible=source.visual_alpha&&pose.opacity>0;}
   }
   if(ok){
     pp_gif_release(p,a->retained.gif_entry);a->retained.gif_entry=candidate;candidate=NULL;

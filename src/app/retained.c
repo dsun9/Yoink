@@ -161,23 +161,14 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
     }
   } else {
-    bool png=pp_snapshot_is_png(instance->snapshot),gif=pp_snapshot_is_gif(instance->snapshot),invisible=false;
-    double hidden_next=HUGE_VAL;
-    if(png || gif) {
-      pp_surface_set_rectangular(surface,true);
-      uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
-      if(gif || identity!=s->retained.content_id) {
-        PPFrameSelection selected;
-        if(!pp_item_snapshot_select_frame(instance->snapshot,elapsed,1,&selected,error)) return false;
-        hidden_next=selected.next_change;
-        if(identity!=s->retained.content_id || selected.revision!=s->retained.source_revision)
-          s->retained.visual_alpha=pp_source_visual_alpha(selected.frame);
-        s->retained.content_id=identity;s->retained.source_revision=selected.revision;
-      }
-      invisible=!s->retained.visual_alpha;
-    }
-    if(s->pose.opacity<=0 || invisible) {pp_surface_hide(surface);*next=hidden_next;ok=true;}
-    else ok=pp_present_content(p,surface,instance->snapshot,s->pose,display,elapsed,next,&s->raster_bytes,error);
+    if(!pp_presenter_sources(p,error)||(!s->content&&!pp_content_consumer_create(p->sources,&s->content,error)))return false;
+    PPSourcePresentation source={0};double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
+    ok=pp_content_frame(s->content,instance->snapshot,target,display->drawable_pixels_per_dip,elapsed,&source,next,error);
+    p->worker=pp_content_sources_worker(p->sources);
+    if(ok)ok=pp_present_source(p,surface,source,s->pose,display,&s->raster_bytes,error);
+    if(ok){pp_content_accept(s->content);pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
+      s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;}
+    else pp_content_reject(s->content);
   }
   if(surface!=s->surface) {
     if(ok) {
