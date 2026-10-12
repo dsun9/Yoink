@@ -150,15 +150,21 @@ static void test_gif_independent_clocks_and_shared_frames(void) {
     CHECK(first.source_uploads-before.source_uploads==2 && first.transform_draws-before.transform_draws==3 && first.readbacks==before.readbacks);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==24);
     CHECK(pp_sprites_find(p,ids[0])->surface->red==0 && pp_sprites_find(p,ids[1])->surface->red==255);
+    CHECK(fabs(pp_sprites_find(p,ids[0])->next_frame-1.1)<1e-8 && fabs(pp_sprites_find(p,ids[1])->next_frame-1.11)<1e-8);
     PPSprite *s=pp_sprites_find(p,ids[1]);s->pose.center.x+=20;s->dirty=true;
     CHECK(pp_scene_set_pose(p->scene,s->id,s->pose,&error));CHECK(pp_sprites_update(p,1.081,&error));
     PPRendererMetrics moved=pp_anchor_presenter_renderer_metrics(p);
     CHECK(moved.source_uploads==first.source_uploads && moved.transform_draws==first.transform_draws);
     CHECK(pp_assets_source_metrics(assets).raster_builds==builds);
+    s->pose.angle_deg=37;s->pose.longest_dip=192;s->dirty=true;d.drawable_pixels_per_dip=1.5;*p->displays=d;
+    CHECK(pp_sprites_update(p,1.082,&error));PPRendererMetrics transformed=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(transformed.source_uploads==moved.source_uploads && transformed.transform_draws==moved.transform_draws+3 && transformed.readbacks==moved.readbacks);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds);
     CHECK(pp_sprites_update(p,1.28,&error));
     PPRendererMetrics stopped=pp_anchor_presenter_renderer_metrics(p);
     CHECK(pp_sprites_update(p,3,&error));
     CHECK(pp_anchor_presenter_renderer_metrics(p).transform_draws==stopped.transform_draws);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==stopped.source_uploads);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==12);
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
 }
@@ -824,9 +830,9 @@ int main(void) {
     test_completed_target_is_revalidated_after_external_resize();
     test_cached_source_survives_compatibility_request();
     test_async_latest_text_resize();
+    test_gif_transparent_frame_releases_capture();
 #if defined(_WIN32)
     test_gif_budget_sharing_and_png_transitions();
-    test_gif_transparent_frame_releases_capture();
     test_gif_rejected_replacement_preserves_clock();
     test_gif_producer_failure_isolates_interceptor();
     test_gif_independent_clocks_and_shared_frames();
