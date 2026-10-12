@@ -45,6 +45,7 @@ typedef struct PPSprite {
   size_t raster_bytes;
   bool dirty, dragging, replaced;
   PPItemSnapshot *seen_snapshot; /* Retained until mapping is synchronized. */
+  double seen_animation_start;
   PPPose ease_from, ease_target;
   double rotate_start, resize_start;
   bool rotating, resizing;

@@ -104,6 +104,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
   pp_surface_set_instance_id(s->surface, s->id);
   s->seen_snapshot =
       pp_item_snapshot_retain(pp_scene_get(p->scene, s->id)->snapshot);
+  s->seen_animation_start=pp_scene_get(p->scene,s->id)->animation_start;
   p->instance_count++;
   return s;
 }
@@ -171,7 +172,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
           s->dirty = false;
           s->next_frame = HUGE_VAL;
           PPItemSnapshot *usable=s->retained.snapshot?s->retained.snapshot:s->seen_snapshot;
-          double start=s->retained.snapshot?s->retained.animation_start:instance->animation_start;
+          double start=s->retained.snapshot?s->retained.animation_start:s->seen_animation_start;
           pp_scene_restore(p->scene,s->id,usable,s->pose,start,NULL);
           pp_item_snapshot_release(s->seen_snapshot);s->seen_snapshot=pp_item_snapshot_retain(usable);
           s->replaced=false;
@@ -199,6 +200,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       s->dirty = false;
       s->replaced = false;
       if(s->seen_snapshot!=instance->snapshot) {pp_item_snapshot_release(s->seen_snapshot);s->seen_snapshot=pp_item_snapshot_retain(instance->snapshot);}
+      s->seen_animation_start=instance->animation_start;
       s->drawn = s->pose;
       s->scale = scale;
       s->drawable_density=display->drawable_pixels_per_dip;

@@ -349,6 +349,23 @@ static void test_png_empty_source_releases_input(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
     puts("PASS fully transparent PNG source hides/releases accepted input; hidden translation/static reuses visibility metadata");
 }
+static void test_png_candidate_preserves_compatibility_clock(void) {
+    PPAssets *assets=NULL;PPError error={0};CHECK(pp_assets_create(&assets,&error));
+    PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay display={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(display));*p->displays=display;p->display_count=1;
+    PPSprite *sprite=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(sprite);
+    uint64_t id=sprite->id;PPSurface *surface=sprite->surface;CHECK(pp_sprites_update(p,1,&error));
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot);
+    PPItem png=png_item(assets,"alpha.png",96);CHECK(pp_scene_replace(p->scene,id,&png,3,&error));
+    pp_sprites_sync(p);fail_gl_upload=true;CHECK(pp_sprites_update(p,3,&error));fail_gl_upload=false;
+    CHECK(surface_for(id)==surface&&surface->shown&&!surface->window_id);
+    CHECK(pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot)==revision);
+    CHECK(pp_scene_get(p->scene,id)->animation_start==1);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
+    puts("PASS rejected PNG candidate preserves independent compatibility surface, immutable source and animation start");
+}
 int main(void) {
 #if defined(_WIN32)
     test_png_translation_reuses_presentation();
@@ -356,6 +373,7 @@ int main(void) {
     test_png_gpu_limit_and_overlap();
     test_png_broken_context_releases_interceptor();
     test_png_empty_source_releases_input();
+    test_png_candidate_preserves_compatibility_clock();
 #endif
     test_latest_resize_sharp_observation();
     test_native_retention_contract();
