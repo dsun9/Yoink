@@ -11,10 +11,10 @@ from fontTools.ttLib.tables.E_B_D_T_ import ebdt_bitmap_format_1
 from fontTools.ttLib.tables.BitmapGlyphMetrics import SmallGlyphMetrics
 
 root = Path(__file__).parent
-names = [".notdef", "space", "A", "box"]
+names = [".notdef", "space", "A", "box", "overhang"]
 builder = FontBuilder(1000, isTTF=True)
 builder.setupGlyphOrder(names)
-builder.setupCharacterMap({32: "space", 65: "A", 66: "box"})
+builder.setupCharacterMap({32: "space", 65: "A", 66: "box", 67: "overhang"})
 glyphs = {}
 for name in names:
     pen = TTGlyphPen(None)
@@ -25,7 +25,7 @@ for name in names:
         pen.closePath()
     glyphs[name] = pen.glyph()
 builder.setupGlyf(glyphs)
-builder.setupHorizontalMetrics({name: (1000 if name == "box" else 600, 0) for name in names})
+builder.setupHorizontalMetrics({name: (1000 if name in ("box", "overhang") else 600, 0) for name in names})
 builder.setupHorizontalHeader(ascent=1000, descent=-200)
 builder.setupNameTable({"familyName": "Pointy Hybrid", "styleName": "Regular",
     "fullName": "Pointy Hybrid", "psName": "PointyHybrid", "uniqueFontIdentifier": "PointyPointer original hybrid fixture",
@@ -47,9 +47,14 @@ glyph.metrics = SmallGlyphMetrics()
 for name, value in {"height": 16, "width": 16, "BearingX": 0, "BearingY": 16, "Advance": 16}.items():
     setattr(glyph.metrics, name, value)
 glyph.imageData = bytes(rows)
+overhang = ebdt_bitmap_format_1(None, None)
+overhang.metrics = SmallGlyphMetrics()
+for name, value in {"height": 16, "width": 16, "BearingX": -3, "BearingY": 18, "Advance": 16}.items():
+    setattr(overhang.metrics, name, value)
+overhang.imageData = bytes(rows)
 data = newTable("EBDT")
 data.version = 2.0
-data.strikeData = [{"box": glyph}]
+data.strikeData = [{"box": glyph, "overhang": overhang}]
 font["EBDT"] = data
 location = newTable("EBLC")
 location.version = 2.0
@@ -67,7 +72,7 @@ for metric in (table.hori, table.vert):
 subtable = eblc_index_sub_table_1(None, None)
 subtable.indexFormat = 1
 subtable.imageFormat = 1
-subtable.names = ["box"]
+subtable.names = ["box", "overhang"]
 strike.indexSubTables = [subtable]
 location.strikes = [strike]
 font["EBLC"] = location

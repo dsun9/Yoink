@@ -40,7 +40,62 @@ int main(void) {
     const PPFrame *compatibility=NULL;double next;CHECK(pp_item_snapshot_frame(snapshot,0,1.237,&compatibility,&next,&error));
     CHECK(pp_item_snapshot_bitmap_source(snapshot,&again,&error)&&again==source&&again->frame.width==136);
     CHECK(pp_assets_source_metrics(assets).raster_builds==builds+2);
+    /* Canonical shaping retains line placement at the useful source density. */
+    PPItem lines=item;lines.text="\xf0\x9f\x91\x89\n\xf0\x9f\x91\x89";PPItemSnapshot *multiline=NULL;
+    CHECK(pp_item_snapshot_create(assets,&lines,&multiline,&error));const PPTextResult *line_source=NULL;
+    CHECK(pp_item_snapshot_bitmap_source(multiline,&line_source,&error));
+    CHECK(line_source->artwork.bitmap_glyphs==2&&line_source->frame.width==136&&line_source->frame.height==256);
+    CHECK(line_source->layout_size.x==120&&line_source->layout_size.y==226&&!line_source->frame.content_alpha);
+    for(int y=0;y<256;y++) {
+        int original_y=y<128?y:y-128;
+        CHECK(!memcmp(line_source->frame.pixels+(size_t)y*line_source->frame.stride,
+            source->frame.pixels+(size_t)original_y*source->frame.stride,136*4));
+    }
+    PPItem joined=item;joined.text="\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb";PPItemSnapshot *cluster=NULL;
+    CHECK(pp_item_snapshot_create(assets,&joined,&cluster,&error));const PPTextResult *cluster_source=NULL;
+    CHECK(pp_item_snapshot_bitmap_source(cluster,&cluster_source,&error));
+    CHECK(cluster_source->artwork.bitmap_glyphs==1&&cluster_source->frame.width==136&&cluster_source->frame.height==128);
+    CHECK(cluster_source->layout_size.x==120&&cluster_source->layout_size.y==113);
+    pp_item_snapshot_release(multiline);pp_item_snapshot_release(cluster);
+    /* Candidate coverage also fits the combined budget before allocation.
+     * Pressure rejects the request without a build or invalidating old pixels. */
+    PPItemSnapshot *pressured=NULL;CHECK(pp_item_snapshot_create(assets,&item,&pressured,&error));
+    const PPFrame *old=&pp_item_snapshot_text_result(pressured)->frame;const uint8_t *old_pixels=old->pixels;
+    size_t first_pressure=256u*1024u*1024u;
+    size_t second_pressure=512u*1024u*1024u-pp_assets_raster_bytes(assets)-first_pressure-87039;
+    CHECK(pp_assets_reserve_raster(assets,first_pressure,&error));CHECK(pp_assets_reserve_raster(assets,second_pressure,&error));
+    builds=pp_assets_source_metrics(assets).raster_builds;const PPTextResult *rejected=source;
+    CHECK(!pp_item_snapshot_bitmap_source(pressured,&rejected,&error)&&!rejected&&error.code==PP_ERROR_RESOURCE_LIMIT);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&old->pixels==old_pixels&&old->width==120&&old->height==113);
+    pp_assets_release_raster(assets,second_pressure);pp_assets_release_raster(assets,first_pressure);
+    CHECK(pp_item_snapshot_bitmap_source(pressured,&rejected,&error)&&rejected->frame.width==136);
+    first_pressure=256u*1024u*1024u;second_pressure=512u*1024u*1024u-pp_assets_raster_bytes(assets)-first_pressure;
+    CHECK(pp_assets_reserve_raster(assets,first_pressure,&error));CHECK(pp_assets_reserve_raster(assets,second_pressure,&error));
+    CHECK(pp_assets_raster_bytes(assets)==512u*1024u*1024u);builds=pp_assets_source_metrics(assets).raster_builds;
+    CHECK(pp_item_snapshot_bitmap_source(pressured,&again,&error)&&again==rejected&&pp_assets_source_metrics(assets).raster_builds==builds);
+    pp_assets_release_raster(assets,second_pressure);pp_assets_release_raster(assets,first_pressure);pp_item_snapshot_release(pressured);
+    PPItem mixed=item;mixed.text="A\xf0\x9f\x91\x89";mixed.text_style.primary_asset=import_font(assets,PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPItemSnapshot *mixed_snapshot=NULL;CHECK(pp_item_snapshot_create(assets,&mixed,&mixed_snapshot,&error));
+    builds=pp_assets_source_metrics(assets).raster_builds;CHECK(!pp_item_snapshot_bitmap_source(mixed_snapshot,&again,&error)&&!again);
+    CHECK(!pp_item_snapshot_text_result(mixed_snapshot)->artwork.bitmap_only&&pp_assets_source_metrics(assets).raster_builds==builds);
+    CHECK(pp_item_snapshot_frame(mixed_snapshot,0,2.25,&compatibility,&next,&error)&&compatibility->width>120);
+    pp_item_snapshot_release(mixed_snapshot);
+    PPItem bearing={.kind=PP_ITEM_TEXT,.text="C",.opacity=1,.text_style={.requested_family="Pointy Hybrid",.font_size_dip=16,.color={0,255,0,255}}};
+    bearing.text_style.primary_asset=import_font(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");PPItemSnapshot *overhang=NULL;
+    CHECK(pp_item_snapshot_create(assets,&bearing,&overhang,&error));const PPTextResult *bearing_source=NULL;
+    CHECK(pp_item_snapshot_bitmap_source(overhang,&bearing_source,&error));
+    /* SDL_ttf already includes the negative bearing and raised top in its
+     * draw placement. The 16-pixel advance grows by 3 left and 2 above. */
+    CHECK(bearing_source->artwork.bitmap_only&&bearing_source->layout_origin.x==0&&bearing_source->layout_origin.y==0);
+    CHECK(bearing_source->frame.width==19&&bearing_source->frame.height==22);
+    const uint8_t edge[]={0,128,0,128},solid[]={0,255,0,255},hole[]={0,0,0,0};
+    CHECK(!memcmp(bearing_source->frame.pixels,edge,4));
+    CHECK(!memcmp(bearing_source->frame.pixels+bearing_source->frame.stride+4,solid,4));
+    CHECK(!memcmp(bearing_source->frame.pixels+bearing_source->frame.stride*6+6*4,hole,4));
+    CHECK(pp_item_snapshot_frame(overhang,0,6.125,&compatibility,&next,&error));
+    CHECK(pp_item_snapshot_bitmap_source(overhang,&again,&error)&&again==bearing_source&&again->frame.width==19&&again->frame.height==22);
+    pp_item_snapshot_release(overhang);
     pp_item_snapshot_release(retained);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
-    puts("PASS bitmap source retains useful native detail, exact premultiplied edges, canonical layout, shared immutable ownership and exact CPU charge");
+    puts("PASS bitmap source retains exact native premultiplied detail, clusters/line placement, immutable ownership, bounded candidate overlap, recovery and mixed-outline exclusion");
     return 0;
 }
