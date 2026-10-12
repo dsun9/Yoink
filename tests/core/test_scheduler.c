@@ -21,6 +21,18 @@ static void test_scheduler_deadlines(void) {
   void *bytes=SDL_LoadFile(PP_MEDIA_FIXTURES "/finite.gif",&size); CHECK(bytes);
   CHECK(pp_asset_import(assets,(PPBytes){bytes,size},PP_ASSET_GIF,&id,&error)); SDL_free(bytes);
   PPAsset *asset=pp_asset_retain(assets,id); CHECK(asset);
+  PPFrameSelection earlier,later;
+  CHECK(pp_asset_select_frame(asset,.08,0,0,&earlier,&error));
+  CHECK(pp_asset_select_frame(asset,.02,0,0,&later,&error));
+  CHECK(earlier.revision==2 && later.revision==1);
+  s.pointer=HUGE_VAL;s.gif=fmin(1+earlier.next_change,1.06+later.next_change);
+  CHECK(fabs(pp_next_wake(&s,1.08)-1.1)<1e-8);
+  CHECK(pp_asset_select_frame(asset,.201,0,0,&earlier,&error));
+  CHECK(pp_asset_select_frame(asset,.141,0,0,&later,&error));
+  CHECK(isinf(earlier.next_change) && later.revision==1);
+  s.gif=fmin(1+earlier.next_change,1.06+later.next_change);
+  CHECK(fabs(pp_next_wake(&s,1.201)-1.21)<1e-8);
+  s.pointer=1.0/60;
   const PPFrame *frame=NULL;
   CHECK(pp_asset_frame(asset,.201,0,0,&frame,&s.gif,&error));
   CHECK(isinf(s.gif)); /* Actual stopped finite-loop media has no frame wake. */

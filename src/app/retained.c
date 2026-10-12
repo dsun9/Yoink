@@ -145,18 +145,22 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
     }
   } else {
-    bool png=pp_snapshot_is_png(instance->snapshot),invisible=false;
-    if(png) {
+    bool png=pp_snapshot_is_png(instance->snapshot),gif=pp_snapshot_is_gif(instance->snapshot),invisible=false;
+    double hidden_next=HUGE_VAL;
+    if(png || gif) {
       pp_surface_set_rectangular(surface,true);
       uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
-      if(identity!=s->retained.content_id) {
-        const PPFrame *source=NULL;
-        if(!pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source,next,error)) return false;
-        s->retained.visual_alpha=pp_source_visual_alpha(source);s->retained.content_id=identity;
+      if(gif || identity!=s->retained.content_id) {
+        PPFrameSelection selected;
+        if(!pp_item_snapshot_select_frame(instance->snapshot,elapsed,1,&selected,error)) return false;
+        hidden_next=selected.next_change;
+        if(identity!=s->retained.content_id || selected.revision!=s->retained.source_revision)
+          s->retained.visual_alpha=pp_source_visual_alpha(selected.frame);
+        s->retained.content_id=identity;s->retained.source_revision=selected.revision;
       }
       invisible=!s->retained.visual_alpha;
     }
-    if(s->pose.opacity<=0 || invisible) {pp_surface_hide(surface);*next=HUGE_VAL;ok=true;}
+    if(s->pose.opacity<=0 || invisible) {pp_surface_hide(surface);*next=hidden_next;ok=true;}
     else ok=pp_present_content(p,surface,instance->snapshot,s->pose,display,elapsed,next,&s->raster_bytes,error);
   }
   if(surface!=s->surface) {

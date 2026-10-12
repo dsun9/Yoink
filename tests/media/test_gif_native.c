@@ -3,6 +3,7 @@
 #include "../../src/app/presenter_internal.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
+#include <math.h>
 #include "../platform/receiver_shared.h"
 #include "../test.h"
 static PPAssets *assets;
@@ -106,7 +107,11 @@ static void retained_native(void) {
     CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24);
     printf("GIF GL renderer=%s vendor=%s version=%s shared_frames=2 independent_instances=3 native_density=%.2f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),presenter->displays[0].drawable_pixels_per_dip);
     RECT a,b;CHECK(GetWindowRect(native(ids[0]),&a));CHECK(GetWindowRect(native(ids[1]),&b));
-    pixel("earlier clock green",240,300,0,255,0);pixel("later clock red",b.left+5,300,255,0,0);pixel("visible frame transparent interior",350,300,255,255,255);
+    /* On an even-width drawable, the desktop center pixel samples half a
+     * destination pixel past the middle green texel. Linear interpolation
+     * with its transparent neighbor exposes this much white receiver. */
+    int green_edge=(int)lround(255.0*3/(2*(a.right-a.left)));
+    pixel("earlier clock green",240,300,green_edge,255,green_edge);pixel("later clock red",b.left+5,300,255,0,0);pixel("visible frame transparent interior",350,300,255,255,255);
     unsigned down=direct_downs[ids[1]];LONG below=receiver->clicks;
     direct_mouse(350,300,MOUSEEVENTF_LEFTDOWN);direct_mouse(350,300,MOUSEEVENTF_LEFTUP);
     CHECK(direct_downs[ids[1]]==down+1 && receiver->clicks==below);
@@ -114,6 +119,13 @@ static void retained_native(void) {
     PPSprite *sprite=pp_sprites_find(presenter,ids[1]);sprite->pose.center.y+=10;sprite->dirty=true;direct_update(1.081);
     PPRendererMetrics moved=pp_anchor_presenter_renderer_metrics(presenter);
     CHECK(moved.source_uploads==first.source_uploads && moved.transform_draws==first.transform_draws && pp_assets_source_metrics(assets).raster_builds==builds);
+    PPPose overlap=pp_scene_get(presenter->scene,ids[1])->pose;overlap.center=(PPVec2){240,300};
+    CHECK(pp_scene_set_pose(presenter->scene,ids[1],overlap,&error));direct_update(1.081);
+    CHECK(WindowFromPoint((POINT){240,300})==native(ids[1]));down=direct_downs[ids[1]];
+    direct_mouse(240,300,MOUSEEVENTF_LEFTDOWN);direct_mouse(240,300,MOUSEEVENTF_LEFTUP);CHECK(direct_downs[ids[1]]==down+1);
+    pp_surface_raise(pp_sprites_find(presenter,ids[0])->surface);CHECK(WindowFromPoint((POINT){240,300})==native(ids[0]));
+    down=direct_downs[ids[0]];direct_mouse(240,300,MOUSEEVENTF_LEFTDOWN);direct_mouse(240,300,MOUSEEVENTF_LEFTUP);CHECK(direct_downs[ids[0]]==down+1);
+    overlap.center=(PPVec2){350,310};CHECK(pp_scene_set_pose(presenter->scene,ids[1],overlap,&error));direct_update(1.081);
     pp_scene_delete(presenter->scene,ids[2]);direct_update(1.082);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24);
     pixel("remaining shared consumer",b.left+5,310,255,0,0);
     PPItem changing=image("changing-alpha.gif",PP_ASSET_GIF);CHECK(pp_scene_replace(presenter->scene,ids[1],&changing,1.08,&error));direct_update(1.08);
@@ -125,6 +137,9 @@ static void retained_native(void) {
     CHECK(pp_scene_replace(presenter->scene,ids[1],&finite,1.31,&error));direct_update(1.31);CHECK(GetWindowRect(native(ids[1]),&b));pixel("owned PNG to shared GIF",b.left+5,310,255,0,0);
     direct_update(2);PPRendererMetrics stopped=pp_anchor_presenter_renderer_metrics(presenter);direct_update(3);
     CHECK(pp_anchor_presenter_renderer_metrics(presenter).transform_draws==stopped.transform_draws);
+    direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);unsigned up=direct_ups[ids[1]];
+    pp_scene_delete(presenter->scene,ids[1]);direct_update(3.01);direct_mouse(350,310,MOUSEEVENTF_LEFTUP);
+    CHECK(direct_ups[ids[1]]==up && pp_anchor_presenter_gpu_resources(presenter).retained_bytes==12);
     pp_scene_clear(presenter->scene);direct_update(4);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==0);
     CHECK(pp_anchor_presenter_renderer_metrics(presenter).readbacks==before.readbacks);
     puts("PASS retained native GIF independent clocks/shared immutable pixels, rectangle first clicks, stationary alpha/capture, nonactivation, ownership transitions, finite stop and zero-byte cleanup");
