@@ -34,6 +34,17 @@ static bool copy_font(PPAssets *assets,PPAssetId id,uint8_t **out,size_t *bytes,
 bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot) {
   const PPTextResult *text=pp_item_snapshot_text_result(snapshot);return text&&!text->artwork.bitmap_only;
 }
+bool pp_scalable_defer_if_busy(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
+    const PPDisplay *display,double longest) {
+  if(pp_raster_worker_can_request(p->worker,p->generation,s->id))return false;
+  uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
+  if(!s->raster_retry||s->raster_target.content_revision!=identity||
+      s->raster_target.longest_dip!=longest||s->raster_target.density!=display->drawable_pixels_per_dip) {
+    pp_raster_worker_cancel(p->worker,p->generation,s->id);
+    s->raster_target=(PPRasterKey){p->generation,s->id,identity,++s->raster_serial,longest,display->drawable_pixels_per_dip};
+  }
+  s->raster_requested=false;s->raster_retry=true;return true;
+}
 bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double longest,PPError *error) {
   if(!pp_snapshot_is_scalable_text(instance->snapshot))return true;
@@ -49,6 +60,7 @@ bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance 
   if(strlen(item->text)>65536||strlen(item->text_style.requested_family)>4096) {
     if(error)*error=(PPError){PP_ERROR_RESOURCE_LIMIT,"Worker text or family exceeds capture limits"};return false;
   }
+  if(pp_scalable_defer_if_busy(p,s,instance,display,longest))return true;
   TextCapture *c=calloc(1,sizeof(*c));if(!c) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot allocate immutable text capture"};return false;}
   c->style=item->text_style;c->scale=scale;
   size_t text_bytes=strlen(item->text)+1,family_bytes=strlen(item->text_style.requested_family)+1;
@@ -62,10 +74,10 @@ bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance 
   PPRasterKey key={p->generation,s->id,pp_item_snapshot_revision(instance->snapshot),++s->raster_serial,longest,display->drawable_pixels_per_dip};
   PPRasterCapture capture={c,sizeof(*c)+text_bytes+family_bytes+c->primary_bytes+c->fallback_bytes,generate,destroy_capture};
   if(!pp_raster_worker_request(p->worker,key,capture,p->assets,(size_t)width*(size_t)height*5,error))return false;
-  s->raster_target=key;s->raster_requested=true;return true;
+  s->raster_target=key;s->raster_requested=true;s->raster_retry=false;return true;
 }
 void pp_scalable_cancel(PPAnchorPresenter *p,PPSprite *s) {
-  pp_raster_worker_cancel(p->worker,p->generation,s->id);s->raster_requested=false;s->raster_serial++;
+  pp_raster_worker_cancel(p->worker,p->generation,s->id);s->raster_requested=s->raster_retry=false;s->raster_serial++;
 }
 void pp_scalable_release(PPAnchorPresenter *p,PPSprite *s) {
   pp_scalable_cancel(p,s);pp_frame_destroy(&s->scalable.frame);
@@ -84,9 +96,7 @@ bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *
   double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
   bool current=s->scalable.frame.pixels&&s->scalable_identity==identity;
   bool matches=s->raster_target.content_revision==identity&&s->raster_target.longest_dip==target&&s->raster_target.density==display->drawable_pixels_per_dip;
-  if(!matches) {
-    if(!pp_scalable_request(p,s,instance,display,target,error))return false;
-  }
+  if((!matches||s->raster_retry)&&!pp_scalable_request(p,s,instance,display,target,error))return false;
   if(s->retained.content_id==identity) {
     *out=(PPSourcePresentation){.content_id=identity,.source_revision=s->retained.source_revision,
       .layout=s->retained.layout,.source_rect=s->retained.source_rect,.visual_alpha=s->retained.visual_alpha};

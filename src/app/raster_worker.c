@@ -120,6 +120,13 @@ static void cancel_locked(PPRasterWorker *w,uint64_t generation,uint64_t instanc
 void pp_raster_worker_cancel(PPRasterWorker *w,uint64_t generation,uint64_t instance) {
   if(!w)return;SDL_LockMutex(w->mutex);cancel_locked(w,generation,instance);SDL_UnlockMutex(w->mutex);
 }
+bool pp_raster_worker_can_request(PPRasterWorker *w,uint64_t generation,uint64_t instance) {
+  if(!w)return true;SDL_LockMutex(w->mutex);bool ready=!w->stop;
+  for(RasterJob *j=w->jobs;j&&ready;j=j->next)
+    if(!j->running&&!j->done&&!j->cancelled&&
+        (j->completion.key.generation!=generation||j->completion.key.instance_id!=instance))ready=false;
+  SDL_UnlockMutex(w->mutex);return ready;
+}
 bool pp_raster_worker_request(PPRasterWorker *w,PPRasterKey key,PPRasterCapture capture,
     PPAssets *assets,size_t limit,PPError *error) {
   if(!w||!capture.data||!capture.generate||!capture.destroy||!limit||limit>PP_WORKER_CANDIDATE_LIMIT||capture.bytes>32u*1024*1024) {
