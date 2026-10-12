@@ -95,7 +95,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
     return NULL;
   bool direct=false;
 #if defined(_WIN32)
-  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot);
+  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot) || pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot);
 #endif
   if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {
     pp_scene_delete(p->scene, s->id);

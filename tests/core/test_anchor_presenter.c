@@ -8,6 +8,7 @@
 #include <math.h>
 struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;};
 struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
+struct PPSharedTexture {const PPFrame *frame;};
 static PPSurface *surfaces;
 static int source_width;
 static unsigned cpu_transforms;
@@ -44,6 +45,18 @@ bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) 
     for(PPSurface *s=surfaces;s;s=s->next) if(s->window_id==id) (*out)->surface=s;
     CHECK((*out)->surface);return true;
 }
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));return *out!=NULL;}
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {(void)owner;return pp_renderer_create_for_window(out,id,error);}
+bool pp_shared_texture_create(PPRenderer *owner,const PPFrame *frame,PPSharedTexture **out,PPError *error) {
+    if(fail_gl_upload){if(error)*error=(PPError){PP_ERROR_MEMORY,"Injected shared allocation rejection"};return false;}
+    *out=malloc(sizeof(**out));CHECK(*out);(*out)->frame=frame;owner->metrics.source_uploads++;return true;
+}
+bool pp_renderer_bind_shared(PPRenderer *r,PPSharedTexture *texture,uint64_t id,uint64_t revision,PPError *error) {
+    if(fail_gl_context){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected shared context failure"};return false;}
+    r->content_id=id;r->revision=revision;r->surface->source_width=texture->frame->width;
+    r->surface->red=texture->frame->pixels[0];r->surface->blue=texture->frame->pixels[2];return true;
+}
+void pp_shared_texture_destroy(PPSharedTexture *texture){free(texture);}
 bool pp_renderer_upload_source(PPRenderer *r,const PPFrame *frame,uint64_t id,uint64_t revision,PPError *error) {
     if(fail_gl_upload) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Injected GPU candidate allocation failure"};return false;}
     if(fail_gl_context) {if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct context failure"};return false;}
@@ -70,6 +83,39 @@ bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,do
 }
 void pp_frame_destroy(PPFrame *f) {free(f->pixels);free(f->content_alpha);*f=(PPFrame){0};}
 static PPSurface *instance_surface(void) {for(PPSurface *s=surfaces;s;s=s->next) if(s->id==1) return s;return NULL;}
+static void test_gif_independent_clocks_and_shared_frames(void) {
+    PPAssets *assets=NULL;PPError error={0};CHECK(pp_assets_create(&assets,&error));
+    FILE *file=fopen(PP_MEDIA_FIXTURES "/finite.gif","rb");CHECK(file);
+    CHECK(!fseek(file,0,SEEK_END));long n=ftell(file);rewind(file);uint8_t *bytes=malloc((size_t)n);CHECK(bytes);
+    CHECK(fread(bytes,1,(size_t)n,file)==(size_t)n);fclose(file);
+    PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)n},PP_ASSET_GIF,&item.image_asset,&error));free(bytes);
+    PPProject *project=NULL;CHECK(pp_project_create(assets,&project,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    PPAnchorPresenter *p=NULL;CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(d));*p->displays=d;p->display_count=1;
+    uint64_t ids[3];for(int i=0;i<3;i++) {
+        PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200+i*100,200},96,0,1},i?1.06:1,&error);CHECK(s);ids[i]=s->id;
+    }
+    uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(pp_sprites_update(p,1.08,&error));
+    PPRendererMetrics first=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(first.source_uploads-before.source_uploads==2 && first.transform_draws-before.transform_draws==3 && first.readbacks==before.readbacks);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==24);
+    CHECK(pp_sprites_find(p,ids[0])->surface->red==0 && pp_sprites_find(p,ids[1])->surface->red==255);
+    PPSprite *s=pp_sprites_find(p,ids[1]);s->pose.center.x+=20;s->dirty=true;
+    CHECK(pp_scene_set_pose(p->scene,s->id,s->pose,&error));CHECK(pp_sprites_update(p,1.081,&error));
+    PPRendererMetrics moved=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(moved.source_uploads==first.source_uploads && moved.transform_draws==first.transform_draws);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds);
+    CHECK(pp_sprites_update(p,1.28,&error));
+    PPRendererMetrics stopped=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(pp_sprites_update(p,3,&error));
+    CHECK(pp_anchor_presenter_renderer_metrics(p).transform_draws==stopped.transform_draws);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==12);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
+}
 static void event(PPAnchorPresenter *p,PPSurface *s,PPPlatformEventKind kind,double x,double y,double time) {
     PPError error={0};PPPlatformEvent e={s,s->id,kind,{x,y},PP_BUTTON_LEFT,0,0,time};CHECK(pp_anchor_presenter_event(p,&e,&error));
 }
@@ -367,6 +413,7 @@ static void test_png_candidate_preserves_compatibility_clock(void) {
     puts("PASS rejected PNG candidate preserves independent compatibility surface, immutable source and animation start");
 }
 int main(void) {
+    test_gif_independent_clocks_and_shared_frames();
 #if defined(_WIN32)
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();

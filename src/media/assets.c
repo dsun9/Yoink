@@ -83,7 +83,10 @@ bool pp_assets_reserve_raster(PPAssets *a, size_t bytes, PPError *error) {
 void pp_assets_release_raster(PPAssets *a, size_t bytes) {
     if (a && bytes <= a->external_bytes) a->external_bytes -= bytes;
 }
-bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *next,PPError *e) {
+bool pp_asset_select_frame(PPAsset *a,double t,int w,int h,PPFrameSelection *selection,PPError *e) {
+    if(selection) *selection=(PPFrameSelection){0};
+    const PPFrame **out=selection?&selection->frame:NULL;
+    double *next=selection?&selection->next_change:NULL;
     if(out) *out=NULL;
     if(!a || !out || !next || !isfinite(t) || t<0) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid frame request or instance clock");
     if(a->kind==PP_ASSET_FONT) return pp_media_error(e,PP_ERROR_ARGUMENT,"Font bytes do not have an image frame");
@@ -98,5 +101,12 @@ bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *
             *next=t+(boundary-local);
         }
     }
-    *out=&a->frames[index]; return true;
+    *out=&a->frames[index]; selection->index=index;selection->revision=index+1;return true;
+}
+bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *next,PPError *e) {
+    if(out) *out=NULL;
+    if(!out || !next) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid frame output");
+    PPFrameSelection selection;
+    if(!pp_asset_select_frame(a,t,w,h,&selection,e)) return false;
+    *out=selection.frame;*next=selection.next_change;return true;
 }
