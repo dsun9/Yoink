@@ -1,5 +1,6 @@
 #include "raster_worker.h"
 #include <SDL3/SDL.h>
+#include <SDL3_ttf/SDL_ttf.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -16,6 +17,7 @@ struct PPRasterWorker {
   RasterJob *jobs;
   PPRasterStatus status;
   bool stop;
+  Uint32 wake_type;
 };
 static bool failure(PPError *error, int code, const char *message) {
   if(error) {error->code=code;snprintf(error->message,sizeof(error->message),"%s",message);}return false;
@@ -42,6 +44,7 @@ static void free_job(PPRasterWorker *w,RasterJob *j) {
 }
 static int SDLCALL run(void *data) {
   PPRasterWorker *w=data;
+  bool fonts_initialized=TTF_Init();
   SDL_LockMutex(w->mutex);
   for(;;) {
     RasterJob *job=NULL;
@@ -50,22 +53,27 @@ static int SDLCALL run(void *data) {
     job->running=true;size_t limit=job->completion.reserved_bytes;
     SDL_UnlockMutex(w->mutex);
     PPSourceMetrics delta={0};
-    job->completion.success=job->capture.generate(job->capture.data,limit,&job->completion.result,&delta,&job->completion.error);
+    Uint64 start=SDL_GetPerformanceCounter();
+    if(fonts_initialized)job->completion.success=job->capture.generate(job->capture.data,limit,&job->completion.result,&delta,&job->completion.error);
+    else failure(&job->completion.error,PP_ERROR_RENDER,"Could not initialize worker font library");
+    double ms=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
     SDL_LockMutex(w->mutex);
     job->done=true;w->status.pending_jobs--;w->status.completions++;w->status.source_builds+=delta.raster_builds;
+    w->status.source_ms+=ms;if(ms>w->status.source_max_ms)w->status.source_max_ms=ms;
     if(job->cancelled) {
       if(job->completion.success) w->status.stale_results++;
       RasterJob **link=&w->jobs;while(*link!=job)link=&(*link)->next;*link=job->next;free_job(w,job);
     }
     /* Wake the event loop without any model or presenter pointer payload. */
-    SDL_Event event={0};event.type=SDL_EVENT_USER;SDL_PushEvent(&event);
+    SDL_Event event={0};event.type=w->wake_type;if(w->wake_type!=(Uint32)-1)SDL_PushEvent(&event);
   }
-  SDL_UnlockMutex(w->mutex);return 0;
+  SDL_UnlockMutex(w->mutex);if(fonts_initialized)TTF_Quit();return 0;
 }
 bool pp_raster_worker_create(PPRasterWorker **out,PPError *error) {
   *out=NULL;PPRasterWorker *w=calloc(1,sizeof(*w));
   if(!w)return failure(error,PP_ERROR_MEMORY,"Cannot allocate raster worker");
   w->mutex=SDL_CreateMutex();w->wake=SDL_CreateCondition();
+  w->wake_type=SDL_RegisterEvents(1);
   if(w->mutex&&w->wake)w->thread=SDL_CreateThread(run,"pointy-raster",w);
   if(!w->thread) {SDL_DestroyCondition(w->wake);SDL_DestroyMutex(w->mutex);free(w);return failure(error,PP_ERROR_MEMORY,"Cannot start raster worker");}
   *out=w;return true;

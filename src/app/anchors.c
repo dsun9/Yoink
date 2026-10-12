@@ -189,6 +189,8 @@ static bool sync_displays(PPAnchorPresenter *p, const PPDisplay *d,
     const PPDisplay *active = display_by_id(d, count, instance->display_id);
     const PPDisplay *previous =
         display_by_id(p->displays, p->display_count, instance->display_id);
+    if(!active||!previous||active->drawable_pixels_per_dip!=previous->drawable_pixels_per_dip)
+      pp_scalable_cancel(p,instance);
     if (!active || !previous || !pp_displays_equal(active, 1, previous, 1))
       instance->dirty = true;
     if (active && instance->dragging) {
@@ -503,6 +505,7 @@ PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *p) {
   metrics.worker_requests=worker.requests;metrics.worker_completions=worker.completions;
   metrics.worker_stale_results+=worker.stale_results;metrics.worker_source_builds=worker.source_builds;
   metrics.worker_pending_jobs=worker.pending_jobs;metrics.worker_reserved_bytes=worker.reserved_bytes;
+  metrics.worker_source_ms=worker.source_ms;metrics.worker_source_max_ms=worker.source_max_ms;
   for(size_t i=0;i<p->instance_count;i++)metrics.scalable_retained_bytes+=p->instances[i].scalable_bytes;
   return metrics;
 }

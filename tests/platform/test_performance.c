@@ -434,6 +434,7 @@ static bool sharp_native_samples(PPApp *app,PPRenderer *renderer,Acceptance *acc
 done:
   if(alt) send_alt(false);
   pp_sprites_clear(&p); pp_scene_delete(p.scene,id);
+  pp_raster_worker_destroy(p.worker);pp_gif_clear(&p);
   printf("SHARP native_observations=%u max_ms=%.3f error=\"%s\" compositor_visible=unobserved\n",acceptance->sharp_observations,acceptance->max_sharp_ms,error.message);
   fflush(stdout); return ok;
 }
@@ -445,7 +446,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
   pp_probe_completion_enabled=true;
   if(!pp_renderer_create(&renderer,&error)) goto done;
   if(diagnostic) printf("SCOPE diagnostic=%s-retained-only required_cases=16 overall_96_case_acceptance=not-evaluated\n",diagnostic_kind==2?"png":"gif");
-  printf("PROTOCOL build=%s backend=source-dependent-png-gif-bitmap-retained-others-layered warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,diagnostic?"source-only-diagnostic":"default-emoji-1536-dip-150-percent");
+  printf("PROTOCOL build=%s backend=source-dependent-text-png-gif-retained-svg-layered warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,diagnostic?"source-only-diagnostic":"default-emoji-1536-dip-150-percent");
   printf("GPU renderer=\"%s\" vendor=\"%s\" version=\"%s\" renderer_cold_first_use_ms=%.3f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),pp_probe_clock()-renderer_start);
   static const char *names[]={"default-emoji","bitmap-noto","png","gif","svg","mixed-text"};
   const double sizes[]={96,384,768,1536},densities[]={1,1.5},angles[]={0,17.25};
@@ -465,20 +466,38 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       double values[7][ACCEPTANCE_SAMPLES]={{0}}; unsigned observed=0,observed_gpu=0;
       unsigned input_before=pp_probe_injected_hook_count; uint64_t builds_before=pp_assets_source_metrics(p.assets).raster_builds;
       PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(&p);
-      bool direct=kind==2 || kind==3 || kind==1;
+      bool direct=kind!=4,scalable=pp_snapshot_is_scalable_text(snapshot);
       if(!(direct?pp_surface_create_gl(&surface,&error):pp_surface_create(&surface,&error))) {printf("UNSUPPORTED native source=%s error=\"%s\"\n",names[kind],error.message);continue;}
       if(direct) {sprite.surface=surface;p.instances=&sprite;p.instance_count=1;}
+      if(scalable) {
+        if(!pp_scene_create(&p.scene,&error)||!pp_scene_spawn(p.scene,pp_app_project(app),PP_ANCHOR_TOP_LEFT,(PPVec2){-19000,-19000},0,&sprite.id,&error)) {
+          pp_scene_destroy(p.scene);pp_surface_destroy(surface);continue;
+        }
+        PPPose initial={{-19000,-19000},sizes[size],angles[angle],1};
+        if(!pp_scene_restore(p.scene,sprite.id,snapshot,initial,0,&error)) {pp_scene_destroy(p.scene);pp_surface_destroy(surface);continue;}
+        p.displays=&display;p.display_count=1;sprite.display_id=display.id;
+        sprite.resizing=true;sprite.ease_target.longest_dip=sizes[size]+.22;
+      }
       printf("CASE source=%s dip=%.0f drawable_density=%.2f rotation=%.2f backend=%s build=%s\n",names[kind],sizes[size],densities[density],angles[angle],direct?"direct-retained-gl":"layered-gl-readback",PP_PROBE_CONFIGURATION);
       for(int frame=-1;frame<ACCEPTANCE_WARMUP+ACCEPTANCE_SAMPLES;frame++) {
         if(pp_probe_clock()>deadline) {a.timed_out=true;break;}
         pump(); memset(pp_probe_metrics,0,sizeof(pp_probe_metrics)); double start=pp_probe_clock();
         PPPose pose={{-19000+frame*.25,-19000},sizes[size]+fmax(0,frame)*.01,angles[angle],1};
         sprite.pose=pose;instance.pose=pose;
+        if(scalable)pp_scene_set_pose(p.scene,sprite.id,pose,NULL);
         bool ok=direct?pp_sprite_present(&p,&sprite,&instance,&display,kind==3?fmax(0,frame)*.04:0,&next,&error):
           pp_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
         double elapsed=pp_probe_clock()-start; pump();
         if(!ok) {printf("INCOMPLETE presentation error=\"%s\"\n",error.message);break;}
         if(frame==-1) printf("COLD first_presentation_ms=%.3f source_request_ms=%.3f transform_ms=%.3f native_publication_ms=%.3f\n",elapsed,pp_probe_metrics[PROBE_SOURCE_REQUEST].ms,pp_probe_metrics[PROBE_TRANSFORM].ms,pp_probe_metrics[PROBE_SURFACE].ms);
+        if(frame==-1&&scalable) {
+          double prepare=pp_probe_clock();
+          while(pp_raster_worker_status(p.worker).pending_jobs&&pp_probe_clock()-prepare<1000) {pump();Sleep(1);}
+          pp_scalable_poll(&p);PPRasterStatus worker=pp_raster_worker_status(p.worker);
+          printf("COLD isolated_source_ms=%.3f input_to_ready_ms=%.3f successful_source_builds=%llu scratch_limit=%u candidate_limit=%u\n",
+            worker.source_ms,pp_probe_clock()-prepare,(unsigned long long)worker.source_builds,PP_WORKER_SCRATCH_LIMIT,PP_WORKER_CANDIDATE_LIMIT);
+          if(!sprite.scalable.frame.pixels||worker.pending_jobs) {printf("INCOMPLETE sharp source preparation error=\"%s\"\n",p.notice.message);break;}
+        }
         if(frame>=ACCEPTANCE_WARMUP) {
           values[0][observed]=elapsed; values[1][observed]=pp_probe_metrics[PROBE_SOURCE_REQUEST].ms;
           values[2][observed]=pp_probe_metrics[PROBE_GPU_SUBMIT].ms; values[3][observed]=pp_probe_metrics[PROBE_GPU_EXECUTION].ms;
@@ -502,12 +521,13 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       }
       PPRendererMetrics renderer_after=pp_anchor_presenter_renderer_metrics(&p);
       printf("OBSERVATIONS phases=cold-warmup-samples warm_samples=%u source_raster_builds=%llu transform_redraws=%llu source_uploads=%llu readbacks=%llu native_publications=%llu injected_hooks=%u\n",observed,
-        (unsigned long long)(pp_assets_source_metrics(p.assets).raster_builds-builds_before),
+        (unsigned long long)(pp_assets_source_metrics(p.assets).raster_builds-builds_before+pp_raster_worker_status(p.worker).source_builds),
         (unsigned long long)(renderer_after.transform_draws-renderer_before.transform_draws),
         (unsigned long long)(renderer_after.source_uploads-renderer_before.source_uploads),
         (unsigned long long)(renderer_after.readbacks-renderer_before.readbacks),
         (unsigned long long)p.metrics.native_publications,pp_probe_injected_hook_count-input_before);
       if(direct) pp_sprite_release_presentation(&p,&sprite);
+      pp_raster_worker_destroy(p.worker);pp_scene_destroy(p.scene);
       pp_gif_clear(&p);
       pp_surface_destroy(surface); pp_assets_release_raster(p.assets,retained); fflush(stdout);
     }
@@ -530,8 +550,29 @@ done:
   }
   return acceptance_result(&a);
 }
+static int worker_probe_isolation(void) {
+  PPError error={0};PPAssets *assets=NULL;PPItemSnapshot *snapshot=NULL;
+  CHECK(pp_assets_create(&assets,&error));size_t length=0;
+  void *bytes=SDL_LoadFile(PP_PROBE_ROOT "/tests/fixtures/fonts/PointyOverhang.ttf",&length);CHECK(bytes&&length);
+  PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81\nAj",.opacity=1,
+    .text_style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}}};
+  CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));SDL_free(bytes);
+  CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
+  PPAnchorPresenter presenter={.assets=assets,.generation=1};PPSprite sprite={.id=1};
+  PPSceneInstance instance={.snapshot=snapshot};PPDisplay display={.drawable_pixels_per_dip=1.5};
+  PPProbeMetric before[PROBE_COUNT];memcpy(before,pp_probe_metrics,sizeof(before));
+  CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,768,&error));
+  for(int i=0;i<5000&&pp_raster_worker_status(presenter.worker).pending_jobs;i++)SDL_Delay(1);
+  PPRasterStatus status=pp_raster_worker_status(presenter.worker);
+  CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
+  CHECK(!memcmp(before,pp_probe_metrics,sizeof(before)));
+  pp_raster_worker_cancel(presenter.worker,1,0);pp_raster_worker_destroy(presenter.worker);
+  pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  printf("PASS worker timing wrappers keep owner TLS observations unchanged, aggregate builds=%llu generation_ms=%.3f\n",(unsigned long long)status.source_builds,status.source_ms);return 0;
+}
 int main(int argc,char **argv) {
   if(argc==3 && !strcmp(argv[1],"--acceptance-control")) return acceptance_control(argv[2]);
+  if(argc==2 && !strcmp(argv[1],"--worker-isolation")) return worker_probe_isolation();
   static char log_buffer[65536]; setvbuf(stdout,log_buffer,_IOFBF,sizeof(log_buffer));
   PPApp *app=NULL; PPError error={0}; double start=pp_probe_clock(); int result=0;
   CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error)); report("app_create",pp_probe_clock()-start);

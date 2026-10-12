@@ -94,7 +94,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
                       error))
     return NULL;
   bool direct=false;
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
   direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot)||pp_item_snapshot_text_result(pp_scene_get(p->scene,s->id)->snapshot)!=NULL;
 #endif
   if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {
@@ -267,7 +267,7 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     s->sharp_pending = true;
     const PPDisplay *d=display_by_id(p->displays,p->display_count,s->display_id);
     const PPSceneInstance *instance=pp_scene_get(p->scene,s->id);
-    if(d&&instance&&!pp_scalable_request(p,s,instance,d,s->ease_target.longest_dip,error)) {
+    if(d&&instance&&pp_surface_window_id(s->surface)&&!pp_scalable_request(p,s,instance,d,s->ease_target.longest_dip,error)) {
       if(error)p->notice=*error;s->resizing=false;s->sharp_pending=false;
     }
   }
@@ -319,6 +319,7 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
         pp_scalable_cancel(p,s);
         s->replaced = true;
       }
+      else if(instance->pose.longest_dip!=s->pose.longest_dip)pp_scalable_cancel(p,s);
       s->pose = instance->pose;
       s->interaction = (PPInteraction){0};
       s->rotating = s->resizing = s->dragging = false;

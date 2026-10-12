@@ -48,12 +48,14 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #define glDrawArrays probe_draw
 #define pp_renderer_create pp_raw_renderer_create
 #define pp_renderer_transform pp_raw_renderer_transform
+#define pp_renderer_transform_source pp_raw_renderer_transform_source
 #define pp_renderer_draw pp_raw_renderer_draw
 #define pp_renderer_draw_source pp_raw_renderer_draw_source
 #define pp_renderer_complete pp_raw_renderer_complete
 #include "../../src/render/frame.c"
 #undef pp_renderer_create
 #undef pp_renderer_transform
+#undef pp_renderer_transform_source
 #undef pp_renderer_draw
 #undef pp_renderer_draw_source
 #undef pp_renderer_complete
@@ -90,4 +92,8 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
   if(ok) ok=complete_measurement(renderer,error);
   else discard_query();
   pp_probe_record(PROBE_TRANSFORM, start); return ok;
+}
+bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
+  double start=pp_probe_clock();bool ok=pp_raw_renderer_transform_source(renderer,source,layout,rect,longest,angle,opacity,density,out,error);
+  if(ok)ok=complete_measurement(renderer,error);else discard_query();pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }

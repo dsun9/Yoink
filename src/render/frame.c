@@ -294,3 +294,8 @@ void pp_renderer_destroy(PPRenderer *renderer) {
     bool owns_window=renderer->owns_window;
     free(renderer); if(owns_window) SDL_QuitSubSystem(SDL_INIT_VIDEO);
 }
+bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,
+    PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
+    (void)layout;(void)rect;
+    return pp_renderer_transform(renderer,source,longest,angle,opacity,density,out,error);
+}

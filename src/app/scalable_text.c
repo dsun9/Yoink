@@ -42,7 +42,7 @@ bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance 
    * for hinted glyph bounds. The bounded generator rejects a larger union
    * before allocating its final frame, preserving the available source. */
   double width=ceil(layout.x*scale)+64,height=ceil(layout.y*scale)+64;
-  if(!isfinite(scale)||scale<=0||width>8192||height>8192||width*height>256.0*1024*1024/5) {
+  if(!isfinite(scale)||scale<=0||width>8192||height>8192||width*height>PP_WORKER_CANDIDATE_LIMIT/5.0) {
     if(error)*error=(PPError){PP_ERROR_RESOURCE_LIMIT,"Scalable target exceeds bounded worker raster limits"};return false;
   }
   const PPItem *item=pp_item_snapshot_item(instance->snapshot);
@@ -103,7 +103,8 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     const PPDisplay *d=NULL;
     if(s)for(size_t i=0;i<p->display_count;i++)if(p->displays[i].id==s->display_id)d=p->displays+i;
     bool valid=s&&instance&&d&&s->raster_requested&&s->raster_target.serial==c.key.serial&&
-      pp_item_snapshot_revision(instance->snapshot)==c.key.content_revision&&d->drawable_pixels_per_dip==c.key.density;
+      pp_item_snapshot_revision(instance->snapshot)==c.key.content_revision&&d->drawable_pixels_per_dip==c.key.density&&
+      (s->resizing?s->ease_target.longest_dip:s->pose.longest_dip)==c.key.longest_dip;
     if(!valid) {p->metrics.worker_stale_results+=c.success;pp_raster_completion_release(&c);continue;}
     s->raster_requested=false;
     if(!c.success) {
@@ -112,8 +113,13 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     PPError error={0};PPSourcePresentation source=packet(&c.result,c.key.content_revision,s->scalable_revision+2);
     if(!pp_retained_present(p,s->surface,&s->retained,source,s->pose,d,&error)) {
       p->notice=error;pp_raster_completion_release(&c);
-      if(p->failed_surface==s->surface) {pp_surface_cancel_input(s->surface);pp_sprite_hide(s);}
-      s->sharp_pending=false;continue;
+      if(p->failed_surface==s->surface) {
+        size_t index=(size_t)(s-p->instances);
+        pp_surface_cancel_input(s->surface);pp_scene_delete(p->scene,s->id);
+        pp_sprite_release_presentation(p,s);pp_surface_destroy(s->surface);pp_item_snapshot_release(s->seen_snapshot);
+        memmove(s,s+1,(p->instance_count-index-1)*sizeof(*s));p->instance_count--;p->failed_surface=NULL;
+      } else s->sharp_pending=false;
+      continue;
     }
     size_t bytes=pp_raster_completion_take(&c);
     pp_frame_destroy(&s->scalable.frame);pp_assets_release_raster(p->assets,s->scalable_bytes);

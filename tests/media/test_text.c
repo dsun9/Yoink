@@ -286,6 +286,15 @@ static void test_text_fallback_and_embedding(void) {
     pp_frame_destroy(&frame);
 }
 int main(int argc, char **argv) {
+    if(argc==2&&!strcmp(argv[1],"worker-limits")) {
+        PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPBlob font=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+        PPTextStyle style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={20,80,140,255}};
+        CHECK(pp_asset_import(assets,(PPBytes){font.data,font.size},PP_ASSET_FONT,&style.primary_asset,&error));pp_blob_destroy(&font);
+        char text[4041];size_t index=0;for(int line=0;line<40;line++) {for(int column=0;column<100;column++)text[index++]='A';text[index++]='\n';}text[index]=0;
+        PPTextResult result={0};CHECK(!pp_text_render_result_bounded(assets,text,&style,.01,1024*1024,&result,NULL,&error));
+        CHECK(error.code==PP_ERROR_RESOURCE_LIMIT&&!result.frame.pixels&&!pp_assets_source_metrics(assets).raster_builds);
+        pp_assets_destroy(assets);puts("PASS bounded text rejects excessive canonical glyph scratch before the small destination allocation");return 0;
+    }
     if(argc==2&&!strcmp(argv[1],"canonical")) {test_canonical_raster_geometry();return 0;}
     if(argc==2&&!strcmp(argv[1],"artwork")) {test_drawn_artwork_classification();return 0;}
     if(argc==2&&!strcmp(argv[1],"hybrid")) {test_hybrid_selected_bitmap();return 0;}

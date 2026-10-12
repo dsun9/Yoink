@@ -227,6 +227,18 @@ static bool raster(TTF_Text *text, const PPTextRasterFont fonts[2],
             pp_media_error(error, PP_ERROR_FORMAT, "Could not open scalable glyph face at requested resolution");
             goto done;
         }
+        if(max_bytes!=SIZE_MAX) {
+            /* Face boxes bound native color/outline glyph buffers before a
+             * load/render can allocate them. Canonical glyph caches are also
+             * limited by the text-engine operation preflight. */
+            FT_Face face=raster_fonts[i].base;
+            double em=fmax(shaping_size,requested_size)/face->units_per_EM;
+            double glyph_w=ceil((face->bbox.xMax-face->bbox.xMin)*em)+2;
+            double glyph_h=ceil((face->bbox.yMax-face->bbox.yMin)*em)+2;
+            if(!isfinite(glyph_w)||!isfinite(glyph_h)||glyph_w<=0||glyph_h<=0||glyph_w*glyph_h>32.0*1024*1024/4) {
+                pp_media_error(error,PP_ERROR_RESOURCE_LIMIT,"Bounded glyph face exceeds 32 MiB of raster scratch");goto done;
+            }
+        }
     }
     /* Native hinting can extend beyond scaled shaping bounds. Preflight the
      * actual destination glyph boxes before allocating, then translate every
@@ -297,6 +309,10 @@ done:
 bool pp_text_raster_measure(TTF_Text *text,const PPTextRasterFont fonts[2],
         double shaping_size,double requested_size,PPVec2 *extent,PPVec2 *origin,PPError *error) {
     return raster(text,fonts,shaping_size,requested_size,NULL,SIZE_MAX,NULL,extent,origin,error);
+}
+bool pp_text_raster_measure_bounded(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double requested_size,size_t max_bytes,PPVec2 *extent,PPVec2 *origin,PPError *error) {
+    return raster(text,fonts,shaping_size,requested_size,NULL,max_bytes,NULL,extent,origin,error);
 }
 bool pp_text_raster_bounded(TTF_Text *text,const PPTextRasterFont fonts[2],
         double shaping_size,double requested_size,const uint8_t color[4],size_t max_bytes,

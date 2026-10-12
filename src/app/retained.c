@@ -111,7 +111,7 @@ native_failure:
 }
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
   bool direct=pp_snapshot_is_png(instance->snapshot)||pp_snapshot_is_gif(instance->snapshot)||pp_item_snapshot_text_result(instance->snapshot)!=NULL;
 #else
   bool direct=false;
@@ -144,6 +144,7 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
       pp_surface_hide(surface);p->failed_surface=surface;
     }
     if(ok) {
+      if(!pp_snapshot_is_scalable_text(instance->snapshot)&&s->scalable_bytes)pp_scalable_release(p,s);
       pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
     }

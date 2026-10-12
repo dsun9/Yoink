@@ -6,6 +6,8 @@
  * Captures contain owned values only. The worker never touches a snapshot,
  * project, owner asset manager, reservation or GL object. */
 typedef struct PPRasterWorker PPRasterWorker;
+#define PP_WORKER_CANDIDATE_LIMIT (64u * 1024 * 1024)
+#define PP_WORKER_SCRATCH_LIMIT (384u * 1024 * 1024)
 typedef struct PPRasterKey {
   uint64_t generation, instance_id, content_revision, serial;
   double longest_dip, density;
@@ -29,10 +31,13 @@ typedef struct PPRasterCompletion {
 typedef struct PPRasterStatus {
   uint64_t requests, completions, stale_results, source_builds;
   size_t pending_jobs, reserved_bytes, capture_bytes;
+  double source_ms, source_max_ms;
 } PPRasterStatus;
 /* One executing job and at most one waiting job. Captures, including font
  * bytes, are capped at 32 MiB each, 64 MiB total. Generation scratch has one
- * active generator, capped by the candidate limit (256 MiB) and media limits. */
+ * active generator. Candidates have a 64 MiB cap. Text bounds intermediate
+ * pixel/font buffers separately at 384 MiB; additional generators must enforce
+ * this scratch policy before allocation. */
 bool pp_raster_worker_create(PPRasterWorker **out, PPError *error);
 /* Takes capture ownership even on rejection. Reserves the candidate on owner
  * assets before making it available to the worker. New same-instance work

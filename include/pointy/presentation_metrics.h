@@ -12,5 +12,6 @@ typedef struct PPPresentationMetrics {
     double last_sharp_drawable_density;
     uint64_t worker_requests,worker_completions,worker_stale_results,worker_source_builds;
     uint64_t worker_pending_jobs,worker_reserved_bytes,scalable_retained_bytes;
+    double worker_source_ms,worker_source_max_ms;
 } PPPresentationMetrics;
 #endif
