@@ -22,21 +22,37 @@ int main(void) {
   PPAssets *assets=NULL;PPRenderer *renderer=NULL;CHECK(pp_assets_create(&assets,&error));CHECK(pp_renderer_create(&renderer,&error));
   PPAssetId overhang=font(assets,PP_FONT_FIXTURES "/PointyOverhang.ttf"),hybrid=font(assets,PP_FONT_FIXTURES "/PointyHybrid.ttf");
   PPAssetId twemoji=font(assets,PP_RESOURCES "/optional-fonts/Twemoji.Mozilla-v0.7.0.ttf"),noto=font(assets,PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
-  for(int kind=0;kind<3;kind++) {
+  for(int kind=0;kind<6;kind++) {
     PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81j\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb\nA",.opacity=1,
       .text_style={.requested_family="Pointy Overhang",.primary_asset=overhang,.fallback_asset=noto,.font_size_dip=96,.color={30,120,230,210}}};
     if(kind==0) {item.text="\xf0\x9f\x91\x89\xf0\x9f\x8f\xbd\n\xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb";item.text_style.primary_asset=twemoji;item.text_style.fallback_asset=(PPAssetId){0};item.text_style.requested_family="Twemoji Mozilla";}
     if(kind==2) {item.text="AB\nA";item.text_style.primary_asset=hybrid;item.text_style.fallback_asset=(PPAssetId){0};item.text_style.font_size_dip=16;item.text_style.requested_family="Pointy Hybrid";}
+    if(kind>=3) {
+      const char *svg=kind==3?
+        "<svg width='13' height='7' viewBox='0 0 13 7'><rect x='2' y='1' width='9' height='5' fill='#ef6f21' fill-opacity='.5'/><path d='M3 5L6 2L10 5' fill='none' stroke='#286ec8' stroke-width='.3'/></svg>":
+        kind==4?"<svg width='96' height='64' viewBox='10 20 96 64'><defs><linearGradient id='g'><stop offset='0' stop-color='#ef6f21'/><stop offset='1' stop-color='#286ec8'/></linearGradient></defs><rect x='14' y='24' width='88' height='56' rx='12' fill='url(#g)'/><path d='M26 52L78 52M62 36L78 52L62 68' fill='none' stroke='white' stroke-width='6'/></svg>":
+        "<svg width='13.5' height='7.5'><rect x='2' y='1' width='9' height='5' fill='#ef6f21' fill-opacity='.5'/><path d='M3 5L6 2L10 5' fill='none' stroke='#286ec8' stroke-width='.3'/></svg>";
+      item=(PPItem){.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+      CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+    }
     PPItemSnapshot *snapshot=NULL;CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));PPVec2 layout=pp_item_snapshot_size(snapshot);
     PPAnchorPresenter presenter={.assets=assets,.generation=1};PPSprite sprite={.id=1};PPSceneInstance instance={.snapshot=snapshot};PPDisplay display={.drawable_pixels_per_dip=1.5};
     CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,384,&error));
     for(int i=0;i<5000&&pp_raster_worker_status(presenter.worker).pending_jobs;i++)SDL_Delay(1);
     PPRasterCompletion completion={0};CHECK(pp_raster_worker_poll(presenter.worker,1,&completion));CHECK(completion.success);
-    PPTextResult fresh={0};CHECK(pp_text_render_result(assets,item.text,&item.text_style,384*1.5/fmax(layout.x,layout.y),&fresh,NULL,&error));
+    PPTextResult fresh={0};
+    if(kind>=3) {
+      const PPFrame *frame=NULL;double next;CHECK(pp_item_snapshot_frame(snapshot,0,384*1.5/fmax(layout.x,layout.y),&frame,&next,&error));
+      fresh=(PPTextResult){.frame=*frame,.layout_size=layout,.raster_density=384*1.5/fmax(layout.x,layout.y)};
+      fresh.frame.pixels=malloc(frame->stride*frame->height);fresh.frame.content_alpha=malloc((size_t)frame->width*frame->height);
+      CHECK(fresh.frame.pixels&&fresh.frame.content_alpha);
+      memcpy(fresh.frame.pixels,frame->pixels,frame->stride*frame->height);memcpy(fresh.frame.content_alpha,frame->content_alpha,(size_t)frame->width*frame->height);
+    } else CHECK(pp_text_render_result(assets,item.text,&item.text_style,384*1.5/fmax(layout.x,layout.y),&fresh,NULL,&error));
     CHECK(completion.result.frame.width==fresh.frame.width&&completion.result.frame.height==fresh.frame.height);
     CHECK(!memcmp(completion.result.frame.pixels,fresh.frame.pixels,fresh.frame.stride*fresh.frame.height));
     PPRect rect={fresh.layout_origin.x-fresh.raster_origin_px.x/fresh.raster_density,fresh.layout_origin.y-fresh.raster_origin_px.y/fresh.raster_density,
       fresh.frame.width/fresh.raster_density,fresh.frame.height/fresh.raster_density};
+    if(kind>=3)rect=(PPRect){0,0,layout.x,layout.y};
     for(int angle=0;angle<2;angle++) {
       double degrees=angle?17.25:0,radians=degrees*3.14159265358979323846/180,c=cos(radians),s=sin(radians),scale=384*1.5/fmax(layout.x,layout.y),opacity=.63;
       PPFrame output={0};CHECK(pp_renderer_transform_source(renderer,&completion.result.frame,layout,rect,384,degrees,opacity,1.5,&output,&error));
@@ -86,5 +102,5 @@ int main(void) {
     pp_frame_destroy(&fresh.frame);pp_raster_completion_release(&completion);pp_raster_worker_destroy(presenter.worker);pp_item_snapshot_release(snapshot);
   }
   CHECK(!pp_assets_external_raster_bytes(assets));pp_renderer_destroy(renderer);pp_assets_destroy(assets);
-  puts("PASS settled worker color/mixed/hybrid sources match fresh zero/fractional GL output, canonical padding/overhang, premultiplied alpha and edge colors");return 0;
+  puts("PASS settled worker color/mixed/hybrid/SVG sources match fresh zero/fractional GL output, canonical padding/viewport/overhang, premultiplied alpha and edge colors");return 0;
 }

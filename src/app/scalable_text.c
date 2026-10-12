@@ -47,6 +47,7 @@ bool pp_scalable_defer_if_busy(PPAnchorPresenter *p,PPSprite *s,const PPSceneIns
 }
 bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double longest,PPError *error) {
+  if(pp_snapshot_is_svg(instance->snapshot))return pp_svg_request(p,s,instance,display,longest,error);
   if(!pp_snapshot_is_scalable_text(instance->snapshot))return true;
   PPVec2 layout=pp_item_snapshot_size(instance->snapshot);double scale=longest*display->drawable_pixels_per_dip/fmax(layout.x,layout.y);
   /* Conservative pre-reservation includes 32 destination pixels on each edge
@@ -83,10 +84,10 @@ void pp_scalable_release(PPAnchorPresenter *p,PPSprite *s) {
   pp_scalable_cancel(p,s);pp_frame_destroy(&s->scalable.frame);
   pp_assets_release_raster(p->assets,s->scalable_bytes);s->scalable_bytes=0;s->scalable=(PPTextResult){0};
 }
-static PPSourcePresentation packet(const PPTextResult *r,uint64_t identity,uint64_t revision) {
+static PPSourcePresentation packet(const PPTextResult *r,uint64_t identity,uint64_t revision,bool svg) {
   return(PPSourcePresentation){.frame=&r->frame,.content_id=identity,.source_revision=revision,
     .layout=r->layout_size,.visual_alpha=pp_source_visual_alpha(&r->frame),
-    .source_rect={r->layout_origin.x-r->raster_origin_px.x/r->raster_density,
+    .source_rect=svg?(PPRect){0,0,r->layout_size.x,r->layout_size.y}:(PPRect){r->layout_origin.x-r->raster_origin_px.x/r->raster_density,
       r->layout_origin.y-r->raster_origin_px.y/r->raster_density,
       r->frame.width/r->raster_density,r->frame.height/r->raster_density}};
 }
@@ -101,8 +102,17 @@ bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *
     *out=(PPSourcePresentation){.content_id=identity,.source_revision=s->retained.source_revision,
       .layout=s->retained.layout,.source_rect=s->retained.source_rect,.visual_alpha=s->retained.visual_alpha};
   } else {
-    const PPTextResult *source=current?&s->scalable:pp_item_snapshot_text_result(instance->snapshot);
-    *out=packet(source,identity,current?s->scalable_revision:1);
+    PPTextResult initial={.layout_size=pp_item_snapshot_size(instance->snapshot),.raster_density=1};
+    const PPFrame *borrowed=NULL;
+    bool svg=pp_snapshot_is_svg(instance->snapshot);
+    if(svg&&!current) {
+      PPAsset *asset=pp_asset_retain(p->assets,pp_item_snapshot_item(instance->snapshot)->image_asset);
+      borrowed=pp_asset_cached_svg(asset);if(borrowed)initial.frame=*borrowed;
+      pp_asset_release(asset);
+    }
+    const PPTextResult *source=current?&s->scalable:svg?&initial:pp_item_snapshot_text_result(instance->snapshot);
+    *out=packet(source,identity,current?s->scalable_revision:1,svg);
+    if(svg&&!current)out->frame=borrowed;
   }
   return true;
 }
@@ -121,7 +131,7 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     if(!c.success) {
       p->notice=c.error;s->sharp_pending=false;pp_raster_completion_release(&c);continue;
     }
-    PPError error={0};PPSourcePresentation source=packet(&c.result,c.key.content_revision,s->scalable_revision+2);
+    PPError error={0};PPSourcePresentation source=packet(&c.result,c.key.content_revision,s->scalable_revision+2,pp_snapshot_is_svg(instance->snapshot));
     if(!pp_retained_present(p,s->surface,&s->retained,source,s->pose,d,&error)) {
       p->notice=error;pp_raster_completion_release(&c);
       if(p->failed_surface==s->surface) {

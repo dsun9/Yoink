@@ -37,7 +37,21 @@ void pp_asset_release(PPAsset *asset);
 /* Source remains valid until manager destruction, including cache eviction. */
 PPBytes pp_asset_source(const PPAsset *asset);
 PPAssetKind pp_asset_kind(const PPAsset *asset);
+/* SVG returns its canonical viewport, which can be fractional. Initial cached
+ * raster dimensions are rounded independently; PNG/GIF return source pixels. */
 PPVec2 pp_asset_intrinsic_size(const PPAsset *asset);
+/* Borrows the last available SVG raster without parsing, rendering, eviction
+ * or metric changes. NULL means no decoded cache is available. Retain the asset
+ * during use; a successful pp_asset_frame at a new size invalidates the borrow. */
+const PPFrame *pp_asset_cached_svg(const PPAsset *asset);
+/* Isolated SVG rendering from immutable bytes. No asset/cache/reservation or
+ * GL state is touched. Validates the same supported SVG subset as import,
+ * parses one private document and renders only the requested resolution.
+ * out must be empty; caller owns RGBA + source alpha and any retained charge.
+ * Bounds output before allocation and charges its overlap with the temporary
+ * premultiplied ARGB surface against max_scratch_bytes. */
+bool pp_svg_render_bounded(PPBytes source,int width,int height,
+    size_t max_raster_bytes,size_t max_scratch_bytes,PPFrame *out,PPError *error);
 /* Separately owned CPU rasters (text, scaled/presentation copies) must reserve
  * before retention and release exactly once at destruction. Includes stride *
  * height RGBA bytes + width * height coverage bytes. Reservations share the

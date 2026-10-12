@@ -6,7 +6,7 @@
 #define PP_MEDIA_MAX_FRAMES 4096
 #define PP_MEDIA_RESOURCE_BYTES ((size_t)256*1024*1024)
 #define PP_MEDIA_TOTAL_BYTES ((size_t)512*1024*1024)
-typedef struct PPMediaInfo { int width,height; size_t count; double delays[PP_MEDIA_MAX_FRAMES]; } PPMediaInfo;
+typedef struct PPMediaInfo { int width,height; size_t count; double delays[PP_MEDIA_MAX_FRAMES]; PPVec2 svg_viewport; } PPMediaInfo;
 struct PPAsset {
     PPAssets *owner; struct PPAsset *next;
     PPAssetId id; PPAssetKind kind; uint8_t *source; size_t source_size;
