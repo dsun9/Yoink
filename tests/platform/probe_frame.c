@@ -7,6 +7,7 @@ static PFNGLBEGINQUERYPROC query_begin;
 static PFNGLENDQUERYPROC query_end;
 static PFNGLGETQUERYOBJECTUI64VPROC query_result;
 static PFNGLDELETEQUERIESPROC query_delete;
+static bool measured_draw;
 static void state_timing(const char *name,double start) {
   double ms=pp_probe_clock()-start;pp_probe_record(PROBE_DRAW_STATE,start);
   if(ms>50)printf("STATE slow_call=%s elapsed_ms=%.3f\n",name,ms);
@@ -40,6 +41,10 @@ static void APIENTRY state_viewport(GLint x,GLint y,GLsizei w,GLsizei h) {double
 static GLenum APIENTRY state_error(void) {double start=pp_probe_clock();GLenum result=glGetError();state_timing("GetError",start);return result;}
 static bool state_size(SDL_Window *window,int *w,int *h) {double start=pp_probe_clock();bool result=SDL_GetWindowSizeInPixels(window,w,h);state_timing("GetWindowSizeInPixels",start);return result;}
 static void APIENTRY probe_draw(GLenum mode, GLint first, GLsizei count) {
+  /* Borrowed UI FBO draws belong to their own UI observation. Only the
+   * wrapped native/export operations below have a completion boundary and
+   * may enter this diagnostic timer-query scope. */
+  if(!measured_draw){glDrawArrays(mode,first,count);return;}
   if(pp_probe_completion_enabled && SDL_GL_ExtensionSupported("GL_ARB_timer_query")) {
     query_gen=(PFNGLGENQUERIESPROC)SDL_GL_GetProcAddress("glGenQueries");
     query_begin=(PFNGLBEGINQUERYPROC)SDL_GL_GetProcAddress("glBeginQuery");
@@ -128,7 +133,9 @@ bool pp_renderer_complete(PPRenderer *renderer,PPError *error) {
 }
 bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout_size,double longest,double angle,double opacity,double density,PPError *error) {
   double start=pp_probe_clock();
+  measured_draw=true;
   bool ok=pp_raw_renderer_draw(renderer,layout_size,longest,angle,opacity,density,error);
+  measured_draw=false;
   if(ok) ok=complete_measurement(renderer,error);
   else discard_query();
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
@@ -138,7 +145,8 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     GLint flags=0;glGetIntegerv(GL_CONTEXT_FLAGS,&flags);
     printf("DIRECT error_policy=%s actual_context_flags=%d debug_context=%s\n",renderer->error_callback?"synchronous-KHR-debug-callback":"glGetError-fallback",flags,renderer->error_callback?"verified":"optional-unavailable");
   }
-  double start=pp_probe_clock();bool ok=pp_raw_renderer_draw_source(renderer,layout,rect,longest,angle,opacity,density,error);
+  double start=pp_probe_clock();measured_draw=true;
+  bool ok=pp_raw_renderer_draw_source(renderer,layout,rect,longest,angle,opacity,density,error);measured_draw=false;
   if(ok) ok=complete_measurement(renderer,error);else discard_query();
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }
@@ -149,12 +157,15 @@ bool pp_renderer_create(PPRenderer **out, PPError *error) {
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest,
   double angle, double opacity, double density, PPFrame *out, PPError *error) {
   double start = pp_probe_clock();
+  measured_draw=true;
   bool ok = pp_raw_renderer_transform(renderer, source, longest, angle, opacity, density, out, error);
+  measured_draw=false;
   if(ok) ok=complete_measurement(renderer,error);
   else discard_query();
   pp_probe_record(PROBE_TRANSFORM, start); return ok;
 }
 bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
-  double start=pp_probe_clock();bool ok=pp_raw_renderer_transform_source(renderer,source,layout,rect,longest,angle,opacity,density,out,error);
+  double start=pp_probe_clock();measured_draw=true;
+  bool ok=pp_raw_renderer_transform_source(renderer,source,layout,rect,longest,angle,opacity,density,out,error);measured_draw=false;
   if(ok)ok=complete_measurement(renderer,error);else discard_query();pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }

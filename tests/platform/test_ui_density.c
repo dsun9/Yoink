@@ -3,6 +3,7 @@
  * Every window remains hidden; no OS input is injected. */
 #include "../../src/ui/settings_internal.h"
 #include "../../src/ui/shaped_edit.h"
+#include "../../src/app/content_sources.h"
 #include "../test.h"
 #include <string.h>
 static void cleanup(void);
@@ -53,6 +54,23 @@ int main(void) {
   CHECK(SDL_SetWindowSize(window, 1040, 1800));
   draw();
   CHECK(pp_renderer_metrics(settings->editor.renderer).readbacks==0);
+  for(int i=0;i<1000&&pp_content_requested(settings->editor.retained.consumer);i++){SDL_Delay(1);draw();}
+  CHECK(!pp_content_requested(settings->editor.retained.consumer));
+  double source_clock=settings->editor.animation_start;
+  PPContentSources *sources=pp_app_content_sources(app,&error);
+  PPRasterStatus worker_before=pp_raster_worker_status(pp_content_sources_worker(sources));
+  PPRendererMetrics render_before=pp_renderer_metrics(settings->editor.renderer);
+  SDL_Delay(20);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Preview identity"},&error));draw();
+  CHECK(settings->editor.animation_start==source_clock);
+  CHECK(pp_raster_worker_status(pp_content_sources_worker(sources)).source_builds==worker_before.source_builds);
+  PPRendererMetrics render_after=pp_renderer_metrics(settings->editor.renderer);
+  CHECK(render_after.source_uploads==render_before.source_uploads&&render_after.transform_draws==render_before.transform_draws);
+  PPItem appearance=*pp_project_item(pp_app_project(app),settings->editor.id);appearance.opacity=.63;
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,.item_id=appearance.id,.item=&appearance},&error));draw();
+  CHECK(settings->editor.animation_start==source_clock);
+  CHECK(pp_raster_worker_status(pp_content_sources_worker(sources)).source_builds==worker_before.source_builds);
+  CHECK(pp_renderer_metrics(settings->editor.renderer).source_uploads==render_before.source_uploads);
   pp_ui_focus(ui, "item-text");
   key(PP_KEY_END, 0);
   pp_settings_event(
@@ -61,6 +79,7 @@ int main(void) {
                                    .codepoint = 'X'});
   draw();
   CHECK(pp_ui_shaped_state(ui)->undo_count == 1);
+  CHECK(settings->editor.animation_start>source_clock&&pp_ui_focused(ui,"item-text"));
   size_t edit_caret = pp_ui_shaped_state(ui)->caret;
   pp_ui_focus(ui, "item-size");
   draw();
@@ -153,9 +172,10 @@ int main(void) {
     CHECK(ui->font_texture == stable_texture); /* No needless rebuild. */
   }
   pp_settings_close(settings);
+  CHECK(!settings->editor.retained.consumer&&!settings->editor.preview_texture);
   CHECK(pp_app_ui(app)->geometry.w == 1040 &&
         pp_app_ui(app)->geometry.h == 1800);
-  puts("PASS hidden Settings density 1->2->1: real font/preview rasters "
+  puts("PASS Settings artwork clock changes only on content commit, rename/opacity reuse sources, closure releases its consumer; hidden density 1->2->1: real font/preview rasters "
        "refresh, old texture released; drafts, selection, focus, window and "
        "geometry preserved");
   /* Join private source work before CRT exit callbacks acquire the onexit
