@@ -499,11 +499,30 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
 }
+static void test_bitmap_candidate_context_preserves_usable_source(void) {
+    PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    PPSprite *created=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{400,300},96,0,1},1,&error);CHECK(created);uint64_t id=created->id;
+    update(p,displays,400,300,1);PPSurface *usable=surface_for(id);CHECK(usable&&usable->shown&&!usable->window_id);
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot);
+    FILE *file=fopen(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf","rb");CHECK(file);CHECK(!fseek(file,0,SEEK_END));long length=ftell(file);rewind(file);
+    uint8_t *bytes=malloc((size_t)length);CHECK(bytes&&fread(bytes,1,(size_t)length,file)==(size_t)length);fclose(file);
+    PPItem bitmap={.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,.text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)length},PP_ASSET_FONT,&bitmap.text_style.fallback_asset,&error));free(bytes);
+    CHECK(pp_scene_replace(p->scene,id,&bitmap,2,&error));fail_gl_context=true;update(p,displays,400,300,2);fail_gl_context=false;
+    CHECK(pp_scene_get(p->scene,id)&&surface_for(id)==usable&&usable->shown);
+    CHECK(pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot)==revision&&pp_scene_get(p->scene,id)->animation_start==1);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
+    CHECK(pp_scene_replace(p->scene,id,&bitmap,3,&error));update(p,displays,400,300,3);CHECK(surface_for(id)->window_id&&surface_for(id)->source_width==136);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
+}
 int main(void) {
     test_canonical_source_mapping();
     test_gif_independent_clocks_and_shared_frames();
 #if defined(_WIN32)
     test_bitmap_text_transform_reuses_useful_source();
+    test_bitmap_candidate_context_preserves_usable_source();
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();
     test_png_gpu_limit_and_overlap();

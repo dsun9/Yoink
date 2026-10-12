@@ -155,7 +155,8 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       double elapsed = fmax(0, now - instance->animation_start), next;
       if (!pp_sprite_present(p,s,instance,display,elapsed,&next,error)) {
         bool native = p->failed_surface == s->surface;
-        if (!native && error && error->code == PP_ERROR_RENDER && !pp_snapshot_is_png(instance->snapshot) && !s->retained.valid)
+        if (!native && error && error->code == PP_ERROR_RENDER && !pp_snapshot_is_png(instance->snapshot) &&
+            !pp_snapshot_is_gif(instance->snapshot) && !pp_item_snapshot_text_result(instance->snapshot) && !s->retained.valid)
           return false;
         if (error)
           p->notice = *error;
