@@ -38,9 +38,11 @@ The log separates these costs:
 - `native_publication` covers the native presentation API, including the layered-window bitmap copy in the current compatibility path.
 - `complete` starts before the production presenter requests its source and ends after GL completion and the native publication call return. It includes generation, upload, transformation, readback where used, and native submission. Stage times overlap and must not be added as if they were independent.
 
-The presenter's current backend is identified as `layered-gl-readback`. Direct GL adoption must update this identity and instrument its draw and completion boundaries. Compatibility and direct-path results must stay separate. A retained direct-window draw that only submits asynchronous work cannot pass through submission time alone.
+Each case identifies its backend. PNG uses `direct-retained-gl` through `pp_sprite_present`, including the sprite's retained renderer; other sources currently use `layered-gl-readback`. The aggregate presenter renderer counters include active and retired direct contexts as well as the shared compatibility renderer. GPU timer queries are allocated, resolved and deleted in the owning draw context before another sprite context becomes current. Direct and compatibility draws both explicitly complete GPU work in this diagnostic. Submission time alone cannot satisfy acceptance.
 
 Native API completion is not proof of when DWM displayed the pixels, display scanout, visible compositor cadence, fullscreen behavior, or an absence of dropped compositor frames. The matrix uses offscreen native surfaces to measure production costs without covering the desktop for the whole ladder. The sharp phase uses a visible surface to verify native input routing and endpoint publication. The report explicitly marks visible compositor evidence as unobserved. Physical mixed-display and fullscreen checks remain separate. macOS build and native runtime acceptance remain unverified until executed on a Mac.
+
+For a scoped PNG diagnostic, append `-PngRetained` to the supervised `-Performance` command. This runs 16 PNG cases, checks all 320 warm samples, GPU observations and tagged native input observations, and identifies `overall_spec_gate=not-evaluated`. It skips the default-emoji sharp phase and cannot replace the unchanged 96-case acceptance command. See [retained PNG evidence](retained-png.md) for the observation and the still failing full gate.
 
 ## Failure and portable observations
 

@@ -437,19 +437,20 @@ done:
   printf("SHARP native_observations=%u max_ms=%.3f error=\"%s\" compositor_visible=unobserved\n",acceptance->sharp_observations,acceptance->max_sharp_ms,error.message);
   fflush(stdout); return ok;
 }
-static int native_acceptance(PPApp *app) {
+static int native_acceptance(PPApp *app,bool png_only) {
   Acceptance a={.release=!strcmp(PP_PROBE_CONFIGURATION,"Release")};
   PPRenderer *renderer=NULL; PPError error={0}; HANDLE injector=NULL;
   double deadline=pp_probe_clock()+145000,renderer_start=pp_probe_clock();
   pp_probe_completion_enabled=true;
   if(!pp_renderer_create(&renderer,&error)) goto done;
-  printf("PROTOCOL build=%s backend=layered-gl-readback warmup=%u repeated_samples=%u p95=nearest-rank gate=default-emoji-1536-dip-150-percent rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES);
+  if(png_only) puts("SCOPE diagnostic=png-retained-only required_cases=16 overall_96_case_acceptance=not-evaluated");
+  printf("PROTOCOL build=%s backend=source-dependent-png-retained-others-layered warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,png_only?"png-only-diagnostic":"default-emoji-1536-dip-150-percent");
   printf("GPU renderer=\"%s\" vendor=\"%s\" version=\"%s\" renderer_cold_first_use_ms=%.3f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),pp_probe_clock()-renderer_start);
   static const char *names[]={"default-emoji","bitmap-noto","png","gif","svg","mixed-text"};
   const double sizes[]={96,384,768,1536},densities[]={1,1.5},angles[]={0,17.25};
   inject_stop=CreateEventW(NULL,TRUE,FALSE,NULL); if(!inject_stop) goto done;
   injection_limit=18000; injector=CreateThread(NULL,0,zero_moves,NULL,0,NULL); if(!injector) goto done;
-  for(int kind=0;kind<6 && !a.stopped && !a.timed_out;kind++) {
+  for(int kind=png_only?2:0;kind<(png_only?3:6) && !a.stopped && !a.timed_out;kind++) {
     PPItemSnapshot *snapshot=NULL; PPFontInfo font; double source_start=pp_probe_clock();
     if(!acceptance_source(app,kind,&snapshot,&font,&error)) {printf("UNSUPPORTED source=%s error=\"%s\"\n",names[kind],error.message);continue;}
     printf("SOURCE source=%s snapshot_cold_ms=%.3f content_revision=%llu font=\"%s\"\n",names[kind],pp_probe_clock()-source_start,(unsigned long long)pp_item_snapshot_revision(snapshot),font.family);
@@ -457,17 +458,23 @@ static int native_acceptance(PPApp *app) {
     for(int density=0;density<2 && !a.stopped && !a.timed_out;density++) for(int size=0;size<4 && !a.stopped && !a.timed_out;size++) for(int angle=0;angle<2 && !a.stopped && !a.timed_out;angle++) {
       PPSurface *surface=NULL; size_t retained=0; double next;
       PPAnchorPresenter p={.renderer=renderer,.assets=pp_app_assets(app)};
+      PPSprite sprite={.id=1};
+      PPSceneInstance instance={.snapshot=snapshot};
       PPDisplay display={1,{-20000,-20000,10000,10000},densities[density],densities[density]};
       double values[7][ACCEPTANCE_SAMPLES]={{0}}; unsigned observed=0,observed_gpu=0;
       unsigned input_before=pp_probe_injected_hook_count; uint64_t builds_before=pp_assets_source_metrics(p.assets).raster_builds;
-      PPRendererMetrics renderer_before=pp_renderer_metrics(renderer);
-      if(!pp_surface_create(&surface,&error)) {printf("UNSUPPORTED native source=%s error=\"%s\"\n",names[kind],error.message);continue;}
-      printf("CASE source=%s dip=%.0f drawable_density=%.2f rotation=%.2f backend=layered-gl-readback build=%s\n",names[kind],sizes[size],densities[density],angles[angle],PP_PROBE_CONFIGURATION);
+      PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(&p);
+      bool direct=kind==2;
+      if(!(direct?pp_surface_create_gl(&surface,&error):pp_surface_create(&surface,&error))) {printf("UNSUPPORTED native source=%s error=\"%s\"\n",names[kind],error.message);continue;}
+      if(direct) {sprite.surface=surface;p.instances=&sprite;p.instance_count=1;}
+      printf("CASE source=%s dip=%.0f drawable_density=%.2f rotation=%.2f backend=%s build=%s\n",names[kind],sizes[size],densities[density],angles[angle],direct?"direct-retained-gl":"layered-gl-readback",PP_PROBE_CONFIGURATION);
       for(int frame=-1;frame<ACCEPTANCE_WARMUP+ACCEPTANCE_SAMPLES;frame++) {
         if(pp_probe_clock()>deadline) {a.timed_out=true;break;}
         pump(); memset(pp_probe_metrics,0,sizeof(pp_probe_metrics)); double start=pp_probe_clock();
         PPPose pose={{-19000+frame*.25,-19000},sizes[size]+fmax(0,frame)*.01,angles[angle],1};
-        bool ok=pp_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
+        sprite.pose=pose;instance.pose=pose;
+        bool ok=direct?pp_sprite_present(&p,&sprite,&instance,&display,0,&next,&error):
+          pp_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
         double elapsed=pp_probe_clock()-start; pump();
         if(!ok) {printf("INCOMPLETE presentation error=\"%s\"\n",error.message);break;}
         if(frame==-1) printf("COLD first_presentation_ms=%.3f source_request_ms=%.3f transform_ms=%.3f native_publication_ms=%.3f\n",elapsed,pp_probe_metrics[PROBE_SOURCE_REQUEST].ms,pp_probe_metrics[PROBE_TRANSFORM].ms,pp_probe_metrics[PROBE_SURFACE].ms);
@@ -492,25 +499,33 @@ static int native_acceptance(PPApp *app) {
         else printf("UNAVAILABLE gpu_execution observations=%u/%u\n",observed_gpu,ACCEPTANCE_SAMPLES);
         statistics("cpu_wait_gpu_completion",values[4]);statistics("native_publication",values[5]);statistics("gpu_readback",values[6]);
       }
-      PPRendererMetrics renderer_after=pp_renderer_metrics(renderer);
+      PPRendererMetrics renderer_after=pp_anchor_presenter_renderer_metrics(&p);
       printf("OBSERVATIONS phases=cold-warmup-samples warm_samples=%u source_raster_builds=%llu transform_redraws=%llu source_uploads=%llu readbacks=%llu native_publications=%llu injected_hooks=%u\n",observed,
         (unsigned long long)(pp_assets_source_metrics(p.assets).raster_builds-builds_before),
         (unsigned long long)(renderer_after.transform_draws-renderer_before.transform_draws),
         (unsigned long long)(renderer_after.source_uploads-renderer_before.source_uploads),
         (unsigned long long)(renderer_after.readbacks-renderer_before.readbacks),
         (unsigned long long)p.metrics.native_publications,pp_probe_injected_hook_count-input_before);
+      if(direct) pp_sprite_release_presentation(&p,&sprite);
       pp_surface_destroy(surface); pp_assets_release_raster(p.assets,retained); fflush(stdout);
     }
     pp_item_snapshot_release(snapshot);
   }
   if(!stop_injector(injector)) {puts("STOP injector did not terminate");a.stopped=true;} else injector=NULL;
-  if(!a.stopped && !a.timed_out) sharp_native_samples(app,renderer,&a,deadline);
+  if(!png_only && !a.stopped && !a.timed_out) sharp_native_samples(app,renderer,&a,deadline);
   a.max_input_wait_ms=pp_probe_injected_max_wait;
 done:
   if(injector && !stop_injector(injector)) {fflush(stdout);ExitProcess(2);}
   if(inject_stop) {CloseHandle(inject_stop);inject_stop=NULL;}
   pp_renderer_destroy(renderer); pp_probe_completion_enabled=false;
   if(error.code) printf("ACCEPTANCE error=\"%s\"\n",error.message);
+  if(png_only) {
+    bool complete=!a.stopped&&!a.timed_out&&a.completed_cases==16&&a.samples==16*ACCEPTANCE_SAMPLES&&
+      a.gpu_observations==a.samples&&a.native_input_cases==16;
+    printf("RESULT png_retained_matrix=%s cases=%u/16 samples=%u/%u gpu_observations=%u native_input_cases=%u regression_worst_p95_ms=%.3f input_max_ms=%.3f overall_spec_gate=not-evaluated compositor_visible=unobserved\n",
+      complete?"PASS":"FAIL",a.completed_cases,a.samples,16*ACCEPTANCE_SAMPLES,a.gpu_observations,a.native_input_cases,a.regression_p95_ms,a.max_input_wait_ms);
+    return complete?0:1;
+  }
   return acceptance_result(&a);
 }
 int main(int argc,char **argv) {
@@ -527,7 +542,8 @@ int main(int argc,char **argv) {
   else if(argc>1 && !strcmp(argv[1],"--raster-compare")) raster_reference(app,false);
   else if(argc>1 && !strcmp(argv[1],"--font-source")) font_source();
   else if(argc>1 && !strcmp(argv[1],"--native")) result=native_profile(app)?0:1;
-  else if(argc>1 && !strcmp(argv[1],"--acceptance")) result=native_acceptance(app);
+  else if(argc>1 && !strcmp(argv[1],"--acceptance")) result=native_acceptance(app,false);
+  else if(argc>1 && !strcmp(argv[1],"--png-retained")) result=native_acceptance(app,true);
   else if(argc>1 && !strcmp(argv[1],"--blur")) blur_profile(app);
   else result=ladder(app,argc>1 && !strcmp(argv[1],"--zoom-150") ? 1.5 : 1,argc>1 && !strcmp(argv[1],"--zoom-budget"))?0:1;
   pp_app_destroy(app); puts(result?"FAIL bounded performance probe":"PASS bounded performance probe"); return result;

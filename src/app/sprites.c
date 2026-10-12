@@ -93,7 +93,11 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
   if (!pp_scene_spawn(p->scene, p->project, anchor, pose.center, now, &s->id,
                       error))
     return NULL;
-  if (!pp_surface_create(&s->surface, error)) {
+  bool direct=false;
+#if defined(_WIN32)
+  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot);
+#endif
+  if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {
     pp_scene_delete(p->scene, s->id);
     return NULL;
   }
@@ -137,28 +141,26 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
         s->display_id = display->id;
     }
     if (!display) {
-      pp_surface_hide(s->surface);
+      pp_sprite_hide(s);
       s->dirty = true;
       i++;
       continue;
     }
     double scale = display->desktop_units_per_dip;
-    if (s->dirty || s->scale != scale || now >= s->next_frame) {
+    if (s->dirty || s->scale != scale || s->drawable_density!=display->drawable_pixels_per_dip || now >= s->next_frame) {
       if (!pp_scene_set_pose(p->scene, s->id, s->pose, error))
         return false;
       const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);
       double elapsed = fmax(0, now - instance->animation_start), next;
-      if (!pp_present_content(p, s->surface, instance->snapshot, s->pose,
-                              display, elapsed, &next, &s->raster_bytes,
-                              error)) {
+      if (!pp_sprite_present(p,s,instance,display,elapsed,&next,error)) {
         bool native = p->failed_surface == s->surface;
-        if (!native && error && error->code == PP_ERROR_RENDER)
+        if (!native && error && error->code == PP_ERROR_RENDER && !pp_snapshot_is_png(instance->snapshot) && !s->retained.valid)
           return false;
         if (error)
           p->notice = *error;
         if (s->interaction.pressed || s->dragging)
-          pp_platform_release_capture();
-        if (!native && s->raster_bytes && !s->replaced) {
+          pp_surface_cancel_input(s->surface);
+        if (!native && ((s->raster_bytes && s->seen_snapshot) || s->retained.valid)) {
           /* A reserve/size rejection leaves the old native pixels
            * intact. Restore the scene to exactly those pixels and
            * cancel this target; other sprites continue normally. */
@@ -168,14 +170,17 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
           s->interaction = (PPInteraction){0};
           s->dirty = false;
           s->next_frame = HUGE_VAL;
-          pp_scene_set_pose(p->scene, s->id, s->pose, NULL);
+          PPItemSnapshot *usable=s->retained.snapshot?s->retained.snapshot:s->seen_snapshot;
+          double start=s->retained.snapshot?s->retained.animation_start:instance->animation_start;
+          pp_scene_restore(p->scene,s->id,usable,s->pose,start,NULL);
+          pp_item_snapshot_release(s->seen_snapshot);s->seen_snapshot=pp_item_snapshot_retain(usable);
+          s->replaced=false;
           i++;
           continue;
         }
         p->failed_surface = NULL;
         pp_scene_delete(p->scene, s->id);
-        pp_surface_destroy(s->surface);
-        pp_assets_release_raster(p->assets, s->raster_bytes);
+        pp_sprite_release_presentation(p,s);pp_surface_destroy(s->surface);
         pp_item_snapshot_release(s->seen_snapshot);
         memmove(s, s + 1, (p->instance_count - i - 1) * sizeof(*s));
         p->instance_count--;
@@ -193,8 +198,10 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       }
       s->dirty = false;
       s->replaced = false;
+      if(s->seen_snapshot!=instance->snapshot) {pp_item_snapshot_release(s->seen_snapshot);s->seen_snapshot=pp_item_snapshot_retain(instance->snapshot);}
       s->drawn = s->pose;
       s->scale = scale;
+      s->drawable_density=display->drawable_pixels_per_dip;
     }
     i++;
   }
@@ -255,14 +262,13 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     p->drawer_request = s->id;
   if (event->kind == PP_EVENT_CANCEL ||
       (event->kind == PP_EVENT_BUTTON_UP && event->button == PP_BUTTON_LEFT))
-    pp_platform_release_capture();
+    pp_surface_cancel_input(s->surface);
   if (s->dirty && !pp_scene_set_pose(p->scene, s->id, s->pose, error))
     return false;
   if (result.command == PP_COMMAND_DELETE) {
     size_t index = (size_t)(s - p->instances);
-    pp_platform_release_capture();
-    pp_surface_destroy(s->surface);
-    pp_assets_release_raster(p->assets, s->raster_bytes);
+    pp_surface_cancel_input(s->surface);
+    pp_sprite_release_presentation(p,s);pp_surface_destroy(s->surface);
     pp_item_snapshot_release(s->seen_snapshot);
     pp_scene_delete(p->scene, s->id);
     memmove(s, s + 1, (p->instance_count - index - 1) * sizeof(*s));
@@ -273,8 +279,7 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
 
 void pp_sprites_clear(PPAnchorPresenter *p) {
   for (size_t i = 0; i < p->instance_count; i++) {
-    pp_surface_destroy(p->instances[i].surface);
-    pp_assets_release_raster(p->assets, p->instances[i].raster_bytes);
+    pp_sprite_release_presentation(p,p->instances+i);pp_surface_destroy(p->instances[i].surface);
     pp_item_snapshot_release(p->instances[i].seen_snapshot);
   }
   free(p->instances);
@@ -286,8 +291,7 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
     PPSprite *s = p->instances + i;
     const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);
     if (!instance) {
-      pp_surface_destroy(s->surface);
-      pp_assets_release_raster(p->assets, s->raster_bytes);
+      pp_sprite_release_presentation(p,s);pp_surface_destroy(s->surface);
       pp_item_snapshot_release(s->seen_snapshot);
       memmove(s, s + 1, (p->instance_count - i - 1) * sizeof(*s));
       p->instance_count--;
@@ -299,8 +303,6 @@ void pp_sprites_sync(PPAnchorPresenter *p) {
        * Another sprite may own a newer press; its capture must survive. */
       pp_surface_cancel_input(s->surface);
       if (instance->snapshot != s->seen_snapshot) {
-        pp_item_snapshot_release(s->seen_snapshot);
-        s->seen_snapshot = pp_item_snapshot_retain(instance->snapshot);
         s->replaced = true;
       }
       s->pose = instance->pose;

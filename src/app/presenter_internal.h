@@ -14,6 +14,26 @@ typedef struct AnchorSurface {
   size_t target_bytes, preview_bytes;
   bool shown, failed;
 } AnchorSurface;
+/* Source acquisition policy stays outside retained placement/drawing. GIF
+ * frame and scalable raster replacements provide their own source revision. */
+typedef struct PPSourcePresentation {
+  const PPFrame *frame;
+  uint64_t content_id, source_revision;
+  PPVec2 layout;
+  bool visual_alpha;
+} PPSourcePresentation;
+typedef struct PPRetainedPresentation {
+  PPRenderer *renderer;
+  PPItemSnapshot *snapshot;
+  size_t gpu_bytes;
+  int source_width, source_height;
+  uint64_t content_id, source_revision;
+  PPVec2 layout;
+  PPPose drawn;
+  PPRect bounds;
+  double density, animation_start;
+  bool visible, valid, visual_alpha;
+} PPRetainedPresentation;
 typedef struct PPSprite {
   PPSurface *surface;
   uint64_t id, display_id;
@@ -29,6 +49,8 @@ typedef struct PPSprite {
   double rotate_start, resize_start;
   bool rotating, resizing;
   bool sharp_pending;
+  PPRetainedPresentation retained;
+  double drawable_density;
 } PPSprite;
 struct PPAnchorPresenter {
   PPRenderer *renderer;
@@ -49,7 +71,20 @@ struct PPAnchorPresenter {
   PPSurface *failed_surface;
   PPError notice;
   PPPresentationMetrics metrics;
+  PPGpuResources gpu;
+  PPRendererMetrics retired_renderer_metrics;
 };
+bool pp_snapshot_is_png(const PPItemSnapshot *snapshot);
+bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
+    const PPSceneInstance *instance,const PPDisplay *display,double elapsed,
+    double *next,PPError *error);
+void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *sprite);
+void pp_sprite_hide(PPSprite *sprite);
+bool pp_source_visual_alpha(const PPFrame *source);
+bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,
+    PPRetainedPresentation *retained,PPSourcePresentation source,PPPose pose,
+    const PPDisplay *display,PPError *error);
+void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *retained);
 
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,

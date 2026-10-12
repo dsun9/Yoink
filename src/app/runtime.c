@@ -23,6 +23,12 @@ PPSchedule pp_runtime_schedule(const PPRuntime *r, double now) {
   if(r->drawer) s.ui=now+1.0/60;
   return s;
 }
+PPRendererMetrics pp_runtime_renderer_metrics(const PPRuntime *r) {
+  return r?pp_anchor_presenter_renderer_metrics(r->presenter):(PPRendererMetrics){0};
+}
+PPGpuResources pp_runtime_gpu_resources(const PPRuntime *r) {
+  return pp_anchor_presenter_gpu_resources(r?r->presenter:NULL);
+}
 PPPresentationMetrics pp_runtime_presentation_metrics(const PPRuntime *r) {
   return pp_anchor_presenter_metrics(r ? r->presenter : NULL);
 }
