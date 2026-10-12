@@ -25,6 +25,42 @@ static uint64_t coverage_sum(const PPFrame *frame) {
         sum += frame->content_alpha[i];
     return sum;
 }
+static void test_drawn_artwork_classification(void) {
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPBlob fallback=read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    PPTextStyle style={.font_size_dip=96,.color={0,0,0,255}};
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    CHECK(pp_asset_import(assets,(PPBytes){fallback.data,fallback.size},PP_ASSET_FONT,&style.fallback_asset,&error));
+    pp_blob_destroy(&primary);pp_blob_destroy(&fallback);
+    PPFrame frame={0};PPTextDiagnostics diagnostics;
+    CHECK(pp_text_render(assets,"\xf0\x9f\x91\x89",&style,1,&frame,&diagnostics,&error));
+    CHECK(diagnostics.artwork.bitmap_only&&diagnostics.artwork.bitmap_glyphs==1);
+    CHECK(!diagnostics.artwork.scalable_glyphs&&!diagnostics.artwork.unknown_glyphs);
+    CHECK(fabs(diagnostics.artwork.useful_pixels_per_dip-109.0/96)<1e-9);
+    pp_frame_destroy(&frame);pp_assets_destroy(assets);
+    puts("PASS drawn bitmap hand classification and selected useful strike");
+}
+static void test_canonical_raster_geometry(void) {
+    PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPBlob primary=read_font(PP_FONT_FIXTURES "/PointyOverhang.ttf");
+    PPBlob fallback=read_font(PP_RESOURCES "/fonts/NotoColorEmoji.ttf");
+    PPTextStyle style={.font_size_dip=96,.color={30,120,230,210}};
+    CHECK(pp_asset_import(assets,(PPBytes){primary.data,primary.size},PP_ASSET_FONT,&style.primary_asset,&error));
+    CHECK(pp_asset_import(assets,(PPBytes){fallback.data,fallback.size},PP_ASSET_FONT,&style.fallback_asset,&error));
+    pp_blob_destroy(&primary);pp_blob_destroy(&fallback);
+    PPTextResult canonical={0},sharp={0};
+    CHECK(pp_text_render_result(assets,"A\xcc\x81",&style,1,&canonical,NULL,&error));
+    CHECK(pp_text_render_result(assets,"A\xcc\x81",&style,1.5,&sharp,NULL,&error));
+    CHECK(canonical.layout_size.x==58 && canonical.layout_size.y==122 && canonical.layout_origin.y==1);
+    CHECK(sharp.layout_size.x==canonical.layout_size.x && sharp.layout_size.y==canonical.layout_size.y);
+    CHECK(sharp.layout_origin.y==canonical.layout_origin.y && sharp.raster_origin_px.y==0 && sharp.raster_density==1.5);
+    PPFrame fresh={0};CHECK(pp_text_render(assets,"A\xcc\x81",&style,1.5,&fresh,NULL,&error));
+    CHECK(fresh.width==sharp.frame.width&&fresh.height==sharp.frame.height);
+    CHECK(!memcmp(fresh.pixels,sharp.frame.pixels,fresh.stride*fresh.height));
+    pp_frame_destroy(&fresh);pp_frame_destroy(&canonical.frame);pp_frame_destroy(&sharp.frame);pp_assets_destroy(assets);
+    puts("PASS canonical text padding/baseline stays fixed across requested native resolution");
+}
 
 static void test_whitespace_validation(void) {
     PPAssets *assets = NULL;
@@ -211,6 +247,8 @@ static void test_text_fallback_and_embedding(void) {
     pp_frame_destroy(&frame);
 }
 int main(int argc, char **argv) {
+    if(argc==2&&!strcmp(argv[1],"canonical")) {test_canonical_raster_geometry();return 0;}
+    if(argc==2&&!strcmp(argv[1],"artwork")) {test_drawn_artwork_classification();return 0;}
     if (argc == 2 && !strcmp(argv[1], "whitespace")) {
         test_whitespace_validation();
         return 0;

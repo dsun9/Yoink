@@ -17,6 +17,7 @@ static PPSurface *capture_owner,*failed_gl_surface;
 static bool fail_gl_upload;
 static bool fail_gl_context;
 static size_t native_planes = 4;
+static PPRect drawn_source_rect;
 size_t pp_surface_raster_bytes(int width,int height) {return (size_t)width*height*native_planes;}
 bool pp_surface_create(PPSurface **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));CHECK(*out);(*out)->next=surfaces;surfaces=*out;return true;}
 bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect bounds,PPError *error) {(void)error;s->raster_width=frame->width;s->bounds=bounds;s->shown=true;s->source_width=source_width;s->red=frame->pixels[0];s->blue=frame->pixels[2];return true;}
@@ -68,6 +69,9 @@ bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,doubl
     (void)layout;(void)size;(void)angle;(void)opacity;(void)density;
     if(r->surface==failed_gl_surface) {if(error)*error=(PPError){PP_ERROR_RENDER,"Injected active direct draw failure"};return false;}
     r->metrics.transform_draws++;return true;
+}
+bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect rect,double size,double angle,double opacity,double density,PPError *error) {
+    drawn_source_rect=rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
 }
 bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
     cpu_transforms++;
@@ -412,8 +416,28 @@ static void test_png_candidate_preserves_compatibility_clock(void) {
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
     puts("PASS rejected PNG candidate preserves independent compatibility surface, immutable source and animation start");
 }
+static void test_canonical_source_mapping(void) {
+    PPError error={0};PPAnchorPresenter p={0};PPSurface *surface=NULL;
+    CHECK(pp_surface_create_gl(&surface,&error));PPRetainedPresentation retained={0};
+    uint8_t pixels[4]={255,0,0,255};PPFrame frame={pixels,NULL,1,1,4};
+    PPSourcePresentation source={.frame=&frame,.content_id=1,.source_revision=1,
+        .layout={50,100},.visual_alpha=true,.source_rect={-5,1,50,99}};
+    PPDisplay display={1,{0,0,1000,1000},1,1};PPPose pose={{200,300},100,0,1};
+    CHECK(pp_retained_present(&p,surface,&retained,source,pose,&display,&error));
+    CHECK(drawn_source_rect.x==-5 && drawn_source_rect.y==1 && drawn_source_rect.w==50 && drawn_source_rect.h==99);
+    CHECK(surface->bounds.x==170 && surface->bounds.y==250 && surface->bounds.w==60 && surface->bounds.h==100);
+    CHECK(retained.drawn.center.x==200 && retained.drawn.center.y==300 && retained.layout.x==50);
+    source.frame=NULL;source.source_rect=(PPRect){0,0,50,100};
+    CHECK(pp_retained_present(&p,surface,&retained,source,pose,&display,&error));
+    CHECK(drawn_source_rect.x==0 && drawn_source_rect.y==0 && drawn_source_rect.h==100);
+    CHECK(surface->bounds.x==175 && surface->bounds.w==50 && retained.drawn.longest_dip==100);
+    CHECK(pp_renderer_metrics(retained.renderer).source_uploads==1);
+    pp_retained_release(&p,&retained);pp_surface_destroy(surface);
+    puts("PASS source origin mapping preserves canonical center/aspect and includes overhang without reupload");
+}
 int main(void) {
     test_gif_independent_clocks_and_shared_frames();
+    test_canonical_source_mapping();
 #if defined(_WIN32)
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();

@@ -36,6 +36,10 @@ bool pp_renderer_upload_source(PPRenderer *renderer, const PPFrame *source,
  * raster dimensions. Window drawable dimensions must match its extent. */
 bool pp_renderer_draw(PPRenderer *renderer, PPVec2 layout_size, double longest_dip,
     double angle_deg, double opacity, double pixels_per_dip, PPError *error);
+/* Maps the source into a canonical local rectangle while keeping pose center,
+ * layout aspect and size fixed. Bounds include overhang beyond that layout. */
+bool pp_renderer_draw_source(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
+    double longest_dip, double angle_deg, double opacity, double pixels_per_dip, PPError *error);
 /* Waits for this context's submitted GPU work. This is a diagnostic completion
  * boundary, not a visible-compositor frame-rate guarantee. */
 bool pp_renderer_complete(PPRenderer *renderer, PPError *error);

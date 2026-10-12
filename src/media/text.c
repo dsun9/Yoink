@@ -113,8 +113,8 @@ static bool has_non_whitespace(const char *text) {
     return false;
 }
 
-bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
-        double scale, PPFrame *out, PPTextDiagnostics *diagnostics, PPError *error) {
+static bool render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
+        double scale,size_t max_bytes, PPFrame *out,PPTextResult *result, PPTextDiagnostics *diagnostics, PPError *error) {
     PPTextDiagnostics local = {0};
     if (!diagnostics) diagnostics = &local;
     memset(diagnostics, 0, sizeof(*diagnostics));
@@ -150,7 +150,7 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
      * at that strike's em size, then scale bitmap operations while rasterizing
      * outlines at destination size.
      * This preserves mixed advances, baselines, colors, and whole clusters. */
-    double render_size = size;
+    double render_size = result?style->font_size_dip:size;
     PPFontInfo info;
     if (fallback_asset) {
         if (!pp_font_inspect(pp_asset_source(fallback_asset), style->fallback_face, &info, error)) goto done;
@@ -195,7 +195,12 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
         {primary, pp_asset_source(primary_asset), style->primary_face},
         {fallback, pp_asset_source(fallback_asset), style->fallback_face}
     };
-    if (!pp_text_raster(text, fonts, render_size, size, style->color, out, error)) goto done;
+    if(!pp_text_artwork(text,fonts,render_size,style->font_size_dip,&diagnostics->artwork,error)) goto done;
+    if(result && !pp_text_raster_measure(text,fonts,render_size,style->font_size_dip,
+        &result->layout_size,&result->layout_origin,error)) goto done;
+    if (!pp_text_raster_bounded(text,fonts,render_size,size,style->color,max_bytes,out,
+        result?&result->raster_origin_px:NULL,error)) goto done;
+    if(result) {result->artwork=diagnostics->artwork;result->raster_density=scale;}
     size_t n = (size_t)out->width * out->height;
     for (size_t i = 0; i < n; i++) {
         if (out->content_alpha[i]) { ok = true; break; }
@@ -216,4 +221,17 @@ done:
     pp_asset_release(fallback_asset);
     if (ok) assets->metrics.raster_builds++;
     return ok;
+}
+bool pp_text_render(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,PPFrame *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    return render(assets,utf8,style,scale,SIZE_MAX,out,NULL,diagnostics,error);
+}
+bool pp_text_render_result_bounded(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,size_t max_bytes,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    if(!out) return pp_media_error(error,PP_ERROR_ARGUMENT,"Missing text result");
+    return render(assets,utf8,style,scale,max_bytes,&out->frame,out,diagnostics,error);
+}
+bool pp_text_render_result(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    return pp_text_render_result_bounded(assets,utf8,style,scale,SIZE_MAX,out,diagnostics,error);
 }

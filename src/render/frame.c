@@ -33,12 +33,12 @@ static const char *fragment_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform sampler2D alpha;"
     "uniform vec2 destination_size; uniform vec2 source_size;"
-    "uniform vec2 rotation; uniform vec2 scale; uniform float opacity;"
+    "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
     "out vec4 color; out vec4 coverage;"
     "void main() {"
     "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
-    "vec2 uv=s/source_size+0.5;"
+    "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
 static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool texture_owner, PPError *error) {
@@ -183,15 +183,18 @@ bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
 }
 bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
     double angle_deg,double opacity,double density,PPError *error) {
+    return pp_renderer_draw_source(renderer,layout,(PPRect){0,0,layout.x,layout.y},longest,angle_deg,opacity,density,error);
+}
+bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
+    double angle_deg,double opacity,double density,PPError *error) {
     if(!renderer || renderer->owns_window || !renderer->content_id || !isfinite(layout.x) || !isfinite(layout.y) ||
         layout.x<=0 || layout.y<=0 || !isfinite(longest) || longest<=0 || !isfinite(angle_deg) ||
         !isfinite(opacity) || opacity<0 || opacity>1 || !isfinite(density) || density<=0)
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct transform");
     double scale=longest*density/fmax(layout.x,layout.y);
     double angle=fmod(angle_deg,360)*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
-    double extent_w=ceil(scale*(fabs(c)*layout.x+fabs(s)*layout.y)-1e-9);
-    double extent_h=ceil(scale*(fabs(s)*layout.x+fabs(c)*layout.y)-1e-9);
-    if(!isfinite(extent_w) || !isfinite(extent_h) || extent_w<1 || extent_h<1 || extent_w>16384 || extent_h>16384)
+    int extent_w,extent_h;
+    if(!pp_geometry_source_extent(layout,rect,longest,angle_deg,density,&extent_w,&extent_h))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct transform exceeds drawable limits");
     if(!current(renderer,error)) return false;
     int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w!=(int)extent_w || h!=(int)extent_h)
@@ -204,7 +207,9 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
     gl->Uniform2f(LOCATION("destination_size"),(float)w,(float)h);
     gl->Uniform2f(LOCATION("source_size"),(float)renderer->source_width,(float)renderer->source_height);
     gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
-    gl->Uniform2f(LOCATION("scale"),(float)(scale*layout.x/renderer->source_width),(float)(scale*layout.y/renderer->source_height));
+    gl->Uniform2f(LOCATION("scale"),(float)(scale*rect.w/renderer->source_width),(float)(scale*rect.h/renderer->source_height));
+    gl->Uniform2f(LOCATION("source_offset"),(float)((rect.x+rect.w*.5-layout.x*.5)*renderer->source_width/rect.w),
+        (float)((rect.y+rect.h*.5-layout.y*.5)*renderer->source_height/rect.h));
     gl->Uniform1f(LOCATION("opacity"),(float)opacity);
 #undef LOCATION
     glDisable(GL_BLEND);glDisable(GL_DITHER);glViewport(0,0,w,h);
@@ -260,6 +265,7 @@ bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double l
     gl->Uniform2f(LOCATION("source_size"),(float)source->width,(float)source->height);
     gl->Uniform2f(LOCATION("rotation"),(float)c,(float)s);
     gl->Uniform2f(LOCATION("scale"),(float)scale,(float)scale); gl->Uniform1f(LOCATION("opacity"),(float)opacity);
+    gl->Uniform2f(LOCATION("source_offset"),0,0);
 #undef LOCATION
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
