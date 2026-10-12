@@ -1070,6 +1070,53 @@ static void test_svg_initial_source_is_cached(void) {
   }
     puts("PASS initial SVG sprite uses the available asset raster while its isolated requested-resolution endpoint prepares");
 }
+static void test_pending_svg_seed_releases_after_png_replacement(void) {
+  for(int independent=0;independent<2;independent++) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=svg_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    hold_next_worker();uint64_t id=source_sprite(p,scene,displays,1);
+    CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPSurface *surface=surface_for(id);CHECK(surface&&surface->shown&&surface->red==255);
+    /* The 13 by 7 immutable SVG seed owns 364 RGBA + 91 alpha bytes. The
+     * endpoint is still blocked, so this checks pre-endpoint ownership. */
+    CHECK(pp_anchor_presenter_metrics(p).scalable_retained_bytes==455);
+    PPItemSnapshot *old=pp_item_snapshot_retain(pp_scene_get(scene,id)->snapshot);
+    uint64_t old_revision=pp_item_snapshot_revision(old);PPPose old_pose=pp_scene_get(scene,id)->pose;
+    PPContentConsumer *observer=NULL;const PPFrame *observed=NULL;uint8_t old_pixels[364],old_alpha[91];
+    if(independent) {
+      CHECK(pp_content_consumer_create(p->sources,&observer,&error));PPContentFrame frame={0};double next;
+      CHECK(pp_content_frame(observer,old,old_pose.longest_dip,1,0,&frame,&next,&error));pp_content_accept(observer);
+      /* Keep the accepted seed without requesting an independent new endpoint. */
+      pp_content_cancel(observer);
+      observed=frame.frame;CHECK(observed&&observed->width==13&&observed->height==7);
+      memcpy(old_pixels,observed->pixels,sizeof(old_pixels));memcpy(old_alpha,observed->content_alpha,sizeof(old_alpha));
+      CHECK(pp_anchor_presenter_metrics(p).scalable_retained_bytes==455);
+    }
+    PPItem png=png_item(assets,"retained-blue.png",96);
+    CHECK(pp_scene_replace(scene,id,&png,2,&error));fail_gl_upload=true;
+    update(p,displays,400,300,2);fail_gl_upload=false;
+    CHECK(surface_for(id)==surface&&surface->shown&&surface->red==255);
+    CHECK(pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot)==old_revision);
+    CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&old_pose,sizeof(old_pose)));
+    CHECK(pp_anchor_presenter_metrics(p).scalable_retained_bytes==455);
+    CHECK(pp_scene_replace(scene,id,&png,3,&error));update(p,displays,400,300,3);
+    CHECK(surface_for(id)==surface&&surface->shown&&surface->blue==255);
+    release_worker();wait_worker_idle(p,displays,3);finish_worker_control();
+    CHECK(pp_anchor_presenter_metrics(p).worker_reserved_bytes==0);
+    CHECK(pp_anchor_presenter_metrics(p).scalable_retained_bytes==(independent?455:0));
+    if(independent) {
+      const PPTextResult *current=pp_content_current(observer,NULL,NULL);CHECK(current&&&current->frame==observed);
+      CHECK(!memcmp(old_pixels,current->frame.pixels,sizeof(old_pixels))&&!memcmp(old_alpha,current->frame.content_alpha,sizeof(old_alpha)));
+      pp_content_consumer_destroy(observer);CHECK(pp_anchor_presenter_metrics(p).scalable_retained_bytes==0);
+    }
+    pp_item_snapshot_release(old);pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);
+    CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  }
+  puts("PASS pending SVG seed survives rejected PNG and releases after accepted replacement; independent old consumer keeps exact pixels and charge");
+}
 static void test_svg_full_queue_keeps_new_cached_sprite(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -1283,6 +1330,7 @@ int main(void) {
     test_svg_cpu_adapter_keeps_canonical_aspect();
     test_svg_full_queue_keeps_new_cached_sprite();
     test_svg_initial_source_is_cached();
+    test_pending_svg_seed_releases_after_png_replacement();
     test_svg_endpoint_worker_reuses_cached_artwork();
     test_svg_shared_asset_keeps_independent_sizes();
     test_empty_svg_releases_input();

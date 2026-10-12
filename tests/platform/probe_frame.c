@@ -10,7 +10,7 @@ static PFNGLDELETEQUERIESPROC query_delete;
 static bool measured_draw;
 static void state_timing(const char *name,double start) {
   double ms=pp_probe_clock()-start;pp_probe_record(PROBE_DRAW_STATE,start);
-  if(ms>50)printf("STATE slow_call=%s elapsed_ms=%.3f\n",name,ms);
+  if(ms>50)pp_probe_printf("STATE slow_call=%s elapsed_ms=%.3f\n",name,ms);
 }
 #define STATE_FUNCTION(name,type,parameters,args) \
   static type state_raw_##name; \
@@ -105,6 +105,9 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #define SDL_GL_SwapWindow probe_swap
 #define pp_renderer_upload_source pp_raw_renderer_upload_source
 #define pp_renderer_create pp_raw_renderer_create
+#define pp_renderer_create_texture_owner pp_raw_renderer_create_texture_owner
+#define pp_renderer_create_shared_window pp_raw_renderer_create_shared_window
+#define pp_renderer_create_for_window pp_raw_renderer_create_for_window
 #define pp_renderer_transform pp_raw_renderer_transform
 #define pp_renderer_transform_source pp_raw_renderer_transform_source
 #define pp_renderer_transform_color_source pp_raw_renderer_transform_color_source
@@ -113,6 +116,9 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #define pp_renderer_complete pp_raw_renderer_complete
 #include "../../src/render/frame.c"
 #undef pp_renderer_create
+#undef pp_renderer_create_texture_owner
+#undef pp_renderer_create_shared_window
+#undef pp_renderer_create_for_window
 #undef pp_renderer_transform
 #undef pp_renderer_transform_source
 #undef pp_renderer_transform_color_source
@@ -143,18 +149,33 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout_size,double longest,dou
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }
 bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPError *error) {
-  if(!pp_probe_metrics[PROBE_TRANSFORM].count) {
-    GLint flags=0;glGetIntegerv(GL_CONTEXT_FLAGS,&flags);
-    printf("DIRECT error_policy=%s actual_context_flags=%d debug_context=%s\n",renderer->error_callback?"synchronous-KHR-debug-callback":"glGetError-fallback",flags,renderer->error_callback?"verified":"optional-unavailable");
-  }
   double start=pp_probe_clock();measured_draw=true;
   bool ok=pp_raw_renderer_draw_source(renderer,layout,rect,longest,angle,opacity,density,error);measured_draw=false;
   if(ok) ok=complete_measurement(renderer,error);else discard_query();
+  static SDL_GLContext reported_context;
+  if(ok&&reported_context!=renderer->context) {
+    GLint flags=0;int interval=0;glGetIntegerv(GL_CONTEXT_FLAGS,&flags);
+    bool interval_known=SDL_GL_GetSwapInterval(&interval);
+    pp_probe_printf("DIRECT error_policy=%s actual_context_flags=%d debug_context=%s actual_swap_interval=%d interval_query_ok=%d\n",renderer->error_callback?"synchronous-KHR-debug-callback":"glGetError-fallback",flags,renderer->error_callback?"verified":"optional-unavailable",interval,interval_known);
+    reported_context=renderer->context;
+  }
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }
 bool pp_renderer_create(PPRenderer **out, PPError *error) {
   double start = pp_probe_clock(); bool ok = pp_raw_renderer_create(out, error);
   pp_probe_record(PROBE_RENDERER_CREATE, start); return ok;
+}
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {
+  double start=pp_probe_clock();bool ok=pp_raw_renderer_create_texture_owner(out,error);
+  pp_probe_record(PROBE_RENDERER_CREATE,start);return ok;
+}
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {
+  double start=pp_probe_clock();bool ok=pp_raw_renderer_create_shared_window(out,id,owner,error);
+  pp_probe_record(PROBE_RENDERER_CREATE,start);return ok;
+}
+bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
+  double start=pp_probe_clock();bool ok=pp_raw_renderer_create_for_window(out,id,error);
+  pp_probe_record(PROBE_RENDERER_CREATE,start);return ok;
 }
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest,
   double angle, double opacity, double density, PPFrame *out, PPError *error) {
