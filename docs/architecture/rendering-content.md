@@ -54,13 +54,28 @@ each/64 MiB total, and worker scratch follows the 384 MiB bounded-output policy.
 Library bookkeeping has existing source/XML bounds rather than an exact
 process allocator cap. The 256 MiB app GPU ledger counts content source textures,
 shared GIF textures, shaped-field source images and UI output targets, including
-old/candidate overlap. Control-label atlases, driver/context allocations and
+old/candidate overlap. Native transformed color targets share this ledger;
+each renderer retains one RGBA8 target and reserves a replacement before
+allocation, while the accepted target is still charged. Control-label atlases, driver/context allocations and
 compositor backing are separate. Reservations happen before allocation;
 rejection/teardown refunds only the caller's allocations.
 
 Windows visible anchors and sprites use transparent direct GL windows with a
 color-only shader and rectangular input. Translation and unchanged static
 content reuse the source and native window without uploads or transform draws.
+Native transforms render into a complete, context-owned color texture and blit
+to the window back buffer before swapping. Window-local visible rectangles are
+tracked independently of the source identity and drawn pose. Movement that
+exposes pixels beyond the previous display intersection re-publishes that
+texture with a blit and swap, including a first draw outside the display.
+Ordinary on-screen translation does no GL work. Recovery performs no source
+upload, transform draw, default-framebuffer copy/readback, or CPU pixel copy.
+Hidden and zero-opacity presentations release the retained color target;
+reappearing presentations rebuild it from their unchanged source texture.
+Deletion or presentation failure releases the target and its charge. A context
+that cannot be made current keeps its charge until renderer destruction releases
+the namespace. Comparisons at monitor seams may conservatively refresh even
+when another monitor already displayed those local pixels.
 Owned source alpha validates visibility and finds the nearest visible grab
 point for a small activation target. A preview press retains its prepared
 snapshot through the pull. Removal/disable/zero opacity cancels its pending

@@ -705,3 +705,9 @@ int main(int argc,char **argv) {
        "removal, stale IDs, transitions and failure isolation");
   return 0;
 }
+/* These boundary mocks have no GL output storage. Native desktop tests cover
+ * retained color allocation and publication. */
+size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int w,int h){(void)r;(void)w;(void)h;return 0;}
+size_t pp_renderer_output_bytes(const PPRenderer *r){(void)r;return 0;}
+void pp_renderer_release_output(PPRenderer *r){(void)r;}
+bool pp_renderer_refresh(PPRenderer *r,PPError *error){(void)error;r->metrics.presentation_refreshes++;return true;}

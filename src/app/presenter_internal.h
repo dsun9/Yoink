@@ -9,7 +9,7 @@ typedef PPContentFrame PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
   PPItemSnapshot *snapshot;
-  size_t gpu_bytes;
+  size_t gpu_bytes,output_bytes;
   int source_width, source_height;
   uint64_t content_id, source_revision;
   PPVec2 layout;
@@ -114,7 +114,8 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
     const PPSceneInstance *instance,const PPDisplay *display,double elapsed,
     double *next,PPError *error);
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *sprite);
-void pp_sprite_hide(PPSprite *sprite);
+void pp_sprite_hide(PPAnchorPresenter *p,PPSprite *sprite);
+void pp_retained_hide(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPresentation *retained);
 bool pp_source_visual_alpha(const PPFrame *source);
 bool pp_present_source(PPAnchorPresenter *p,PPSurface *surface,PPSourcePresentation source,
     PPPose pose,const PPDisplay *display,size_t *retained,PPError *error);

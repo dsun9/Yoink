@@ -12,7 +12,7 @@ bool pp_shared_texture_create(PPRenderer *owner,const struct PPFrame *frame,PPSh
 bool pp_renderer_bind_shared(PPRenderer *renderer,PPSharedTexture *texture,uint64_t content_id,uint64_t revision,PPError *error);
 void pp_shared_texture_destroy(PPSharedTexture *texture);
 typedef struct PPRendererMetrics {
-    uint64_t source_uploads, transform_draws, readbacks;
+    uint64_t source_uploads, transform_draws, readbacks, presentation_refreshes;
 } PPRendererMetrics;
 /* Owned, top-down premultiplied RGBA8. content_alpha is tightly packed and
  * describes transformed content coverage before display opacity is applied. */
@@ -53,6 +53,14 @@ bool pp_renderer_draw(PPRenderer *renderer, PPVec2 layout_size, double longest_d
  * layout aspect and size fixed. Bounds include overhang beyond that layout. */
 bool pp_renderer_draw_source(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
     double longest_dip, double angle_deg, double opacity, double pixels_per_dip, PPError *error);
+/* Reserve candidate bytes before drawing, including overlap with output_bytes.
+ * A changed extent replaces the old target only after successful publication. */
+size_t pp_renderer_output_candidate_bytes(const PPRenderer *renderer,int width,int height);
+size_t pp_renderer_output_bytes(const PPRenderer *renderer);
+void pp_renderer_release_output(PPRenderer *renderer);
+/* Re-publish complete retained color after native exposure, without a source
+ * upload, transform draw, default-framebuffer readback or CPU pixel copy. */
+bool pp_renderer_refresh(PPRenderer *renderer,PPError *error);
 /* Waits for this context's submitted GPU work. This is a diagnostic completion
  * boundary, not a visible-compositor frame-rate guarantee. */
 bool pp_renderer_complete(PPRenderer *renderer, PPError *error);

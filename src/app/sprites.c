@@ -165,7 +165,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
         s->display_id = display->id;
     }
     if (!display) {
-      pp_sprite_hide(s);
+      pp_sprite_hide(p,s);
       s->dirty = true;
       i++;
       continue;
