@@ -36,8 +36,8 @@ typedef struct PPRetainedPresentation {
   PPRect bounds;
   double density, animation_start;
   bool visible, valid, visual_alpha;
-  PPRect source_rect;
   struct PPGifEntry *gif_entry;
+  PPRect source_rect;
 } PPRetainedPresentation;
 typedef struct PPSprite {
   PPSurface *surface;
