@@ -608,7 +608,35 @@ static void test_app_source_owner_survives_runtime_and_project_epochs(void) {
   pp_content_accept(preview);pp_content_consumer_destroy(preview);pp_item_snapshot_release(snapshot);pp_app_destroy(app);CHECK(!surfaces);
   puts("PASS standalone preview source owner survives runtime closure and project replacement until app shutdown");
 }
+static void test_rejected_source_is_repreparable_by_new_consumer(void) {
+  PPAssets *assets=NULL;PPContentSources *sources=NULL;PPItemSnapshot *snapshot=NULL;PPError error={0};
+  CHECK(pp_assets_create(&assets,&error));CHECK(pp_content_sources_create(&sources,assets,&error));
+  const char *svg="<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>";
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+  CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+  CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
+  PPContentConsumer *a=NULL,*b=NULL;CHECK(pp_content_consumer_create(sources,&a,&error));
+  CHECK(pp_content_request(a,snapshot,96,1.5,&error));PPRasterWorker *worker=pp_content_sources_worker(sources);
+  for(int i=0;i<2000&&pp_raster_worker_status(worker).pending_jobs;i++)SDL_Delay(1);
+  pp_content_sources_poll(sources);const PPTextResult *candidate=pp_content_candidate(a,NULL);
+  CHECK(candidate&&candidate->frame.width==144&&candidate->frame.height==80);
+  CHECK(pp_content_gpu_reserve(sources,PP_RETAINED_GPU_LIMIT,&error));pp_content_reject(a);
+  CHECK(!pp_content_candidate(a,NULL));
+  for(int i=0;i<3;i++)CHECK(pp_content_request(a,snapshot,96,1.5,&error));
+  CHECK(pp_raster_worker_status(worker).requests==1&&!pp_content_candidate(a,NULL));
+  pp_content_gpu_release(sources,PP_RETAINED_GPU_LIMIT);
+  CHECK(pp_content_consumer_create(sources,&b,&error));CHECK(pp_content_request(b,snapshot,96,1.5,&error));
+  for(int i=0;i<2000&&pp_raster_worker_status(worker).pending_jobs;i++)SDL_Delay(1);
+  pp_content_sources_poll(sources);candidate=pp_content_candidate(b,NULL);
+  CHECK(candidate&&candidate->frame.width==144&&candidate->frame.height==80);
+  CHECK(pp_raster_worker_status(worker).requests==2&&pp_raster_worker_status(worker).source_builds==2);
+  CHECK(!pp_content_candidate(a,NULL));
+  pp_content_accept(b);pp_content_consumer_destroy(a);pp_content_consumer_destroy(b);
+  pp_content_sources_destroy(sources);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  puts("PASS a new consumer prepares an equal rejected-empty endpoint while the prior owner suppresses repeated attempts");
+}
 int main(int argc,char **argv) {
+  test_rejected_source_is_repreparable_by_new_consumer();
   test_app_source_owner_survives_runtime_and_project_epochs();
 #if defined(_WIN32)
   if(argc==2&&!strcmp(argv[1],"--svg")){test_svg_runtime_generation_cleanup();return 0;}

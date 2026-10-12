@@ -180,6 +180,12 @@ bool pp_content_request(PPContentConsumer *c,PPItemSnapshot *snapshot,double lon
   }
   pp_content_cancel(c);
   for(e=s->entries;e;e=e->next)if(e->key.longest_dip>0&&same_target(e,snapshot,longest,density))break;
+  /* Rejection belongs to the former consumer. An empty completed entry keeps
+   * that owner's attempt suppression, but a new owner may prepare it again. */
+  if(e&&e->done&&!e->result.frame.pixels&&!e->error.code) {
+    if(e->key.serial==UINT64_MAX)return fail(error,PP_ERROR_RESOURCE_LIMIT,"Content request serials exhausted");
+    e->key.serial++;e->done=false;
+  }
   if(!e) {
     if(s->next_owner==UINT64_MAX)return fail(error,PP_ERROR_RESOURCE_LIMIT,"Content ownership IDs exhausted");
     e=calloc(1,sizeof(*e));if(!e)return fail(error,PP_ERROR_MEMORY,"Cannot allocate shared content entry");
