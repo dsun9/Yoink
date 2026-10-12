@@ -7,6 +7,8 @@ typedef struct PPTextRasterFont {
     PPBytes bytes;
     int face_index;
 } PPTextRasterFont;
+bool pp_text_artwork(TTF_Text *text,const PPTextRasterFont fonts[2],
+    double shaping_size,double canonical_font_size,PPTextArtwork *out,PPError *error);
 /* Layout (0,0) in the physical raster, including destination hint overhang. */
 bool pp_text_raster_origin(TTF_Text *text, const PPTextRasterFont fonts[2],
     double shaping_size, double requested_size, const uint8_t color[4],

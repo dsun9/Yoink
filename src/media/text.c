@@ -195,6 +195,7 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
         {primary, pp_asset_source(primary_asset), style->primary_face},
         {fallback, pp_asset_source(fallback_asset), style->fallback_face}
     };
+    if(!pp_text_artwork(text,fonts,render_size,style->font_size_dip,&diagnostics->artwork,error)) goto done;
     if (!pp_text_raster(text, fonts, render_size, size, style->color, out, error)) goto done;
     size_t n = (size_t)out->width * out->height;
     for (size_t i = 0; i < n; i++) {

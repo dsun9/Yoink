@@ -13,6 +13,52 @@ typedef struct RasterFont {
     FT_Face base, native;
 } RasterFont;
 
+bool pp_text_artwork(TTF_Text *text,const PPTextRasterFont fonts[2],
+        double shaping_size,double canonical_font_size,PPTextArtwork *out,PPError *error) {
+    FT_Library library=NULL;
+    FT_Face faces[2]={0};
+    *out=(PPTextArtwork){0};
+    if(FT_Init_FreeType(&library))
+        return pp_media_error(error,PP_ERROR_MEMORY,"Could not initialize artwork inspection");
+    bool ok=false;
+    for(int i=0;i<2;i++) {
+        if(!fonts[i].shaped_font) continue;
+        if(FT_New_Memory_Face(library,fonts[i].bytes.data,(FT_Long)fonts[i].bytes.size,fonts[i].face_index,&faces[i]))
+            goto failed_face;
+        /* Match pinned SDL_ttf's size/strike choice. Loading with COLOR before
+         * rasterization preserves embedded colored bitmap preference in a
+         * hybrid face; a monochrome outline is not a replacement source. */
+        if(FT_IS_SCALABLE(faces[i])) {
+            if(FT_Set_Char_Size(faces[i],0,(FT_F26Dot6)lround(shaping_size*64),72,72)) goto failed_face;
+        } else if(faces[i]->num_fixed_sizes<=0 ||
+            FT_Select_Size(faces[i],SDL_min((int)shaping_size,faces[i]->num_fixed_sizes-1))) goto failed_face;
+    }
+    for(int i=0;i<text->internal->num_ops;i++) {
+        const TTF_DrawOperation *op=&text->internal->ops[i];
+        if(op->cmd==TTF_DRAW_COMMAND_NOOP) continue;
+        if(op->cmd!=TTF_DRAW_COMMAND_COPY) {out->unknown_glyphs++;continue;}
+        if(op->copy.src.w<=0 || op->copy.src.h<=0 || op->copy.dst.w<=0 || op->copy.dst.h<=0) continue;
+        int index=op->copy.glyph_font==fonts[0].shaped_font?0:op->copy.glyph_font==fonts[1].shaped_font?1:-1;
+        FT_Face face=index>=0?faces[index]:NULL;
+        if(!face || FT_Load_Glyph(face,op->copy.glyph_index,FT_LOAD_DEFAULT|FT_LOAD_COLOR)) {
+            out->unknown_glyphs++;continue;
+        }
+        FT_LayerIterator layers={0};FT_UInt layer,palette;
+        bool color_layers=FT_Get_Color_Glyph_Layer(face,op->copy.glyph_index,&layer,&palette,&layers)!=0;
+        if(face->glyph->format==FT_GLYPH_FORMAT_BITMAP) out->bitmap_glyphs++;
+        else if(face->glyph->format==FT_GLYPH_FORMAT_OUTLINE || color_layers) out->scalable_glyphs++;
+        else out->unknown_glyphs++;
+    }
+    out->bitmap_only=out->bitmap_glyphs>0&&!out->scalable_glyphs&&!out->unknown_glyphs;
+    if(out->bitmap_only) out->useful_pixels_per_dip=shaping_size/canonical_font_size;
+    ok=true;goto done;
+failed_face:
+    pp_media_error(error,PP_ERROR_FORMAT,"Could not inspect selected glyph artwork");
+done:
+    for(int i=0;i<2;i++) if(faces[i]) FT_Done_Face(faces[i]);
+    FT_Done_FreeType(library);return ok;
+}
+
 static int floor26(FT_Pos value) { return (int)floor(value / 64.0); }
 static int left_bearing(FT_GlyphSlot slot) {
     return slot->format == FT_GLYPH_FORMAT_BITMAP ? slot->bitmap_left : floor26(slot->metrics.horiBearingX);

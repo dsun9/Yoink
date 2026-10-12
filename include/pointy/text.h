@@ -26,10 +26,28 @@ typedef struct PPTextStyle {
     uint8_t color[4];
     bool default_emoji_fallback; /* This item selected bundled Noto when Segoe was unavailable. */
 } PPTextStyle;
+/* Artwork selected by the actual shaped draw operations, independent of font
+ * embedding restrictions, fallback configuration, or glyph-image color type. */
+typedef struct PPTextArtwork {
+    size_t bitmap_glyphs, scalable_glyphs, unknown_glyphs;
+    bool bitmap_only;
+    double useful_pixels_per_dip;
+} PPTextArtwork;
 typedef struct PPTextDiagnostics {
     size_t fallback_runs, missing_glyphs, missing_requested_families;
     bool default_emoji_fallback; /* Selected Noto default, independent of requested text family. */
+    PPTextArtwork artwork;
 } PPTextDiagnostics;
+/* A raster and its placement in the canonical item layout. The entire source
+ * rectangle starts at layout_origin-raster_origin_px/raster_density and has
+ * frame dimensions divided by raster_density. frame is owned; all metadata is
+ * a value record. Canonical layout remains independent of disposable texels. */
+typedef struct PPTextResult {
+    PPFrame frame;
+    PPTextArtwork artwork;
+    PPVec2 layout_size, layout_origin, raster_origin_px;
+    double raster_density;
+} PPTextResult;
 bool pp_font_inspect(PPBytes font, int face_index, PPFontInfo *out, PPError *error);
 /* Copies installed Segoe UI Emoji and optional Aptos into owned assets. If
  * Segoe is unavailable, selects bundled Noto and records that choice. Ordinary
