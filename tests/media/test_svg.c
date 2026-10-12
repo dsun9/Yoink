@@ -1,6 +1,30 @@
 #include "pointy/assets.h"
 #include "../test.h"
 #include <string.h>
+#include <stdlib.h>
+static bool import(PPAssets *,const char *,PPAssetId *,PPError *);
+static void test_isolated_requested_svg(void) {
+    const char *svg="<svg width='13' height='7' viewBox='0 0 13 7'><rect x='2' y='1' width='9' height='5' fill='red' fill-opacity='.5'/></svg>";
+    PPBytes bytes={(const uint8_t *)svg,strlen(svg)};PPFrame owned={0};PPError error={0};
+    const size_t output=130u*70*5,scratch=130u*70*9;
+    CHECK(!pp_svg_render_bounded(bytes,130,70,output-1,scratch,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT&&!owned.pixels);
+    CHECK(!pp_svg_render_bounded(bytes,130,70,output,scratch-1,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT&&!owned.pixels);
+    CHECK(pp_svg_render_bounded(bytes,130,70,output,scratch,&owned,&error));
+    CHECK(owned.width==130&&owned.height==70&&owned.content_alpha[0]==0);
+    size_t inside=35u*130+65;CHECK(owned.content_alpha[inside]>=127&&owned.content_alpha[inside]<=128);
+    CHECK(owned.pixels[inside*4]==owned.content_alpha[inside]&&owned.pixels[inside*4+1]==0&&owned.pixels[inside*4+2]==0);
+    PPAssets *assets=NULL;PPAssetId id;CHECK(pp_assets_create(&assets,&error));CHECK(import(assets,svg,&id,&error));
+    PPAsset *asset=pp_asset_retain(assets,id);const PPFrame *fresh=NULL;double next;
+    CHECK(pp_asset_frame(asset,0,130,70,&fresh,&next,&error));
+    CHECK(!memcmp(fresh->pixels,owned.pixels,output/5*4)&&!memcmp(fresh->content_alpha,owned.content_alpha,output/5));
+    CHECK(pp_asset_frame(asset,0,26,14,&fresh,&next,&error));
+    CHECK(owned.width==130&&owned.pixels[inside*4]==owned.content_alpha[inside]);
+    pp_asset_release(asset);pp_assets_destroy(assets);free(owned.pixels);free(owned.content_alpha);owned=(PPFrame){0};
+    const char *unsupported="<svg width='8' height='4'><g opacity='.5'><rect width='8' height='4'/></g></svg>";
+    CHECK(!pp_svg_render_bounded((PPBytes){(const uint8_t *)unsupported,strlen(unsupported)},8,4,160,288,&owned,&error)&&error.code==PP_ERROR_FORMAT&&!owned.pixels);
+    CHECK(!pp_svg_render_bounded(bytes,8193,1,100000,100000,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT);
+    puts("PASS immutable SVG renders only requested owned pixels, preserves restrictions, and bounds exact ARGB/output overlap before allocation");
+}
 static bool import(PPAssets *assets,const char *s,PPAssetId *id,PPError *e) { return pp_asset_import(assets,(PPBytes){(const uint8_t *)s,strlen(s)},PP_ASSET_SVG,id,e); }
 static void test_source_rebuild_observations(void) {
     PPAssets *assets=NULL; PPError e={0}; PPAssetId id;
@@ -89,6 +113,6 @@ int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"--opacity")) test_svg_opacity_semantics();
     else if(argc==2 && !strcmp(argv[1],"--paint")) test_svg_paint_value_grammar();
     else if(argc==2 && !strcmp(argv[1],"--numeric")) test_svg_numeric_paint_grammar();
-    else { test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
+    else { test_isolated_requested_svg(); test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
     puts("PASS SVG: supported rendering and paint grammar; unsupported opacity compositing and paint values rejected."); return 0;
 }

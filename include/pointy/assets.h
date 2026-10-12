@@ -38,6 +38,14 @@ void pp_asset_release(PPAsset *asset);
 PPBytes pp_asset_source(const PPAsset *asset);
 PPAssetKind pp_asset_kind(const PPAsset *asset);
 PPVec2 pp_asset_intrinsic_size(const PPAsset *asset);
+/* Isolated SVG rendering from immutable bytes. No asset/cache/reservation or
+ * GL state is touched. Validates the same supported SVG subset as import,
+ * parses one private document and renders only the requested resolution.
+ * out must be empty; caller owns RGBA + source alpha and any retained charge.
+ * Bounds output before allocation and charges its overlap with the temporary
+ * premultiplied ARGB surface against max_scratch_bytes. */
+bool pp_svg_render_bounded(PPBytes source,int width,int height,
+    size_t max_raster_bytes,size_t max_scratch_bytes,PPFrame *out,PPError *error);
 /* Separately owned CPU rasters (text, scaled/presentation copies) must reserve
  * before retention and release exactly once at destruction. Includes stride *
  * height RGBA bytes + width * height coverage bytes. Reservations share the

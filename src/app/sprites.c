@@ -95,7 +95,7 @@ PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,
     return NULL;
   bool direct=false;
 #if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
-  direct=pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot)||pp_item_snapshot_text_result(pp_scene_get(p->scene,s->id)->snapshot)!=NULL;
+  direct=pp_snapshot_is_svg(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot)||pp_item_snapshot_text_result(pp_scene_get(p->scene,s->id)->snapshot)!=NULL;
 #endif
   if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {
     pp_scene_delete(p->scene, s->id);
@@ -196,7 +196,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
         continue;
       }
       s->next_frame = instance->animation_start + next;
-      if (s->sharp_pending && !pp_snapshot_is_scalable_text(instance->snapshot) && !s->resizing && s->pose.longest_dip == s->ease_target.longest_dip) {
+      if (s->sharp_pending && !pp_snapshot_is_scalable(instance->snapshot) && !s->resizing && s->pose.longest_dip == s->ease_target.longest_dip) {
         p->metrics.sharp_publications++;
         p->metrics.last_sharp_input_timestamp = s->resize_start;
         p->metrics.last_sharp_instance_id = s->id;
