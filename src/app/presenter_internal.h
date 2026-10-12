@@ -23,6 +23,7 @@ typedef struct PPSourcePresentation {
   PPVec2 layout;
   bool visual_alpha;
   PPRect source_rect; /* Source texels mapped into canonical local DIPs. Zero means full layout. */
+  PPSharedTexture *shared_texture;
 } PPSourcePresentation;
 typedef struct PPRetainedPresentation {
   PPRenderer *renderer;
@@ -36,6 +37,7 @@ typedef struct PPRetainedPresentation {
   double density, animation_start;
   bool visible, valid, visual_alpha;
   PPRect source_rect;
+  struct PPGifEntry *gif_entry;
 } PPRetainedPresentation;
 typedef struct PPSprite {
   PPSurface *surface;
@@ -85,6 +87,8 @@ struct PPAnchorPresenter {
   PPRasterWorker *worker;
   uint64_t generation;
   bool borrowed_worker;
+  PPRenderer *texture_owner;
+  struct PPGifEntry *gif_entries;
 };
 bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot);
 bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
@@ -94,7 +98,14 @@ bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *
 void pp_scalable_poll(PPAnchorPresenter *p);
 void pp_scalable_cancel(PPAnchorPresenter *p,PPSprite *s);
 void pp_scalable_release(PPAnchorPresenter *p,PPSprite *s);
+bool pp_snapshot_is_gif(const PPItemSnapshot *snapshot);
+bool pp_presenter_texture_owner(PPAnchorPresenter *p,PPError *error);
+bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed,PPSourcePresentation *source,double *next,struct PPGifEntry **out,PPError *error);
+void pp_gif_release(PPAnchorPresenter *p,struct PPGifEntry *entry);
+void pp_gif_clear(PPAnchorPresenter *p);
 bool pp_snapshot_is_png(const PPItemSnapshot *snapshot);
+bool pp_snapshot_is_bitmap_text(const PPItemSnapshot *snapshot);
+bool pp_retained_bitmap_text_source(PPItemSnapshot *snapshot,PPSourcePresentation *source,PPError *error);
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
     const PPSceneInstance *instance,const PPDisplay *display,double elapsed,
     double *next,PPError *error);

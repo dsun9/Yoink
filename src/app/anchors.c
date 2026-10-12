@@ -523,6 +523,7 @@ void pp_anchor_presenter_destroy(PPAnchorPresenter *p) {
   pp_sprites_clear(p);
   pp_raster_worker_cancel(p->worker,p->generation,0);
   if(!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
+  pp_gif_clear(p);
   free(p->displays);
   pp_anchors_destroy(&p->runtime);
   if (p->owns_scene)
