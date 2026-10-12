@@ -116,7 +116,7 @@ PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapsh
                       error))
     return NULL;
   bool direct=false;
-#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+#if !defined(PP_TEST_COMPAT_PRESENTATION) && (defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT))
   direct=pp_snapshot_is_svg(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_png(pp_scene_get(p->scene,s->id)->snapshot)||pp_snapshot_is_gif(pp_scene_get(p->scene,s->id)->snapshot)||pp_item_snapshot_text_result(pp_scene_get(p->scene,s->id)->snapshot)!=NULL;
 #endif
   if (!(direct?pp_surface_create_gl(&s->surface,error):pp_surface_create(&s->surface, error))) {

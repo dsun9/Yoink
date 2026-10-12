@@ -1,4 +1,16 @@
 if(BUILD_TESTING AND (WIN32 OR APPLE))
+  # Exercise Cocoa's CPU native-copy route with the same pure runtime mocks
+  # on either host. The production pointy_anchors target keeps its platform route.
+  add_executable(pointy_runtime_compat_test tests/core/test_runtime.c
+    src/app/anchors.c src/app/sprites.c src/app/retained.c
+    src/app/scalable_text.c src/app/scalable_svg.c
+    src/app/retained_gif.c src/app/retained_text.c)
+  target_compile_definitions(pointy_runtime_compat_test PRIVATE PP_TEST_COMPAT_PRESENTATION=1
+    PP_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/media")
+  target_link_libraries(pointy_runtime_compat_test PRIVATE pointy_runtime SDL3::SDL3-static)
+  add_test(NAME runtime_compat COMMAND pointy_runtime_compat_test)
+  add_test(NAME runtime_compat_failure COMMAND pointy_runtime_compat_test --failure-isolation)
+  set_tests_properties(runtime_compat runtime_compat_failure PROPERTIES LABELS "core;headless" TIMEOUT 30)
   add_executable(pointy_shaped_editor_test tests/platform/test_shaped_editor.c src/ui/edit_state.c src/ui/shaped_edit.c)
   target_compile_definitions(pointy_shaped_editor_test PRIVATE SDL_GL_MakeCurrent=pp_test_make_current pp_ui_text_layout_create=pp_test_layout_create pp_ui_text_layout_set=pp_test_layout_set glDeleteTextures=pp_test_delete_textures)
   target_compile_definitions(pointy_shaped_editor_test PRIVATE SDL_SetClipboardText=pp_test_set_clipboard SDL_GetClipboardText=pp_test_get_clipboard)

@@ -117,3 +117,26 @@ zero findings; DESIGN lint returned zero errors/warnings. Native C/Nuklear is
 outside the audit script's web-source scanner, so those static results do not
 replace the native observations. The first audit attempt hit unavailable Windows
 Python/npx aliases; the bundled Python and pnpm runtime reruns succeeded.
+
+## Native failure accounting on both routes
+
+`runtime_compat` runs the runtime fixture through the CPU native-copy route
+with heap surface/renderer mocks on Windows and macOS. Its private
+`PP_TEST_COMPAT_PRESENTATION` definition affects only this executable; shipped
+presenters retain their platform route. `runtime_compat_failure` selects the
+same public event/tick failure case directly with `--failure-isolation`.
+Both tests are headless and bounded to 30 seconds.
+
+The 96 by 96 SVG arrow endpoint charges 46,080 bytes once for RGBA plus source
+alpha, including an independent equal consumer. Failing one sprite releases
+exactly 36,864 bytes of its compatibility native RGBA copy, or exactly 36,864
+GPU bytes on the direct route. The shared source charge and frame pointer,
+source RGBA/alpha, canonical pixels, sibling native pixels/bounds and accepted
+capture survive. Cleanup releases consumers, native presentation, scene and
+project snapshots before checking zero CPU/GPU charges.
+
+The original unchanged-CPU assertion failed on hosted macOS twice and in the
+focused compatibility fixture on Windows twice. Counter probes showed the
+exact native-copy release with unchanged shared source bytes. This corrects
+the backend-specific fixture expectation; no production accounting change
+was needed. Native Cocoa window/input/compositor acceptance remains separate.
