@@ -23,6 +23,7 @@ struct PPRenderer {
     PPSharedTexture *shared;
     GLuint output_texture;
     int output_width,output_height;
+    PPRenderer *retired_renderers,*retired_next;
 };
 struct PPSharedTexture {PPRenderer *owner;GLuint name;int width,height;};
 static void APIENTRY observe_error(GLenum source,GLenum type,GLuint id,GLenum severity,
@@ -372,7 +373,7 @@ size_t pp_renderer_output_bytes(const PPRenderer *r) {
 void pp_renderer_release_output(PPRenderer *r) {
     if(!r||!r->output_texture)return;
     /* A temporarily unavailable context keeps both its object and charge.
-     * Renderer destruction ultimately releases the complete namespace. */
+     * Destruction deletes through the share owner or transfers the charge. */
     if(!current(r,NULL))return;
     r->gl.BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
     r->gl.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
@@ -515,24 +516,28 @@ bool pp_renderer_transform_color_source(PPRenderer *renderer,const PPFrame *sour
     double longest,double angle,double opacity,double density,PPFrame *out,PPError *error) {
     return transform_source(renderer,source,layout,rect,longest,angle,opacity,density,false,out,error);
 }
-void pp_renderer_destroy(PPRenderer *renderer) {
-    if (!renderer) return;
+static void delete_shared_objects(PPRenderer *renderer,PPGL *gl) {
+    if (renderer->program) gl->DeleteProgram(renderer->program);
+    if (renderer->preview_program) gl->DeleteProgram(renderer->preview_program);
+    if (renderer->color_program) gl->DeleteProgram(renderer->color_program);
+    glDeleteTextures(4,renderer->textures);
+    glDeleteTextures(1,&renderer->preview_texture);
+    glDeleteTextures(1,&renderer->output_texture);
+}
+bool pp_renderer_destroy_retained(PPRenderer *renderer) {
+    if (!renderer) return true;
     SDL_Window *previous_window=SDL_GL_GetCurrentWindow();SDL_GLContext previous_context=SDL_GL_GetCurrentContext();
     GLState state={0};bool saved=false;
     SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
-    if (window && renderer->context && SDL_GL_MakeCurrent(window, renderer->context)) {
+    bool own_current=window&&renderer->context&&SDL_GL_MakeCurrent(window,renderer->context);
+    if (own_current) {
         if(renderer->borrows_context){save_state(&renderer->gl,&state);saved=true;}
         if(renderer->error_callback)renderer->error_callback(NULL,NULL);
         if(renderer->shared) {glFinish();glBindTexture(GL_TEXTURE_2D,0);renderer->shared=NULL;}
         PPGL *gl = &renderer->gl;
-        if (renderer->program) gl->DeleteProgram(renderer->program);
-        if (renderer->preview_program) gl->DeleteProgram(renderer->preview_program);
-        if (renderer->color_program) gl->DeleteProgram(renderer->color_program);
         if (renderer->vao) gl->DeleteVertexArrays(1,&renderer->vao);
         if (renderer->fbo) gl->DeleteFramebuffers(1,&renderer->fbo);
-        glDeleteTextures(4,renderer->textures);
-        glDeleteTextures(1,&renderer->preview_texture);
-        glDeleteTextures(1,&renderer->output_texture);
+        delete_shared_objects(renderer,gl);
         if(saved) {
             for(unsigned i=0;i<4;i++) {
                 if(state.texture0==(GLint)renderer->textures[i])state.texture0=0;
@@ -544,9 +549,30 @@ void pp_renderer_destroy(PPRenderer *renderer) {
         }
     }
     if (renderer->context&&!renderer->borrows_context) SDL_GL_DestroyContext(renderer->context);
+    renderer->context=NULL;
+    if(!own_current&&renderer->group&&renderer->group!=renderer) {
+        /* Local FBO/VAO references have ended with the failed context. Texture
+         * and program names survive in the share group, so delete them there. */
+        PPRenderer *owner=renderer->group;
+        if(current(owner,NULL))delete_shared_objects(renderer,&owner->gl);
+        else {
+            /* Reuse the renderer record rather than allocating during failure.
+             * The group retains both these objects and the caller's charge. */
+            renderer->retired_next=owner->retired_renderers;owner->retired_renderers=renderer;
+            return false;
+        }
+    }
+    while(renderer->retired_renderers) {
+        PPRenderer *retired=renderer->retired_renderers;renderer->retired_renderers=retired->retired_next;
+        /* The final group context above has been destroyed. All orphaned
+         * texture/program storage is now released with its namespace. */
+        free(retired);
+    }
     if (window && renderer->owns_window) SDL_DestroyWindow(window);
     bool owns_window=renderer->owns_window;
     bool borrowed=renderer->borrows_context;
     free(renderer); if(owns_window) SDL_QuitSubSystem(SDL_INIT_VIDEO);
     if(borrowed)restore_context(previous_window,previous_context,NULL);
+    return true;
 }
+void pp_renderer_destroy(PPRenderer *renderer){(void)pp_renderer_destroy_retained(renderer);}

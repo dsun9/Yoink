@@ -82,6 +82,7 @@ struct PPAnchorPresenter {
   PPError notice;
   PPPresentationMetrics metrics;
   PPGpuResources gpu;
+  size_t retired_gpu_bytes;
   PPRendererMetrics retired_renderer_metrics;
   PPRasterWorker *worker;
   uint64_t generation;

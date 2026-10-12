@@ -52,9 +52,11 @@ void pp_presenter_gpu_release(PPAnchorPresenter *p,size_t bytes) {
 }
 void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   add_metrics(&p->retired_renderer_metrics,pp_renderer_metrics(r->renderer));
-  pp_renderer_destroy(r->renderer);pp_item_snapshot_release(r->snapshot);
+  bool released=pp_renderer_destroy_retained(r->renderer);pp_item_snapshot_release(r->snapshot);
   pp_gif_release(p,r->gif_entry);
-  pp_presenter_gpu_release(p,r->gpu_bytes+r->output_bytes);memset(r,0,sizeof(*r));
+  size_t bytes=r->gpu_bytes+r->output_bytes;
+  if(released)pp_presenter_gpu_release(p,bytes);else p->retired_gpu_bytes+=bytes;
+  memset(r,0,sizeof(*r));
 }
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *s) {
   pp_scalable_release(p,s);

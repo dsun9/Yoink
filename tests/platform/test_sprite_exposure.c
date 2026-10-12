@@ -16,11 +16,13 @@ static size_t display_count;
 static PROCESS_INFORMATION child;
 static ReceiverState *receiver;
 static HANDLE mapping;
+static HANDLE receiver_job;
 static HWND old_foreground;
 static POINT old_cursor;
 static bool left_held;
 static unsigned downs[256],ups[256],moves[256];
 static uint64_t measuring_id;
+static bool measuring_exposure;
 static double ordinary_ms[256],exposure_ms[256];
 static unsigned ordinary_count,exposure_count;
 unsigned pp_test_exposure_input_wait(void);
@@ -34,6 +36,7 @@ static void cleanup(void){
   if(receiver&&receiver->window)PostMessageW((HWND)receiver->window,WM_CLOSE,0,0);
   if(child.hProcess){if(WaitForSingleObject(child.hProcess,3000)!=WAIT_OBJECT_0)TerminateProcess(child.hProcess,1);CloseHandle(child.hProcess);CloseHandle(child.hThread);}
   if(receiver)UnmapViewOfFile(receiver);if(mapping)CloseHandle(mapping);SetCursorPos(old_cursor.x,old_cursor.y);if(old_foreground)SetForegroundWindow(old_foreground);
+  if(receiver_job)CloseHandle(receiver_job);
 }
 static void poll(void){
   double start=now();bool moved=false;PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(presenter);
@@ -51,8 +54,8 @@ static void poll(void){
     PPRendererMetrics after=pp_anchor_presenter_renderer_metrics(presenter);bool recovery=after.presentation_refreshes>before.presentation_refreshes;
     if(recovery)API(pp_renderer_complete(pp_sprites_find(presenter,measuring_id)->retained.renderer,&error));
     double ms=(now()-start)*1000;
-    if(recovery){CHECK(exposure_count<256);exposure_ms[exposure_count++]=ms;}
-    else {CHECK(ordinary_count<256);ordinary_ms[ordinary_count++]=ms;}
+    if(measuring_exposure){CHECK(recovery&&exposure_count<256);exposure_ms[exposure_count++]=ms;}
+    else {CHECK(!recovery&&ordinary_count<256);ordinary_ms[ordinary_count++]=ms;}
   }
 }
 static void pump(void){ULONGLONG until=GetTickCount64()+80;do{poll();Sleep(1);}while(GetTickCount64()<until);}
@@ -122,10 +125,11 @@ static void exercise(int side,double size){
   mouse(MOUSEEVENTF_LEFTUP,0);CHECK(ups[id]>0&&moves[id]>0);compare(id,reference,"after release");
   if(size==1536) {
     CHECK(displays[0].drawable_pixels_per_dip==1.5);
-    CHECK(SetCursorPos((int)home.x,(int)home.y));mouse(MOUSEEVENTF_LEFTDOWN,0);measuring_id=id;
+    CHECK(SetCursorPos((int)home.x,(int)home.y));mouse(MOUSEEVENTF_LEFTDOWN,0);measuring_id=id;measuring_exposure=false;
     for(int i=0;i<24;i++)move((int)home.x+(i%2?8:0),(int)home.y);
     move((int)home.x,(int)home.y);
-    for(int i=0;i<24;i++){move((int)edge.x,(int)edge.y);move((int)home.x,(int)home.y);}
+    measuring_exposure=true;
+    for(int i=0;i<24;i++){measuring_id=0;move((int)edge.x,(int)edge.y);measuring_id=id;move((int)home.x,(int)home.y);}
     measuring_id=0;mouse(MOUSEEVENTF_LEFTUP,0);compare(id,reference,"warm exposure returns");
   }
   for(int excursion=0;excursion<3;excursion++) {
@@ -165,6 +169,13 @@ static void ownership(void){
   CHECK(!pp_retained_present(presenter,s->surface,&s->retained,source,s->pose,displays,&error));
   CHECK(error.code==PP_ERROR_RENDER&&!s->retained.output_bytes&&!IsWindowVisible(native(s->surface)));
   remove_sprite(id);CHECK(!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
+  id=spawn((PPVec2){screen.x+screen.w*.5,screen.y+screen.h*.5},96);s=pp_sprites_find(presenter,id);
+  API(pp_renderer_complete(s->retained.renderer,&error));
+  PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC attachment=(PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC)SDL_GL_GetProcAddress("glGetFramebufferAttachmentParameteriv");CHECK(attachment);
+  GLint name=0;attachment(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&name);CHECK(name>0&&glIsTexture((GLuint)name));
+  CHECK(DestroyWindow(native(s->surface)));remove_sprite(id);
+  API(pp_renderer_complete(presenter->texture_owner,&error));CHECK(!glIsTexture((GLuint)name));
+  CHECK(!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
   puts("PASS real GL output ownership, candidate overlap/rejection, hide/recreate and failed exposure cleanup");
 }
 int main(int argc,char **argv){
@@ -172,7 +183,11 @@ int main(int argc,char **argv){
   SetThreadExecutionState(ES_CONTINUOUS|ES_DISPLAY_REQUIRED|ES_SYSTEM_REQUIRED);
   char name[80];snprintf(name,sizeof(name),"Local\\PointyExposureReceiver-%lu",GetCurrentProcessId());mapping=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(ReceiverState),name);CHECK(mapping);
   receiver=MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(*receiver));CHECK(receiver);char command[2048];snprintf(command,sizeof(command),"\"%s\" %s",argv[1],name);STARTUPINFOA startup={sizeof(startup)};
-  CHECK(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&child));ULONGLONG until=GetTickCount64()+4000;while(!receiver->window&&GetTickCount64()<until)Sleep(10);CHECK(receiver->window);
+  receiver_job=CreateJobObjectW(NULL,NULL);CHECK(receiver_job);JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits={0};limits.BasicLimitInformation.LimitFlags=JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  CHECK(SetInformationJobObject(receiver_job,JobObjectExtendedLimitInformation,&limits,sizeof(limits)));
+  CHECK(CreateProcessA(NULL,command,NULL,NULL,FALSE,CREATE_SUSPENDED,NULL,NULL,&startup,&child));
+  CHECK(AssignProcessToJobObject(receiver_job,child.hProcess));CHECK(ResumeThread(child.hThread)!=(DWORD)-1);
+  ULONGLONG until=GetTickCount64()+4000;while(!receiver->window&&GetTickCount64()<until)Sleep(10);CHECK(receiver->window);
   API(pp_assets_create(&assets,&error));API(pp_platform_displays(&displays,&display_count,&error));CHECK(display_count>0);
   bool only_ownership=!strcmp(argv[3],"--ownership");
   if(!only_ownership)CHECK(pp_test_desktop_capture_start((RECT){(LONG)displays[0].bounds.x,(LONG)displays[0].bounds.y,(LONG)(displays[0].bounds.x+displays[0].bounds.w),(LONG)(displays[0].bounds.y+displays[0].bounds.h)}));

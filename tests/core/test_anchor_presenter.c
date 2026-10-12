@@ -1544,3 +1544,4 @@ size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int w,int h){(void
 size_t pp_renderer_output_bytes(const PPRenderer *r){(void)r;return 0;}
 void pp_renderer_release_output(PPRenderer *r){(void)r;}
 bool pp_renderer_refresh(PPRenderer *r,PPError *error){(void)error;r->metrics.presentation_refreshes++;return true;}
+bool pp_renderer_destroy_retained(PPRenderer *r){pp_renderer_destroy(r);return true;}

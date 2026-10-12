@@ -73,8 +73,10 @@ upload, transform draw, default-framebuffer copy/readback, or CPU pixel copy.
 Hidden and zero-opacity presentations release the retained color target;
 reappearing presentations rebuild it from their unchanged source texture.
 Deletion or presentation failure releases the target and its charge. A context
-that cannot be made current keeps its charge until renderer destruction releases
-the namespace. Comparisons at monitor seams may conservatively refresh even
+that cannot be made current keeps its charge. Destruction deletes shared objects
+through the surviving group owner after releasing the failed context's local
+FBO references. If that owner is unavailable too, the renderer record and charge
+stay with the group until its final context is destroyed. Comparisons at monitor seams may conservatively refresh even
 when another monitor already displayed those local pixels.
 Owned source alpha validates visibility and finds the nearest visible grab
 point for a small activation target. A preview press retains its prepared

@@ -81,4 +81,7 @@ bool pp_renderer_transform_color_source(PPRenderer *renderer,const PPFrame *sour
     PPVec2 layout,PPRect source_rect,double longest_dip,double angle_deg,
     double opacity,double pixels_per_dip,PPFrame *out,PPError *error);
 void pp_renderer_destroy(PPRenderer *renderer);
+/* Consumes renderer. False transfers undeletable shared objects to its group
+ * owner; the caller must keep their GPU charge until that owner is destroyed. */
+bool pp_renderer_destroy_retained(PPRenderer *renderer);
 #endif

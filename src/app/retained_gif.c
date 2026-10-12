@@ -31,6 +31,7 @@ void pp_gif_clear(PPAnchorPresenter *p) {
     p->retired_renderer_metrics.transform_draws+=m.transform_draws;
     p->retired_renderer_metrics.readbacks+=m.readbacks;
     pp_renderer_destroy(p->texture_owner);p->texture_owner=NULL;
+    pp_presenter_gpu_release(p,p->retired_gpu_bytes);p->retired_gpu_bytes=0;
 }
 bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed,PPSourcePresentation *source,double *next,struct PPGifEntry **out,PPError *error) {
     *out=NULL;PPFrameSelection selected;
