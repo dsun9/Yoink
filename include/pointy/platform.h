@@ -75,6 +75,21 @@ void pp_platform_drawer_window(uint32_t window_id);
 void pp_platform_drawer_close(bool restore_focus);
 void pp_surface_raise(PPSurface *surface);
 bool pp_surface_create(PPSurface **out, PPError *error);
+/* Experimental transparent SDL OpenGL surface, using the existing native input
+ * ownership adapter. macOS returns an explicit unverified-backend failure. */
+bool pp_surface_create_gl(PPSurface **out, PPError *error);
+uint32_t pp_surface_window_id(const PPSurface *surface);
+/* Place or move the same direct window in native desktop units. interactive
+ * must be false for zero opacity. False hides and cancels input ownership.
+ * Failure hides the interceptor; renderer must be destroyed before surface. */
+bool pp_surface_place_gl(PPSurface *surface, PPRect desktop_bounds,
+    bool interactive, PPError *error);
+/* Rectangle input policy is independent of visible alpha. Compatibility
+ * adapters may retain CPU pixels; direct GL windows already use this policy. */
+void pp_surface_set_rectangular(PPSurface *surface,bool enabled);
+/* Put a successfully prepared replacement into the previous surface's native
+ * order without activation, before destroying the previous surface. */
+void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous);
 /* Retained native CPU raster bytes for a validated width/height (<=8192).
  * Presenter reserves this before allocating the candidate native copies. */
 size_t pp_surface_raster_bytes(int width, int height);

@@ -31,7 +31,18 @@ bool pp_media_allocate(PPAsset *a,size_t count,PPError *error) {
 }
 bool pp_assets_create(PPAssets **out,PPError *error) { if(!out) return pp_media_error(error,PP_ERROR_ARGUMENT,"Missing asset manager output"); *out=calloc(1,sizeof(**out)); return *out!=NULL || pp_media_error(error,PP_ERROR_MEMORY,"Could not allocate asset manager"); }
 void pp_assets_destroy(PPAssets *assets) { if(!assets) return; PPAsset *a=assets->first; while(a) { PPAsset *next=a->next; pp_media_clear(a); free(a->source); free(a); a=next; } free(assets); }
-static bool decode(PPAsset *a,PPError *e) { switch(a->kind) { case PP_ASSET_PNG:return pp_image_decode(a,e); case PP_ASSET_GIF:return pp_gif_decode(a,e); case PP_ASSET_SVG:return pp_svg_raster(a,a->info.width,a->info.height,e); default:return true; } }
+static bool decode(PPAsset *a,PPError *e) {
+    bool ok;
+    switch(a->kind) {
+    case PP_ASSET_PNG: ok=pp_image_decode(a,e); break;
+    case PP_ASSET_GIF: ok=pp_gif_decode(a,e); break;
+    case PP_ASSET_SVG: return pp_svg_raster(a,a->info.width,a->info.height,e);
+    default: return true;
+    }
+    if(ok) a->owner->metrics.raster_builds++;
+    return ok;
+}
+PPSourceMetrics pp_assets_source_metrics(const PPAssets *assets) { return assets ? assets->metrics : (PPSourceMetrics){0}; }
 bool pp_asset_import(PPAssets *assets,PPBytes b,PPAssetKind kind,PPAssetId *out,PPError *e) {
     if(!assets || !out || !b.data || !b.size || kind<PP_ASSET_PNG || kind>PP_ASSET_FONT) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid asset import arguments");
     if(b.size>PP_MEDIA_RESOURCE_BYTES) return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"Source resource exceeds 256 MiB");
@@ -51,7 +62,8 @@ PPAsset *pp_asset_retain(PPAssets *assets,PPAssetId id) { if(!assets) return NUL
 void pp_asset_release(PPAsset *a) { if(a && a->retains) a->retains--; }
 PPBytes pp_asset_source(const PPAsset *a) { return a?(PPBytes){a->source,a->source_size}:(PPBytes){0}; }
 PPAssetKind pp_asset_kind(const PPAsset *a) { return a ? a->kind : (PPAssetKind)-1; }
-PPVec2 pp_asset_intrinsic_size(const PPAsset *a) { return a ? (PPVec2){a->info.width,a->info.height} : (PPVec2){0}; }
+PPVec2 pp_asset_intrinsic_size(const PPAsset *a) { return a ? a->kind==PP_ASSET_SVG ? a->info.svg_viewport : (PPVec2){a->info.width,a->info.height} : (PPVec2){0}; }
+const PPFrame *pp_asset_cached_svg(const PPAsset *a) { return a && a->kind==PP_ASSET_SVG ? a->frames : NULL; }
 size_t pp_assets_external_raster_bytes(const PPAssets *a) { return a ? a->external_bytes : 0; }
 size_t pp_assets_raster_bytes(const PPAssets *a) { return a ? a->cache_bytes+a->external_bytes : 0; }
 void pp_assets_trim_cache(PPAssets *assets) {
@@ -72,7 +84,10 @@ bool pp_assets_reserve_raster(PPAssets *a, size_t bytes, PPError *error) {
 void pp_assets_release_raster(PPAssets *a, size_t bytes) {
     if (a && bytes <= a->external_bytes) a->external_bytes -= bytes;
 }
-bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *next,PPError *e) {
+bool pp_asset_select_frame(PPAsset *a,double t,int w,int h,PPFrameSelection *selection,PPError *e) {
+    if(selection) *selection=(PPFrameSelection){0};
+    const PPFrame **out=selection?&selection->frame:NULL;
+    double *next=selection?&selection->next_change:NULL;
     if(out) *out=NULL;
     if(!a || !out || !next || !isfinite(t) || t<0) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid frame request or instance clock");
     if(a->kind==PP_ASSET_FONT) return pp_media_error(e,PP_ERROR_ARGUMENT,"Font bytes do not have an image frame");
@@ -87,5 +102,12 @@ bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *
             *next=t+(boundary-local);
         }
     }
-    *out=&a->frames[index]; return true;
+    *out=&a->frames[index]; selection->index=index;selection->revision=index+1;return true;
+}
+bool pp_asset_frame(PPAsset *a,double t,int w,int h,const PPFrame **out,double *next,PPError *e) {
+    if(out) *out=NULL;
+    if(!out || !next) return pp_media_error(e,PP_ERROR_ARGUMENT,"Invalid frame output");
+    PPFrameSelection selection;
+    if(!pp_asset_select_frame(a,t,w,h,&selection,e)) return false;
+    *out=selection.frame;*next=selection.next_change;return true;
 }

@@ -23,6 +23,15 @@ PPSchedule pp_runtime_schedule(const PPRuntime *r, double now) {
   if(r->drawer) s.ui=now+1.0/60;
   return s;
 }
+PPRendererMetrics pp_runtime_renderer_metrics(const PPRuntime *r) {
+  return r?pp_anchor_presenter_renderer_metrics(r->presenter):(PPRendererMetrics){0};
+}
+PPGpuResources pp_runtime_gpu_resources(const PPRuntime *r) {
+  return pp_anchor_presenter_gpu_resources(r?r->presenter:NULL);
+}
+PPPresentationMetrics pp_runtime_presentation_metrics(const PPRuntime *r) {
+  return pp_anchor_presenter_metrics(r ? r->presenter : NULL);
+}
 
 static void failure(PPRuntime *r) {
   r->failed = true;
@@ -72,11 +81,11 @@ bool pp_runtime_create(PPRuntime **out, PPApp *app, PPError *error) {
   }
   r->app = app;
   r->generation = pp_app_generation(app);
+  if(!pp_app_content_sources(app,error)){free(r);return false;}
   if (!pp_renderer_create(&r->renderer, error)) {
     free(r);
     return false;
   }
-  r->drawer_cache.renderer=r->renderer;
   *out = r;
   return true;
 }
@@ -127,6 +136,9 @@ void pp_runtime_tick(PPRuntime *r, double now) {
     failure(r);
     return;
   }
+  r->presenter->sources=pp_app_content_sources(r->app,&r->error);
+  r->presenter->borrowed_sources=true;r->presenter->borrowed_worker=true;
+  r->presenter->worker=pp_content_sources_worker(r->presenter->sources);
   PPDisplay *displays = NULL;
   size_t count = 0;
   PPVec2 pointer = {0};
@@ -137,6 +149,7 @@ void pp_runtime_tick(PPRuntime *r, double now) {
   pp_platform_pointer(&pointer);
   bool ok = pp_anchor_presenter_update(r->presenter, displays, count, pointer,
                                        now, &r->error);
+  r->worker=pp_content_sources_worker(r->presenter->sources);
   if (ok && r->drawer)
     pp_drawer_layout(r->drawer, displays, count);
   pp_displays_free(displays);

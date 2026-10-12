@@ -54,7 +54,11 @@ THE SOFTWARE.
 
 Segoe UI and Segoe UI Semibold are read from the Windows installation for
 settings controls, and are not bundled. Aptos is looked up on the host for
-default text and is not bundled. The bundled Noto Color Emoji font's
+ordinary text and is not bundled. Installed Segoe UI Emoji supplies default
+emoji artwork and is not bundled. Its permitted complete bytes are owned
+privately by projects, with selected-font metadata and original license tables
+retained. Document embedding does not authorize application redistribution.
+The bundled Noto Color Emoji font is the missing-Segoe fallback; its
 copyright and SIL Open Font License are retained in `resources/licenses/NotoEmoji-OFL.txt`.
 Portable projects embed that notice when they embed the font.
 
@@ -65,7 +69,8 @@ font build code is Apache-2.0. Attribution, immutable source revision, font
 digest, upstream notice and full CC BY 4.0 legal text are retained in
 `resources/licenses/Twemoji-Mozilla-NOTICE.txt`; the upstream notice and legal
 text are also supplied separately. The portable Twemoji example embeds this
-complete notice and the complete font. Noto remains the default.
+complete notice and the complete font. Installed Segoe UI Emoji remains the
+default, with bundled Noto when Segoe is unavailable.
 
 Dependency revisions are pinned in `cmake/Dependencies.cmake`. Upstream
 source license files remain in each fetched source tree. The distribution
@@ -93,7 +98,7 @@ font bytes, including internal license metadata, rather than subsetting.
 The Release distribution includes the full license texts in `licenses/`, the
 application AGPL in `LICENSE`, and Noto's complete OFL alongside its font in
 `resources/licenses/NotoEmoji-OFL.txt`. It ships Noto Color Emoji v2.051 and
-does not redistribute Aptos, Segoe UI, or any other installed proprietary font.
+does not redistribute Aptos, Segoe UI, Segoe UI Emoji, or any other installed proprietary font.
 The application icon is original geometric artwork authored for PointyPointer.
 
 This software uses FreeType under its FreeType License. Portions of this

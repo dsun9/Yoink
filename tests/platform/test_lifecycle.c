@@ -11,6 +11,7 @@
 #include "../../src/app/presenter_internal.h"
 #include "../../src/ui/settings_internal.h"
 #include "../test.h"
+#include "pointy/project_store.h"
 #include <SDL3/SDL.h>
 #include <string.h>
 #include <time.h>

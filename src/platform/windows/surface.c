@@ -55,7 +55,7 @@ static void release_bitmap(PPSurface *surface) {
     surface->bitmap = NULL; surface->bits = NULL;
 }
 bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds, PPError *error) {
-    if (!surface || !surface->window || !frame || !frame->pixels || !frame->content_alpha || frame->width <= 0 || frame->height <= 0 ||
+    if (!surface || !surface->window || !frame || !frame->pixels || (!surface->rectangular&&!frame->content_alpha) || frame->width <= 0 || frame->height <= 0 ||
         frame->width > 16384 || frame->height > 16384 || frame->stride < (size_t)frame->width*4 ||
         !isfinite(bounds.x) || !isfinite(bounds.y) || bounds.x < -2147483647.0 || bounds.x > 2147483647.0 ||
         bounds.y < -2147483647.0 || bounds.y > 2147483647.0 || bounds.w != frame->width || bounds.h != frame->height)
@@ -91,7 +91,8 @@ bool pp_surface_present(PPSurface *surface, const PPFrame *frame, PPRect bounds,
 void pp_surface_destroy(PPSurface *surface) {
     if (!surface) return;
     pp_windows_input_remove(surface);
-    if (surface->window) DestroyWindow(surface->window);
+    if(surface->gl_video_initialized) pp_windows_gl_destroy(surface);
+    else if (surface->window) DestroyWindow(surface->window);
     pp_windows_forget(surface); release_bitmap(surface);
     if (surface->dc) DeleteDC(surface->dc);
     free(surface);
@@ -99,5 +100,6 @@ void pp_surface_destroy(PPSurface *surface) {
 void pp_surface_hide(PPSurface *surface) {
     if(!surface) return;
     pp_windows_input_cancel(surface);
+    surface->gl_interactive=false;
     if(surface->window) ShowWindow(surface->window,SW_HIDE);
 }

@@ -43,6 +43,14 @@ void pp_scene_destroy(PPScene *scene) { pp_scene_clear(scene); free(scene); }
 bool pp_scene_spawn(PPScene *scene, const PPProject *project, PPAnchor anchor,
     PPVec2 center, double now, uint64_t *out_id, PPError *error) {
     const PPItem *item = pp_project_target(project, anchor);
+    if(!item)return scene_error(error,PP_ERROR_ARGUMENT,"Empty or disabled spawn anchor");
+    PPItemSnapshot *snapshot=pp_project_snapshot(project,item->id);
+    bool ok=pp_scene_spawn_snapshot(scene,snapshot,anchor,center,now,out_id,error);
+    pp_item_snapshot_release(snapshot);return ok;
+}
+bool pp_scene_spawn_snapshot(PPScene *scene,PPItemSnapshot *snapshot,PPAnchor anchor,
+    PPVec2 center,double now,uint64_t *out_id,PPError *error) {
+    const PPItem *item=pp_item_snapshot_item(snapshot);
     if (!scene || !item || !isfinite(center.x) || !isfinite(center.y) || !isfinite(now) || now < 0)
         return scene_error(error, PP_ERROR_ARGUMENT, "Invalid spawn position, clock or empty/disabled anchor");
     if (!scene->next_id || scene->next_id == UINT64_MAX || scene->count >= SIZE_MAX / sizeof(*scene->instances) - 1)
@@ -50,10 +58,9 @@ bool pp_scene_spawn(PPScene *scene, const PPProject *project, PPAnchor anchor,
     PPSceneInstance *instances = realloc(scene->instances, (scene->count + 1) * sizeof(*instances));
     if (!instances) return scene_error(error, PP_ERROR_MEMORY, "Cannot grow scene");
     scene->instances = instances;
-    PPItemSnapshot *snapshot = pp_project_snapshot(project, item->id);
     PPVec2 size = pp_item_snapshot_size(snapshot);
     double longest = fmin(PP_ITEM_MAX_SIZE, fmax(PP_ITEM_MIN_SIZE, fmax(size.x, size.y)));
-    PPSceneInstance instance = {scene->next_id++, snapshot, {center, longest, item->angle_deg, item->opacity}, anchor, now};
+    PPSceneInstance instance = {scene->next_id++, pp_item_snapshot_retain(snapshot), {center, longest, item->angle_deg, item->opacity}, anchor, now};
     instances[scene->count++] = instance;
     if (out_id) *out_id = instance.id;
     return true;
@@ -65,10 +72,17 @@ bool pp_scene_replace(PPScene *scene, uint64_t id, const PPItem *replacement, do
     PPSceneInstance *instance = scene->instances + at;
     PPItemSnapshot *snapshot = NULL;
     if (!pp_item_snapshot_create(pp_item_snapshot_assets(instance->snapshot), replacement, &snapshot, error)) return false;
-    pp_item_snapshot_release(instance->snapshot);
-    instance->snapshot = snapshot;
-    instance->animation_start = now;
-    return true;
+    bool ok=pp_scene_replace_snapshot(scene,id,snapshot,now,error);
+    pp_item_snapshot_release(snapshot);return ok;
+}
+bool pp_scene_replace_snapshot(PPScene *scene,uint64_t id,PPItemSnapshot *snapshot,double now,PPError *error) {
+    size_t at=find(scene,id);
+    if(at==SIZE_MAX||!snapshot||!isfinite(now)||now<0||
+        pp_item_snapshot_assets(snapshot)!=pp_item_snapshot_assets(scene->instances[at].snapshot))
+        return scene_error(error,PP_ERROR_ARGUMENT,"Invalid prepared replacement, instance or clock");
+    PPSceneInstance *instance=scene->instances+at;
+    pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(instance->snapshot);
+    instance->snapshot=snapshot;instance->animation_start=now;return true;
 }
 void pp_scene_delete(PPScene *scene, uint64_t id) {
     size_t at = find(scene, id);
@@ -81,6 +95,16 @@ bool pp_scene_set_pose(PPScene *scene, uint64_t id, PPPose pose, PPError *error)
     size_t at = find(scene, id);
     if (at == SIZE_MAX || !valid_pose(pose)) return scene_error(error, PP_ERROR_ARGUMENT, "Invalid scene pose or instance");
     scene->instances[at].pose = pose;
+    return true;
+}
+bool pp_scene_restore(PPScene *scene,uint64_t id,PPItemSnapshot *snapshot,
+    PPPose pose,double start,PPError *error) {
+    size_t at=find(scene,id);
+    if(at==SIZE_MAX || !snapshot || !valid_pose(pose) || !isfinite(start) || start<0 ||
+        pp_item_snapshot_assets(snapshot)!=pp_item_snapshot_assets(scene->instances[at].snapshot))
+        return scene_error(error,PP_ERROR_ARGUMENT,"Invalid retained scene rollback");
+    pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(scene->instances[at].snapshot);
+    scene->instances[at].snapshot=snapshot;scene->instances[at].pose=pose;scene->instances[at].animation_start=start;
     return true;
 }
 const PPSceneInstance *pp_scene_get(const PPScene *scene, uint64_t id) {

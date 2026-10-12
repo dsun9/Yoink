@@ -75,3 +75,12 @@ This does not establish a physical DPI transition or multiple-monitor behavior.
 Nuklear does not provide a UI Automation accessibility tree. Screen-reader,
 end-to-end IME, macOS, full runtime scheduler and final tray integration remain
 outside this settings-stage verification.
+# Current retained preview verification
+
+The original Settings-stage evidence below predates shared retained preview
+publication. [Ticket #10 checks](preview-retention.md) now cover context-local
+GL sources/outputs without normal readback, source identity and clocks, density
+changes preserving drafts/focus, admission rejection and different-item stale
+pixel prevention, project epochs and closure. Established layout/theme/control
+behavior remains unchanged. Premium static scans do not execute native Nuklear
+or establish a screen-reader accessibility tree.

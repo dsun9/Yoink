@@ -143,6 +143,23 @@ characters use visible placeholders with nearby U+ codepoints and an explicit
 statement that stored text is unchanged. Text previews retain real Unicode,
 color emoji, and actual fallback diagnostics beside the preview.
 
+Content previews retain the same immutable artwork and canonical layout used
+by sprites, including the installed Segoe choice or named Noto fallback.
+Artwork commits restart the Settings preview clock; rename, reorder and
+opacity/rotation edits preserve it and reuse prepared sources. A pending sharp
+target keeps accepted artwork visible. Failed same-item preparation preserves
+the accepted preview; selecting a different item clears previous-item pixels
+before preparing the new one. Closing Settings releases preview work/textures
+while preserving drafts and keyboard focus for reopening.
+
+`src/app/content_sources.c` owns shared CPU cache entries and completion dispatch;
+`src/ui/preview.c` owns consumer cancellation and context-local GPU publication.
+Premultiplied artwork stays premultiplied through filtering and converts at the
+final Nuklear sample, preserving the existing control blend contract. UI source
+and output textures never cross independent contexts. The adapter restores the
+owning frame's GL state on success and failure. Source/target overlap is charged
+before publication; false preserves the usable output and its charge.
+
 This single settings workflow does not need a separate UX-CONTRACT document.
 There are no browser routes, remote APIs, tables, authentication, Japan-market
 flows, or theme picker. Browser CSS/ARIA audits do not establish native desktop
@@ -162,6 +179,14 @@ to the current display. Actual content thumbnails make images and emoji
 identifiable when the control font cannot render their labels. The empty state
 points to Settings and keeps the existing sprite. Display scale changes rebuild
 the drawer at the new scale while keeping its focused item.
+
+Thumbnails use fixed-fit retained sources and deliberately sample GIF frame zero.
+Reorder transfers visible slots by stable item ID; scrolling, removal and closure
+release unused slots without disturbing another preview or sprite consumer.
+Replacement borrows the prepared item snapshot, preserves center/rotation/
+opacity/longest side, adopts its aspect ratio and restarts only that instance's
+clock. [Preview verification](docs/testing/preview-retention.md) records native
+alpha, rejection, focus, density and lifecycle checks and their limits.
 
 Drawer and settings windows stay above sprites. Closing by selection or Escape
 restores the preceding foreground window when the drawer still owns focus.

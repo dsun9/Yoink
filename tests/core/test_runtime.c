@@ -8,6 +8,7 @@
 size_t pp_surface_raster_bytes(int width,int height) {return (size_t)width*height*4;}
 #include "pointy/runtime.h"
 #include <math.h>
+#include <SDL3/SDL.h>
 struct PPSurface {
   uint64_t id;
   PPRect bounds;
@@ -15,7 +16,12 @@ struct PPSurface {
   struct PPSurface *next;
   int source_width;
   uint8_t red, blue;
+  uint32_t window_id;
 };
+struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
+struct PPSharedTexture {const PPFrame *frame;};
+static uint32_t direct_window_serial;
+static unsigned cpu_transforms;
 static PPSurface *surfaces;
 static int source_width;
 static PPSurface *fail_surface;
@@ -56,7 +62,7 @@ void pp_surface_destroy(PPSurface *s) {
   *link = s->next;
   free(s);
 }
-void pp_surface_hide(PPSurface *s) { s->shown = false; }
+void pp_surface_hide(PPSurface *s) { s->shown = false;if(capture_owner==s)capture_owner=NULL; }
 void pp_surface_set_instance_id(PPSurface *s, uint64_t id) { s->id = id; }
 bool pp_platform_capture(PPSurface *s, PPError *error) {
   (void)error;
@@ -100,10 +106,59 @@ bool pp_renderer_create(PPRenderer **out, PPError *error) {
   *out = (PPRenderer *)1;
   return true;
 }
-void pp_renderer_destroy(PPRenderer *r) { (void)r; }
+void pp_renderer_destroy(PPRenderer *r) {if(r && r!=(PPRenderer *)1)free(r);}
+bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t id,void *context,PPError *error) {
+  (void)out;(void)id;(void)context;(void)error;CHECK(false);return false;
+}
+bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,uint64_t revision,
+    PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,
+    unsigned *texture,int *width,int *height,PPError *error) {
+  (void)r;(void)source;(void)id;(void)revision;(void)layout;(void)rect;(void)longest;
+  (void)angle;(void)opacity;(void)density;(void)texture;(void)width;(void)height;(void)error;
+  CHECK(false);return false;
+}
+PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRenderer *)1?(PPRendererMetrics){cpu_transforms,cpu_transforms,cpu_transforms*2}:r?r->metrics:(PPRendererMetrics){0};}
+bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++direct_window_serial;return true;}
+uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
+bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive && capture_owner==s)capture_owner=NULL;return true;}
+void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
+void pp_surface_inherit_order(PPSurface *s,PPSurface *old) {(void)s;(void)old;}
+bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
+    (void)error;*out=calloc(1,sizeof(**out));CHECK(*out);
+    for(PPSurface *s=surfaces;s;s=s->next)if(s->window_id==id)(*out)->surface=s;
+    CHECK((*out)->surface);return true;
+}
+bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));return *out!=NULL;}
+bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {(void)owner;return pp_renderer_create_for_window(out,id,error);}
+bool pp_shared_texture_create(PPRenderer *owner,const PPFrame *frame,PPSharedTexture **out,PPError *error) {
+    (void)error;*out=malloc(sizeof(**out));CHECK(*out);(*out)->frame=frame;owner->metrics.source_uploads++;return true;
+}
+bool pp_renderer_bind_shared(PPRenderer *r,PPSharedTexture *texture,uint64_t id,uint64_t revision,PPError *error) {
+    (void)error;r->content_id=id;r->revision=revision;r->surface->source_width=texture->frame->width;
+    r->surface->red=texture->frame->pixels[0];r->surface->blue=texture->frame->pixels[2];return true;
+}
+void pp_shared_texture_destroy(PPSharedTexture *texture){free(texture);}
+bool pp_renderer_upload_source(PPRenderer *r,const PPFrame *frame,uint64_t id,uint64_t revision,PPError *error) {
+    (void)error;if(r->content_id==id&&r->revision==revision)return true;
+    r->surface->source_width=frame->width;r->surface->red=frame->pixels[0];r->surface->blue=frame->pixels[2];
+    for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++) {
+      const uint8_t *pixel=frame->pixels+(size_t)y*frame->stride+x*4;
+      if(pixel[3]==255){r->surface->red=pixel[0];r->surface->blue=pixel[2];y=frame->height;break;}
+    }
+    r->content_id=id;r->revision=revision;r->metrics.source_uploads++;return true;
+}
+bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,double opacity,double density,PPError *error) {
+    (void)layout;(void)size;(void)angle;(void)opacity;(void)density;
+    if(r->surface==fail_surface){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct presentation failure"};return false;}
+    r->metrics.transform_draws++;return true;
+}
+bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect source_rect,double size,double angle,double opacity,double density,PPError *error) {
+  (void)source_rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
+}
 bool pp_renderer_transform(PPRenderer *r, const PPFrame *source, double longest,
                            double angle, double opacity, double scale,
                            PPFrame *out, PPError *error) {
+  cpu_transforms++;
   (void)r;
   (void)opacity;
   (void)error;
@@ -129,6 +184,19 @@ void pp_frame_destroy(PPFrame *f) {
   free(f->content_alpha);
   *f = (PPFrame){0};
 }
+bool pp_renderer_transform_source(PPRenderer *r,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
+  (void)r;(void)opacity;(void)error;cpu_transforms++;int w,h;CHECK(pp_geometry_source_extent(layout,rect,longest,angle,scale,&w,&h));
+  *out=(PPFrame){calloc((size_t)w*h,4),calloc((size_t)w*h,1),w,h,(size_t)w*4};source_width=source->width;
+  for(int y=0;y<source->height;y++)for(int x=0;x<source->width;x++) {
+    const uint8_t *pixel=source->pixels+(size_t)y*source->stride+x*4;
+    if(pixel[3]==255){out->pixels[0]=pixel[0];out->pixels[2]=pixel[2];return true;}
+  }
+  return true;
+}
+bool pp_renderer_transform_color_source(PPRenderer *r,const PPFrame *source,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
+  bool ok=pp_renderer_transform_source(r,source,layout,rect,longest,angle,opacity,scale,out,error);
+  free(out->content_alpha);out->content_alpha=NULL;return ok;
+}
 
 static void step(PPRuntime *r, PPSurface *s, PPPlatformEventKind kind, double x,
                  double y, double t) {
@@ -145,6 +213,14 @@ static PPSurface *sprite(uint64_t id) {
     if (s->id == id)
       return s;
   return NULL;
+}
+static void settle_worker(PPRuntime *runtime,double now) {
+  unsigned idle=0;
+  for(int i=0;i<5000&&idle<2;i++) {
+    SDL_Delay(1);pp_runtime_tick(runtime,now);
+    idle=pp_runtime_presentation_metrics(runtime).worker_pending_jobs?0:idle+1;
+  }
+  CHECK(idle==2);
 }
 static uint64_t pull(PPRuntime *r, double now) {
   pointer = (PPVec2){8, 8};
@@ -265,6 +341,7 @@ static void test_runtime_ownership(void) {
       pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->default_id ==
       arrow.id);
   pp_runtime_tick(r, 6.01);
+  settle_worker(r,6.01);
   CHECK(sprite(a)->red == 255 && sprite(a)->blue == 0);
   pp_drawer_close(r->drawer);
   r->drawer = NULL;
@@ -338,6 +415,7 @@ static void test_failure_isolation(void) {
   pp_project_destroy(arrows);
   CHECK(pp_runtime_create(&r, app, &error));
   uint64_t a = pull(r, 20), b = pull(r, 21);
+  settle_worker(r,21.1);
   PPSurface *sa = sprite(a), *sb = sprite(b);
   PPPose before = pp_scene_get(pp_app_scene(app), a)->pose;
   PPRect bitmap = sa->bounds;
@@ -363,9 +441,36 @@ static void test_failure_isolation(void) {
   pp_runtime_tick(r, 23);
   CHECK(!memcmp(&pp_scene_get(pp_app_scene(app), a)->pose, &before,
                 sizeof(before)));
-  /* Distinct native failure after candidate allocation: remove only the
-   * failed sprite and release both candidate and previous DIB charges. */
+  /* The 96 x 96 arrow endpoint has one RGBA + alpha charge shared by equal
+   * consumers. Compatibility windows also retain a private RGBA native copy. */
+  PPContentSources *sources=pp_app_content_sources(app,&error);
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  PPItemSnapshot *snapshot=pp_scene_get(pp_app_scene(app),b)->snapshot;
+  const PPFrame *canonical=NULL;double next;
+  CHECK(pp_item_snapshot_frame(snapshot,0,1,&canonical,&next,&error));
+  size_t canonical_bytes=canonical->stride*(size_t)canonical->height;
+  uint8_t *canonical_pixels=malloc(canonical_bytes);CHECK(canonical_pixels);
+  memcpy(canonical_pixels,canonical->pixels,canonical_bytes);
+  size_t before_observer=pp_assets_external_raster_bytes(pp_app_assets(app));
+  PPContentConsumer *observer=NULL;PPContentFrame shared={0};
+  CHECK(pp_content_consumer_create(sources,&observer,&error));
+  CHECK(pp_content_frame(observer,snapshot,96,1,0,&shared,&next,&error));
+  pp_content_accept(observer);
+  CHECK(shared.frame&&shared.frame->width==96&&shared.frame->height==96);
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==before_observer);
+  const PPFrame *shared_frame=shared.frame;
+  uint8_t shared_pixels[36864];memcpy(shared_pixels,shared.frame->pixels,sizeof(shared_pixels));
+  uint8_t shared_alpha[9216];memcpy(shared_alpha,shared.frame->content_alpha,sizeof(shared_alpha));
+  CHECK(sa->bounds.w==96&&sa->bounds.h==96);
+  CHECK(sb->red==255&&sb->blue==0);
+  PPRect sibling_bounds=sb->bounds;
+  step(r,sb,PP_EVENT_BUTTON_DOWN,320,210,23.1);
+  CHECK(capture_owner==sb);
+  unsigned releases=capture_releases;
   size_t charged = pp_assets_external_raster_bytes(pp_app_assets(app));
+  size_t gpu_charged=pp_runtime_gpu_resources(r).retained_bytes;
+  bool was_direct=sa->window_id!=0;
   fail_surface = sa;
   pp_runtime_event(r, &(PPPlatformEvent){.surface = sa,
                                          .instance_id = a,
@@ -377,8 +482,21 @@ static void test_failure_isolation(void) {
   CHECK(!r->failed && !sprite(a) && sprite(b) == sb);
   CHECK(!pp_scene_get(pp_app_scene(app), a) &&
         pp_scene_get(pp_app_scene(app), b));
-  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app)) < charged);
-  CHECK(strstr(pp_app_diagnostic(app), "Injected presentation failure"));
+  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==charged-(was_direct?0:36864));
+  CHECK(pp_runtime_gpu_resources(r).retained_bytes==gpu_charged-(was_direct?36864:0));
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  CHECK(pp_content_frame(observer,snapshot,96,1,0,&shared,&next,&error));
+  CHECK(shared.frame==shared_frame);
+  CHECK(!memcmp(shared.frame->pixels,shared_pixels,sizeof(shared_pixels)));
+  CHECK(!memcmp(shared.frame->content_alpha,shared_alpha,sizeof(shared_alpha)));
+  const PPFrame *after_canonical=NULL;
+  CHECK(pp_item_snapshot_frame(snapshot,0,1,&after_canonical,&next,&error));
+  CHECK(after_canonical==canonical&&!memcmp(after_canonical->pixels,canonical_pixels,canonical_bytes));
+  free(canonical_pixels);
+  CHECK(sb->red==255&&sb->blue==0&&!memcmp(&sb->bounds,&sibling_bounds,sizeof(sibling_bounds)));
+  CHECK(capture_owner==sb&&capture_releases==releases);
+  CHECK(strstr(pp_app_diagnostic(app), "presentation failure"));
+  step(r,sb,PP_EVENT_BUTTON_UP,320,210,24.3);CHECK(!capture_owner);
   pointer = (PPVec2){8, 8};
   pp_runtime_tick(r, 25);
   for (PPSurface *preview = surfaces; preview; preview = preview->next)
@@ -393,8 +511,20 @@ static void test_failure_isolation(void) {
   pp_runtime_tick(r, 25.02);
   fail_surface = NULL;
   CHECK(!r->failed && sprite(b) == sb && pp_scene_get(pp_app_scene(app), b));
+  pp_content_consumer_destroy(observer);
   pp_runtime_destroy(r);
   CHECK(!surfaces);
+  CHECK(!pp_content_sources_raster_bytes(sources)&&!pp_content_gpu_resources(sources).retained_bytes);
+  pp_scene_clear(pp_app_scene(app));
+  for(int anchor=0;anchor<PP_ANCHOR_COUNT;anchor++) {
+    const PPAnchorList *list=pp_project_anchor(pp_app_project(app),(PPAnchor)anchor);
+    while(list->count) {
+      CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_REMOVE_ITEM,
+        .anchor=(PPAnchor)anchor,.item_id=list->default_id},&error));
+      list=pp_project_anchor(pp_app_project(app),(PPAnchor)anchor);
+    }
+  }
+  CHECK(!pp_assets_external_raster_bytes(pp_app_assets(app)));
   pp_app_destroy(app);
 }
 static void test_external_change_cancels_owned_input(void) {
@@ -418,7 +548,8 @@ static void test_external_change_cancels_owned_input(void) {
       if (content) {
         PPItem replacement =
             *pp_project_target(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
-        replacement.text = "Changed";
+        /* The bundled emoji fallback also covers hosts without Aptos. */
+        replacement.text = "\xf0\x9f\x91\x88";
         CHECK(pp_scene_replace(pp_app_scene(app), a, &replacement, t + .02,
                                &error));
       } else {
@@ -454,7 +585,119 @@ static void test_external_change_cancels_owned_input(void) {
   puts("PASS external pose/content changes cancel accepted press and drag "
        "ownership; unrelated ownership survives");
 }
-int main(void) {
+static void test_png_runtime_reuse_and_generation_cleanup(void) {
+  PPApp *app=NULL;PPRuntime *r=NULL;PPError error={0};
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  FILE *file=fopen(PP_MEDIA_FIXTURES "/alpha.png","rb");CHECK(file);CHECK(!fseek(file,0,SEEK_END));long size=ftell(file);CHECK(size>0);rewind(file);
+  uint8_t *data=malloc((size_t)size);CHECK(data);CHECK(fread(data,1,(size_t)size,file)==(size_t)size);fclose(file);
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1,.id=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT)->id};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){data,(size_t)size},PP_ASSET_PNG,&item.image_asset,&error));free(data);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,.item_id=item.id,.item=&item},&error));
+  CHECK(pp_runtime_create(&r,app,&error));pointer=(PPVec2){8,8};pp_runtime_tick(r,1);
+  PPSurface *preview=NULL;for(PPSurface *s=surfaces;s;s=s->next)if(!s->id&&s->shown&&s->source_width==3)preview=s;CHECK(preview);
+  step(r,preview,PP_EVENT_BUTTON_DOWN,16,16,1.01);step(r,preview,PP_EVENT_POINTER_MOVE,300,200,1.02);step(r,preview,PP_EVENT_BUTTON_UP,300,200,1.03);pp_runtime_tick(r,1.3);
+  CHECK(pp_scene_count(pp_app_scene(app))==1);uint64_t id=pp_scene_at(pp_app_scene(app),0)->id;PPSurface *surface=sprite(id);CHECK(surface&&surface->window_id);
+  PPRendererMetrics warm=pp_runtime_renderer_metrics(r);PPSourceMetrics sources=pp_assets_source_metrics(pp_app_assets(app));
+  pp_runtime_tick(r,2);CHECK(pp_runtime_renderer_metrics(r).transform_draws==warm.transform_draws);
+  step(r,surface,PP_EVENT_BUTTON_DOWN,300,200,2.01);step(r,surface,PP_EVENT_POINTER_MOVE,400,300,2.02);step(r,surface,PP_EVENT_BUTTON_UP,400,300,2.03);pp_runtime_tick(r,2.04);
+  CHECK(sprite(id)==surface && pp_runtime_renderer_metrics(r).transform_draws==warm.transform_draws && pp_runtime_renderer_metrics(r).source_uploads==warm.source_uploads);
+  pp_runtime_event(r,&(PPPlatformEvent){.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=.5,.modifiers=PP_MOD_ALT,.timestamp=3});
+  pp_runtime_tick(r,3.02);pp_runtime_tick(r,3.2);
+  CHECK(pp_runtime_renderer_metrics(r).transform_draws>warm.transform_draws && pp_runtime_renderer_metrics(r).source_uploads==warm.source_uploads && pp_runtime_renderer_metrics(r).readbacks==warm.readbacks);
+  CHECK(pp_assets_source_metrics(pp_app_assets(app)).raster_builds==sources.raster_builds && pp_runtime_gpu_resources(r).retained_bytes==12);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  pointer=(PPVec2){500,500};pp_runtime_tick(r,4);
+  CHECK(!r->failed && pp_scene_count(pp_app_scene(app))==0 && pp_runtime_gpu_resources(r).retained_bytes==0);
+  pp_runtime_destroy(r);CHECK(!surfaces);pp_app_destroy(app);
+  puts("PASS PNG runtime source/texture reuse and project-generation GPU cleanup");
+}
+static void test_svg_runtime_generation_cleanup(void) {
+  PPApp *app=NULL;PPRuntime *r=NULL;PPError error={0};
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  const char *svg="<svg width='13' height='7'><rect x='2' y='1' width='9' height='5' fill='red'/></svg>";
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1,.id=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT)->id};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,.item_id=item.id,.item=&item},&error));
+  CHECK(pp_runtime_create(&r,app,&error));uint64_t id=pull(r,1);
+  for(int i=0;i<2000&&pp_runtime_presentation_metrics(r).worker_pending_jobs;i++){SDL_Delay(1);pp_runtime_tick(r,1.3);}
+  pp_runtime_tick(r,1.3);CHECK(sprite(id)&&sprite(id)->window_id&&sprite(id)->source_width==96);
+  PPPresentationMetrics before=pp_runtime_presentation_metrics(r);PPRendererMetrics renderer=pp_runtime_renderer_metrics(r);
+  uint64_t owner_builds=pp_assets_source_metrics(pp_app_assets(app)).raster_builds;
+  CHECK(before.worker_source_builds==1&&!before.worker_pending_jobs&&pp_runtime_gpu_resources(r).retained_bytes==19968);
+  step(r,sprite(id),PP_EVENT_BUTTON_DOWN,320,210,2);step(r,sprite(id),PP_EVENT_POINTER_MOVE,400,300,2.01);step(r,sprite(id),PP_EVENT_BUTTON_UP,400,300,2.02);pp_runtime_tick(r,2.03);
+  CHECK(pp_runtime_renderer_metrics(r).transform_draws==renderer.transform_draws&&pp_runtime_renderer_metrics(r).source_uploads==renderer.source_uploads);
+  /* Twenty distinct physical targets exercise coalescing; subpixel-equivalent
+   * endpoints now correctly share their requested raster. */
+  for(int i=0;i<20;i++)pp_runtime_event(r,&(PPPlatformEvent){.surface=sprite(id),.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=.125,.modifiers=PP_MOD_ALT,.timestamp=3+i*.001});
+  CHECK(pp_runtime_presentation_metrics(r).worker_requests==before.worker_requests+20&&pp_runtime_presentation_metrics(r).worker_pending_jobs<=2);
+  pp_runtime_tick(r,3.04);CHECK(pp_assets_source_metrics(pp_app_assets(app)).raster_builds==owner_builds);
+  PPRasterWorker *service=r->worker;
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  pointer=(PPVec2){500,500};pp_runtime_tick(r,4);
+  CHECK(!r->failed&&!capture_owner&&!pp_scene_count(pp_app_scene(app))&&!pp_runtime_gpu_resources(r).retained_bytes&&r->worker==service);
+  CHECK(!pp_raster_worker_status(service).reserved_bytes);
+  for(int i=0;i<2000&&pp_raster_worker_status(service).pending_jobs;i++){SDL_Delay(1);pp_runtime_tick(r,4);}
+  pp_runtime_tick(r,4);CHECK(!pp_raster_worker_status(service).pending_jobs&&!pp_raster_worker_status(service).reserved_bytes);
+  pp_runtime_destroy(r);CHECK(!surfaces&&!capture_owner);pp_app_destroy(app);
+  puts("PASS SVG runtime translation reuse, immediate bounded targets and project-generation cancellation keep one service and release owner CPU/GPU/input");
+}
+static void test_app_source_owner_survives_runtime_and_project_epochs(void) {
+  PPApp *app=NULL;PPRuntime *runtime=NULL;PPError error={0};
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  PPContentSources *sources=pp_app_content_sources(app,&error);CHECK(sources);
+  PPContentConsumer *preview=NULL;CHECK(pp_content_consumer_create(sources,&preview,&error));
+  const PPItem *item=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT);
+  PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(app),item->id);uint64_t revision=pp_item_snapshot_content_id(snapshot);
+  PPContentFrame source={0};double next;
+  CHECK(pp_content_frame(preview,snapshot,48,1,0,&source,&next,&error));CHECK(source.content_id==revision&&source.frame);
+  CHECK(pp_runtime_create(&runtime,app,&error));pointer=(PPVec2){500,500};pp_runtime_tick(runtime,1);CHECK(!runtime->failed);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));pp_runtime_tick(runtime,2);CHECK(!runtime->failed);
+  CHECK(pp_app_content_sources(app,&error)==sources);pp_runtime_destroy(runtime);runtime=NULL;
+  CHECK(pp_app_content_sources(app,&error)==sources);
+  for(int i=0;i<2000&&pp_raster_worker_status(pp_content_sources_worker(sources)).pending_jobs;i++){SDL_Delay(1);pp_content_sources_poll(sources);}
+  pp_content_sources_poll(sources);CHECK(pp_content_frame(preview,snapshot,48,1,0,&source,&next,&error));
+  CHECK(source.content_id==revision&&source.frame&&source.layout.x==pp_item_snapshot_size(snapshot).x);
+  pp_content_accept(preview);pp_content_consumer_destroy(preview);pp_item_snapshot_release(snapshot);pp_app_destroy(app);CHECK(!surfaces);
+  puts("PASS standalone preview source owner survives runtime closure and project replacement until app shutdown");
+}
+static void test_rejected_source_is_repreparable_by_new_consumer(void) {
+  PPAssets *assets=NULL;PPContentSources *sources=NULL;PPItemSnapshot *snapshot=NULL;PPError error={0};
+  CHECK(pp_assets_create(&assets,&error));CHECK(pp_content_sources_create(&sources,assets,&error));
+  const char *svg="<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>";
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+  CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)svg,strlen(svg)},PP_ASSET_SVG,&item.image_asset,&error));
+  CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
+  PPContentConsumer *a=NULL,*b=NULL;CHECK(pp_content_consumer_create(sources,&a,&error));
+  CHECK(pp_content_request(a,snapshot,96,1.5,&error));PPRasterWorker *worker=pp_content_sources_worker(sources);
+  for(int i=0;i<2000&&pp_raster_worker_status(worker).pending_jobs;i++)SDL_Delay(1);
+  pp_content_sources_poll(sources);const PPTextResult *candidate=pp_content_candidate(a,NULL);
+  CHECK(candidate&&candidate->frame.width==144&&candidate->frame.height==80);
+  CHECK(pp_content_gpu_reserve(sources,PP_RETAINED_GPU_LIMIT,&error));pp_content_reject(a);
+  CHECK(!pp_content_candidate(a,NULL));
+  for(int i=0;i<3;i++)CHECK(pp_content_request(a,snapshot,96,1.5,&error));
+  CHECK(pp_raster_worker_status(worker).requests==1&&!pp_content_candidate(a,NULL));
+  pp_content_gpu_release(sources,PP_RETAINED_GPU_LIMIT);
+  CHECK(pp_content_consumer_create(sources,&b,&error));CHECK(pp_content_request(b,snapshot,96,1.5,&error));
+  for(int i=0;i<2000&&pp_raster_worker_status(worker).pending_jobs;i++)SDL_Delay(1);
+  pp_content_sources_poll(sources);candidate=pp_content_candidate(b,NULL);
+  CHECK(candidate&&candidate->frame.width==144&&candidate->frame.height==80);
+  CHECK(pp_raster_worker_status(worker).requests==2&&pp_raster_worker_status(worker).source_builds==2);
+  CHECK(!pp_content_candidate(a,NULL));
+  pp_content_accept(b);pp_content_consumer_destroy(a);pp_content_consumer_destroy(b);
+  pp_content_sources_destroy(sources);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  puts("PASS a new consumer prepares an equal rejected-empty endpoint while the prior owner suppresses repeated attempts");
+}
+int main(int argc,char **argv) {
+  if(argc==2&&!strcmp(argv[1],"--failure-isolation")){test_failure_isolation();return 0;}
+  test_rejected_source_is_repreparable_by_new_consumer();
+  test_app_source_owner_survives_runtime_and_project_epochs();
+#if defined(_WIN32) && !defined(PP_TEST_COMPAT_PRESENTATION)
+  if(argc==2&&!strcmp(argv[1],"--svg")){test_svg_runtime_generation_cleanup();return 0;}
+  test_svg_runtime_generation_cleanup();
+  test_png_runtime_reuse_and_generation_cleanup();
+#endif
   test_runtime_ownership();
   test_failure_isolation();
   test_external_change_cancels_owned_input();

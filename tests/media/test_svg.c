@@ -1,7 +1,55 @@
 #include "pointy/assets.h"
 #include "../test.h"
 #include <string.h>
+#include <stdlib.h>
+static bool import(PPAssets *,const char *,PPAssetId *,PPError *);
+static void test_fractional_svg_viewport(void) {
+    PPAssets *assets=NULL;PPError error={0};PPAssetId id;CHECK(pp_assets_create(&assets,&error));
+    CHECK(import(assets,"<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>",&id,&error));
+    PPAsset *asset=pp_asset_retain(assets,id);PPVec2 viewport=pp_asset_intrinsic_size(asset);
+    CHECK(viewport.x==13.5&&viewport.y==7.5);
+    const PPFrame *frame=pp_asset_cached_svg(asset);CHECK(frame&&frame->width==14&&frame->height==8);
+    CHECK(frame->pixels[0]==255&&frame->content_alpha[0]==255);
+    pp_asset_release(asset);pp_assets_destroy(assets);
+    puts("PASS fractional SVG viewport remains canonical independently of rounded cached pixel dimensions");
+}
+static void test_isolated_requested_svg(void) {
+    const char *svg="<svg width='13' height='7' viewBox='0 0 13 7'><rect x='2' y='1' width='9' height='5' fill='red' fill-opacity='.5'/></svg>";
+    PPBytes bytes={(const uint8_t *)svg,strlen(svg)};PPFrame owned={0};PPError error={0};
+    const size_t output=130u*70*5,scratch=130u*70*9;
+    CHECK(!pp_svg_render_bounded(bytes,130,70,output-1,scratch,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT&&!owned.pixels);
+    CHECK(!pp_svg_render_bounded(bytes,130,70,output,scratch-1,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT&&!owned.pixels);
+    CHECK(pp_svg_render_bounded(bytes,130,70,output,scratch,&owned,&error));
+    CHECK(owned.width==130&&owned.height==70&&owned.content_alpha[0]==0);
+    size_t inside=35u*130+65;CHECK(owned.content_alpha[inside]>=127&&owned.content_alpha[inside]<=128);
+    CHECK(owned.pixels[inside*4]==owned.content_alpha[inside]&&owned.pixels[inside*4+1]==0&&owned.pixels[inside*4+2]==0);
+    PPAssets *assets=NULL;PPAssetId id;CHECK(pp_assets_create(&assets,&error));CHECK(import(assets,svg,&id,&error));
+    PPAsset *asset=pp_asset_retain(assets,id);const PPFrame *fresh=NULL;double next;
+    CHECK(pp_asset_frame(asset,0,130,70,&fresh,&next,&error));
+    CHECK(!memcmp(fresh->pixels,owned.pixels,output/5*4)&&!memcmp(fresh->content_alpha,owned.content_alpha,output/5));
+    CHECK(pp_asset_frame(asset,0,26,14,&fresh,&next,&error));
+    CHECK(owned.width==130&&owned.pixels[inside*4]==owned.content_alpha[inside]);
+    pp_asset_release(asset);pp_assets_destroy(assets);free(owned.pixels);free(owned.content_alpha);owned=(PPFrame){0};
+    const char *unsupported="<svg width='8' height='4'><g opacity='.5'><rect width='8' height='4'/></g></svg>";
+    CHECK(!pp_svg_render_bounded((PPBytes){(const uint8_t *)unsupported,strlen(unsupported)},8,4,160,288,&owned,&error)&&error.code==PP_ERROR_FORMAT&&!owned.pixels);
+    CHECK(!pp_svg_render_bounded(bytes,8193,1,100000,100000,&owned,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT);
+    puts("PASS immutable SVG renders only requested owned pixels, preserves restrictions, and bounds exact ARGB/output overlap before allocation");
+}
 static bool import(PPAssets *assets,const char *s,PPAssetId *id,PPError *e) { return pp_asset_import(assets,(PPBytes){(const uint8_t *)s,strlen(s)},PP_ASSET_SVG,id,e); }
+static void test_source_rebuild_observations(void) {
+    PPAssets *assets=NULL; PPError e={0}; PPAssetId id;
+    CHECK(pp_assets_create(&assets,&e));
+    CHECK(import(assets,"<svg width='8' height='4'><rect width='8' height='4' fill='red'/></svg>",&id,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    PPAsset *a=pp_asset_retain(assets,id); const PPFrame *f; double next;
+    CHECK(pp_asset_frame(a,0,8,4,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    CHECK(pp_asset_frame(a,0,32,16,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==2);
+    CHECK(!pp_asset_frame(a,0,8193,16,&f,&next,&e));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==2);
+    pp_asset_release(a); pp_assets_destroy(assets);
+}
 static void test_svg_validation(void) {
     PPAssets *assets; PPError e={0}; PPAssetId id; CHECK(pp_assets_create(&assets,&e));
     const char *valid="<svg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'><metadata><note>owned</note></metadata><defs><linearGradient id='paint'><stop offset='0' stop-color='red'/><stop offset='1' stop-color='blue'/></linearGradient><path id='p' d='M0 0L4 0L4 4L0 4Z'/></defs><g transform='translate(2 2)'><use href='#p' fill='url(#paint)'/><rect x='8' y='0' width='2' height='2'/><circle cx='8' cy='8' r='2'/><ellipse cx='2' cy='8' rx='1' ry='2'/><polygon points='0,12 4,12 2,14'/><polyline points='6,12 8,14 10,12' fill='none' stroke='black'/><line x1='12' y1='8' x2='12' y2='12' stroke='black'/></g></svg>";
@@ -75,6 +123,6 @@ int main(int argc,char **argv) {
     if(argc==2 && !strcmp(argv[1],"--opacity")) test_svg_opacity_semantics();
     else if(argc==2 && !strcmp(argv[1],"--paint")) test_svg_paint_value_grammar();
     else if(argc==2 && !strcmp(argv[1],"--numeric")) test_svg_numeric_paint_grammar();
-    else { test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
+    else { test_fractional_svg_viewport(); test_isolated_requested_svg(); test_source_rebuild_observations(); test_svg_validation(); test_svg_opacity_semantics(); test_svg_paint_value_grammar(); test_svg_numeric_paint_grammar(); }
     puts("PASS SVG: supported rendering and paint grammar; unsupported opacity compositing and paint values rejected."); return 0;
 }

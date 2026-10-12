@@ -3,6 +3,7 @@
 #include "pointy/scene.h"
 
 typedef struct PPApp PPApp;
+typedef struct PPContentSources PPContentSources;
 typedef enum PPCommandKind {
   PP_COMMAND_NEW,
   PP_COMMAND_OPEN,
@@ -79,6 +80,9 @@ bool pp_app_command(PPApp *app, const PPCommand *command, PPError *error);
  * across clears. */
 const PPProject *pp_app_project(const PPApp *app);
 PPAssets *pp_app_assets(PPApp *app);
+/* Borrowed app-lifetime source owner, usable by standalone Settings/drawers.
+ * It outlives all runtime presenters and project epochs. Main thread only. */
+PPContentSources *pp_app_content_sources(PPApp *app,PPError *error);
 PPScene *pp_app_scene(PPApp *app);
 const char *pp_app_path(const PPApp *app);
 const char *pp_app_name(const PPApp *app);

@@ -2,6 +2,20 @@
 #include <math.h>
 #include <stdlib.h>
 PPSurface *pp_mac_surfaces;
+void pp_surface_set_rectangular(PPSurface *surface,bool enabled) {if(surface) surface->rectangular=enabled;}
+void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous) {
+    if(replacement && previous && previous->panel.visible)
+        [replacement->panel orderWindow:NSWindowBelow relativeTo:previous->panel.windowNumber];
+}
+bool pp_surface_create_gl(PPSurface **out,PPError *error) {
+    if(out) *out=NULL;
+    return pp_mac_error(error,PP_ERROR_PLATFORM,"Direct OpenGL native behavior is unverified on macOS; use the compatibility surface");
+}
+uint32_t pp_surface_window_id(const PPSurface *surface) {(void)surface;return 0;}
+bool pp_surface_place_gl(PPSurface *surface,PPRect bounds,bool interactive,PPError *error) {
+    (void)bounds;(void)interactive;pp_surface_hide(surface);
+    return pp_mac_error(error,PP_ERROR_PLATFORM,"Direct OpenGL native behavior is unverified on macOS");
+}
 @implementation PPFrameView
 - (BOOL)isFlipped { return YES; }
 - (BOOL)isOpaque { return NO; }
@@ -89,7 +103,7 @@ bool pp_surface_create(PPSurface **out,PPError *error) {
 }
 static void free_pixels(void *info,const void *data,size_t size) { (void)info;(void)size;free((void *)data); }
 bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect b,PPError *error) {
-    if(!s || !s->window || !frame || !frame->pixels || !frame->content_alpha ||
+    if(!s || !s->window || !frame || !frame->pixels || (!s->rectangular&&!frame->content_alpha) ||
        frame->width<=0 || frame->height<=0 || frame->width>8192 || frame->height>8192 ||
        frame->stride<(size_t)frame->width*4 || !isfinite(b.x)||!isfinite(b.y)||!isfinite(b.w)||!isfinite(b.h)||b.w<=0||b.h<=0) {
         release_native(s); return pp_mac_error(error,PP_ERROR_ARGUMENT,"Invalid Cocoa frame or bounds");
@@ -104,8 +118,8 @@ bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect b,PPError *erro
     CGImageRef image=CGImageCreate(frame->width,frame->height,8,32,(size_t)frame->width*4,color,
         kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big,provider,NULL,false,kCGRenderingIntentDefault);
     CGColorSpaceRelease(color); CGDataProviderRelease(provider);
-    SDL_Surface *shape=SDL_CreateSurfaceFrom(frame->width,frame->height,SDL_PIXELFORMAT_RGBA32,frame->pixels,(int)frame->stride);
-    bool ok=image && shape && SDL_SetWindowShape(s->window,shape);
+    SDL_Surface *shape=s->rectangular?NULL:SDL_CreateSurfaceFrom(frame->width,frame->height,SDL_PIXELFORMAT_RGBA32,frame->pixels,(int)frame->stride);
+    bool ok=image && (s->rectangular?SDL_SetWindowShape(s->window,NULL):(shape && SDL_SetWindowShape(s->window,shape)));
     SDL_DestroySurface(shape);
     if(!ok) {if(image)CGImageRelease(image);release_native(s);return pp_mac_error(error,PP_ERROR_PLATFORM,"Cannot present Cocoa alpha shape");}
     bool visible=s->panel.visible;

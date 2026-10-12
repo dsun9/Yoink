@@ -18,6 +18,7 @@ struct PPSurface {
     PPRect bounds;
     uint64_t instance_id;
     struct PPSurface *next;
+    bool rectangular;
 };
 extern PPSurface *pp_mac_surfaces;
 NSWindow *pp_mac_window(uint32_t id);

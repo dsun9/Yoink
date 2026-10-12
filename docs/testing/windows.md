@@ -1,5 +1,57 @@
 # Windows acceptance
 
+## Retained preview integration
+
+[Ticket #10 preview checks](preview-retention.md) record shared source/cache/
+clock ownership, actual Settings/drawer alpha/rollback/context checks and direct
+anchor/native flow coverage. Native bounds include transparent padding/holes;
+only original input outside the rectangle passes through. The six-test retained
+consumer run and separate two-test anchor/flow run passed with exact supervisor
+foreground/cursor/input restoration. Earlier 22 white first-use observations
+remain unresolved history; the passing clean baseline does not establish a
+remedy. Full warm/input/sharp timing and compositor cadence remain ticket #11.
+
+## Default emoji font checks for issue 2
+
+`default_fonts` controls only installed-font acquisition at the production
+font/content boundary. Its original OFL collection has synthetic Aptos and
+Segoe UI Emoji family names at different face indices. The test checks selected
+artwork, independent text selection, the missing-Segoe Noto diagnostic, actual
+artwork capabilities, selected-font notices and portable ownership. It does
+not require a Windows font in hosted CI.
+
+`default_emoji` runs the same pipeline against an installed Segoe UI Emoji.
+It skips with code 77 when the family is unavailable. Native Windows acceptance
+requires the explicit command below, which fails when Segoe is unavailable:
+
+```powershell
+build/windows-release/Release/pointy_default_emoji_probe.exe --require-installed
+```
+
+The probe uses actual default-project acquisition and renders the pointing hand,
+skin-tone hand, VS16 heart, joined woman technologist, keycap, mixed multiline
+text and regional indicators at 96 DIP and 150% drawable density. It reports
+the font version, selected collection face, outline/bitmap/color-layer
+capabilities and embedding permissions, then saves BMP evidence in the build
+directory. It also saves and reopens a project into fresh assets and compares
+the default-hand raster exactly. Its temporary project is removed afterward;
+font bytes remain private document data and never enter application resources.
+
+On the 2026-10-11 Windows host, production checks selected Segoe UI Emoji
+Version 1.70, face 0 of 1, with scalable outlines, no fixed bitmap strikes,
+supported color layers and a COLR version 1 table. The font permits editable
+embedding. All six colored scenarios rendered through the production pipeline
+with zero missing glyphs. The US regional-indicator sequence shaped to two
+glyphs, IDs 293 and 291, and rendered separate monochrome letters without a
+missing-glyph diagnostic. No sequence-specific fallback was added. A default
+hand reopened with identical premultiplied pixels from privately owned embedded
+bytes. Exact native COLRv1 paint parity remains unverified.
+
+These checks perform font acquisition, source rendering and portable storage.
+They do not initialize SDL video, draw to GL windows, manipulate desktop input
+or establish presentation latency, large-size quality or compositor frame rate.
+The complete presentation/performance gates are recorded separately for issue 1.
+
 Task 11 was validated on Windows 11 Pro build 26200, Ryzen 7 7800X3D
 (8 cores / 16 logical processors), RTX 5090 driver 32.0.16.1062, and one
 3840×2160 display at 150%. No second physical display or Mac is available.
@@ -23,6 +75,10 @@ The wrapper has a 180-second outer timeout and kills only its owned test tree.
 Focused diagnostics can select `-TestRegex '^sprite_flow$'` and a distinct
 `-LogPrefix`; preserve original failed-run evidence instead of overwriting logs.
 No test restarts or terminates the user's Explorer process.
+
+The opt-in [bounded Release rendering acceptance protocol](rendering-performance.md)
+measures repeated complete presentation, native input arrival, and sharp
+publication separately. Its initial failing baseline is recorded there.
 `-Configuration Release` selects `windows-release`; Debug selects `windows-dev`.
 
 ## Task 11 evidence before the final fix wave

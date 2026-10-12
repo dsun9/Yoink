@@ -1,7 +1,8 @@
 # Optional scalable emoji
 
 `Twemoji.Mozilla-v0.7.0.ttf` is an optional color font with scalable COLR0
-artwork. It changes the emoji design to Twemoji 14. Noto remains the default,
+artwork. It changes the emoji design to Twemoji 14. Installed Segoe UI Emoji is
+the default, with bundled Noto when Segoe is unavailable,
 and opening an existing project retains its saved font bytes and appearance.
 
 ## Open the example
@@ -35,7 +36,7 @@ raw font import when sharing them.
 
 Scalable outlines retain edge detail when enlarged. This font has different
 artwork and older coverage than bundled Noto Color Emoji v2.051; unsupported
-sequences may use Noto or display separate/missing glyphs. Noto's existing
+sequences may use the item's retained emoji fallback or display separate/missing glyphs. Noto's existing
 bitmap font still has its original source-resolution limit.
 
 On the measured Windows CLion Debug build, a 1536 DIP hand at 150% density

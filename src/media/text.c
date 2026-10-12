@@ -10,14 +10,24 @@
 typedef struct PPTextInspection {
     TTF_Font *fallback;
     PPTextDiagnostics *diagnostics;
+    size_t max_glyph_bytes;
+    bool scratch_rejected;
 } PPTextInspection;
 
 static bool SDLCALL inspect_operations(void *userdata, TTF_Text *text) {
     PPTextInspection *inspection = userdata;
     bool previous_fallback = false;
+    size_t glyph_bytes=0;
     for (int i = 0; i < text->internal->num_ops; i++) {
         const TTF_DrawOperation *op = &text->internal->ops[i];
         if (op->cmd != TTF_DRAW_COMMAND_COPY) continue;
+        if(op->copy.src.w>0&&op->copy.src.h>0) {
+            size_t bytes=(size_t)op->copy.src.w*op->copy.src.h*4;
+            if(bytes>inspection->max_glyph_bytes || glyph_bytes>inspection->max_glyph_bytes-bytes) {
+                inspection->scratch_rejected=true;return SDL_SetError("Bounded text exceeds 16 MiB of shaped glyph scratch");
+            }
+            glyph_bytes+=bytes;
+        }
         bool fallback = op->copy.glyph_font == inspection->fallback;
         if (fallback && !previous_fallback) inspection->diagnostics->fallback_runs++;
         if (op->copy.glyph_index == 0) inspection->diagnostics->missing_glyphs++;
@@ -113,8 +123,8 @@ static bool has_non_whitespace(const char *text) {
     return false;
 }
 
-bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
-        double scale, PPFrame *out, PPTextDiagnostics *diagnostics, PPError *error) {
+static bool render(PPAssets *assets, const char *utf8, const PPTextStyle *style,
+        double scale,size_t max_bytes, PPFrame *out,PPTextResult *result, PPTextDiagnostics *diagnostics, PPError *error) {
     PPTextDiagnostics local = {0};
     if (!diagnostics) diagnostics = &local;
     memset(diagnostics, 0, sizeof(*diagnostics));
@@ -150,10 +160,12 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
      * at that strike's em size, then scale bitmap operations while rasterizing
      * outlines at destination size.
      * This preserves mixed advances, baselines, colors, and whole clusters. */
-    double render_size = size;
+    double render_size = result?style->font_size_dip:size;
     PPFontInfo info;
     if (fallback_asset) {
         if (!pp_font_inspect(pp_asset_source(fallback_asset), style->fallback_face, &info, error)) goto done;
+        diagnostics->default_emoji_fallback = style->default_emoji_fallback &&
+            !SDL_strcasecmp(info.family, "Noto Color Emoji");
         if (info.bitmap_em_size > 0) render_size = info.bitmap_em_size;
     }
     if (primary_asset) {
@@ -177,7 +189,7 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
         (!primary || SDL_strcasecmp(style->requested_family, TTF_GetFontFamilyName(primary))))
         diagnostics->missing_requested_families = 1;
     /* Hand the full string to HarfBuzz/SDL_ttf: do not split clusters or ZWJ. */
-    PPTextInspection inspection = {fallback, diagnostics};
+    PPTextInspection inspection = {fallback, diagnostics, max_bytes==SIZE_MAX?SIZE_MAX:16u*1024*1024};
     TTF_TextEngine engine;
     SDL_INIT_INTERFACE(&engine);
     engine.userdata = &inspection;
@@ -186,14 +198,19 @@ bool pp_text_render(PPAssets *assets, const char *utf8, const PPTextStyle *style
     text = TTF_CreateText(&engine, font, utf8, 0);
     int width = 0, height = 0;
     if (!text || !TTF_GetTextSize(text, &width, &height) || !TTF_UpdateText(text)) {
-        pp_media_error(error, PP_ERROR_RENDER, SDL_GetError());
+        pp_media_error(error, inspection.scratch_rejected?PP_ERROR_RESOURCE_LIMIT:PP_ERROR_RENDER, SDL_GetError());
         goto done;
     }
     PPTextRasterFont fonts[2] = {
         {primary, pp_asset_source(primary_asset), style->primary_face},
         {fallback, pp_asset_source(fallback_asset), style->fallback_face}
     };
-    if (!pp_text_raster(text, fonts, render_size, size, style->color, out, error)) goto done;
+    if(!pp_text_artwork(text,fonts,render_size,style->font_size_dip,&diagnostics->artwork,error)) goto done;
+    if(result && !pp_text_raster_measure_bounded(text,fonts,render_size,style->font_size_dip,max_bytes,
+        &result->layout_size,&result->layout_origin,error)) goto done;
+    if (!pp_text_raster_bounded(text,fonts,render_size,size,style->color,max_bytes,out,
+        result?&result->raster_origin_px:NULL,error)) goto done;
+    if(result) {result->artwork=diagnostics->artwork;result->raster_density=scale;}
     size_t n = (size_t)out->width * out->height;
     for (size_t i = 0; i < n; i++) {
         if (out->content_alpha[i]) { ok = true; break; }
@@ -212,5 +229,19 @@ done:
     if (initialized) TTF_Quit();
     pp_asset_release(primary_asset);
     pp_asset_release(fallback_asset);
+    if (ok) assets->metrics.raster_builds++;
     return ok;
+}
+bool pp_text_render(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,PPFrame *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    return render(assets,utf8,style,scale,SIZE_MAX,out,NULL,diagnostics,error);
+}
+bool pp_text_render_result_bounded(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,size_t max_bytes,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    if(!out) return pp_media_error(error,PP_ERROR_ARGUMENT,"Missing text result");
+    return render(assets,utf8,style,scale,max_bytes,&out->frame,out,diagnostics,error);
+}
+bool pp_text_render_result(PPAssets *assets,const char *utf8,const PPTextStyle *style,
+        double scale,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    return pp_text_render_result_bounded(assets,utf8,style,scale,SIZE_MAX,out,diagnostics,error);
 }

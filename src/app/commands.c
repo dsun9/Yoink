@@ -1,4 +1,5 @@
 #include "app_internal.h"
+#include "pointy/content.h"
 #include "pointy/platform.h"
 #include "pointy/project_store.h"
 #include <SDL3/SDL.h>
@@ -15,6 +16,11 @@ char *pp_app_copy(const char *text) {
   if (copy)
     memcpy(copy, text, size);
   return copy;
+}
+PPContentSources *pp_app_content_sources(PPApp *app,PPError *error) {
+  if(!app)return NULL;
+  if(!app->sources&&!pp_content_sources_create(&app->sources,app->assets,error))return NULL;
+  return app->sources;
 }
 bool pp_app_error(PPError *error, int code, const char *message) {
   if (error) {
@@ -42,6 +48,7 @@ static bool same_item(const PPItem *a, const PPItem *b) {
                  sizeof(PPAssetId)) &&
          a->text_style.primary_face == b->text_style.primary_face &&
          a->text_style.fallback_face == b->text_style.fallback_face &&
+         a->text_style.default_emoji_fallback == b->text_style.default_emoji_fallback &&
          a->text_style.font_size_dip == b->text_style.font_size_dip &&
          !memcmp(a->text_style.color, b->text_style.color, 4);
 }
@@ -299,7 +306,7 @@ bool pp_app_create(PPApp **out, const PPAppOptions *options, PPError *error) {
   if (!app->default_notice) {
     pp_app_destroy(app);
     return pp_app_error(error, PP_ERROR_MEMORY,
-                        "Cannot retain the bundled font notice");
+                        "Cannot retain the default emoji font notice");
   }
   app->saved_revision = pp_project_revision(app->project);
   reset_selection(app);
@@ -323,6 +330,7 @@ bool pp_app_create(PPApp **out, const PPAppOptions *options, PPError *error) {
 void pp_app_destroy(PPApp *app) {
   if (!app)
     return;
+  pp_content_sources_destroy(app->sources);
   pp_scene_destroy(app->scene);
   pp_project_destroy(app->project);
   pp_assets_destroy(app->assets);

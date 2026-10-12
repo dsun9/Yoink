@@ -28,7 +28,8 @@ struct PPUIShapedEdit {
   char *failed_display;
   size_t failed_display_budget;
 };
-static void clear_textures(PPUIShapedEdit *e) {
+static void clear_textures(PPUIBackend *ui,PPUIShapedEdit *e) {
+  pp_ui_release_texture_charges(ui,e->texture_count,e->textures);
   if (e->textures)
     glDeleteTextures((GLsizei)e->texture_count, e->textures);
   free(e->textures);
@@ -41,9 +42,9 @@ static void dispose(PPUIBackend *ui, bool bound) {
   if (!e)
     return;
   if (bound)
-    clear_textures(e);
+    clear_textures(ui,e);
   else
-    free(e->textures); /* Owning context destruction reclaims GPU objects. */
+    {pp_ui_release_texture_charges(ui,e->texture_count,e->textures);free(e->textures);} /* Context reclaims GPU objects. */
   pp_ui_text_layout_destroy(e->layout);
   pp_ui_edit_state_clear(&e->state);
   while (e->head) {
@@ -99,7 +100,7 @@ static void configure(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft) {
     e->layout = candidate;
     free(e->failed_display);
     e->failed_display = NULL;
-    clear_textures(e);
+    clear_textures(ui,e);
     e->configuration_error[0] = 0;
   } else {
     pp_ui_text_layout_destroy(candidate);
@@ -339,7 +340,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   if (!v)
     goto done;
   if (e->texture_generation != v->generation) {
-    clear_textures(e);
+    clear_textures(ui,e);
     e->textures = calloc(v->row_count, sizeof(*e->textures));
     if (!e->textures) {
       ui->failed = true;
@@ -418,6 +419,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   }
   nk_push_scissor(canvas, clip);
 done:
+  ; /* A C11 label must precede a statement. */
   const char *diagnostic =
       e->configuration_error[0] ? e->configuration_error : e->error;
   if (diagnostic[0]) {
