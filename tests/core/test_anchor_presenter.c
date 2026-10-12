@@ -31,8 +31,8 @@ static void hold_next_worker(void) {
 }
 static void release_worker(void) {SDL_SignalSemaphore(worker_continue);}
 static void finish_worker_control(void) {SDL_DestroySemaphore(worker_entered);SDL_DestroySemaphore(worker_continue);worker_entered=worker_continue=NULL;}
-struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;};
-struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
+struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;PPRect artwork_bounds;};
+struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;PPRect alpha_bounds;};
 struct PPSharedTexture {const PPFrame *frame;};
 static PPSurface *surfaces;
 static int source_width;
@@ -90,6 +90,12 @@ bool pp_renderer_upload_source(PPRenderer *r,const PPFrame *frame,uint64_t id,ui
     if(fail_gl_context) {if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct context failure"};return false;}
     if(r->content_id==id && r->revision==revision)return true;
     r->surface->source_width=frame->width;r->surface->red=frame->pixels[0];r->surface->blue=frame->pixels[2];
+    int left=frame->width,top=frame->height,right=0,bottom=0;
+    for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++)if(frame->pixels[(size_t)y*frame->stride+x*4+3]) {
+        left=SDL_min(left,x);top=SDL_min(top,y);right=SDL_max(right,x+1);bottom=SDL_max(bottom,y+1);
+    }
+    r->alpha_bounds=(PPRect){(double)left/frame->width,(double)top/frame->height,
+        (double)(right-left)/frame->width,(double)(bottom-top)/frame->height};
     for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++) {
         const uint8_t *pixel=frame->pixels+(size_t)y*frame->stride+x*4;
         if(pixel[3]==255){r->surface->red=pixel[0];r->surface->blue=pixel[2];y=frame->height;break;}
@@ -102,6 +108,15 @@ bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,doubl
     r->metrics.transform_draws++;return true;
 }
 bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect rect,double size,double angle,double opacity,double density,PPError *error) {
+    /* The external renderer mock reports the placed nontransparent artwork,
+     * using its uploaded alpha extent. Compare replacement with a fresh pull;
+     * no private retained state supplies the expected geometry. */
+    double scale=size*density/fmax(layout.x,layout.y),a=angle*3.14159265358979323846/180,c=cos(a),s=sin(a);
+    double x=rect.x+(r->alpha_bounds.x+r->alpha_bounds.w*.5)*rect.w-layout.x*.5;
+    double y=rect.y+(r->alpha_bounds.y+r->alpha_bounds.h*.5)*rect.h-layout.y*.5;
+    double w=(fabs(c)*r->alpha_bounds.w*rect.w+fabs(s)*r->alpha_bounds.h*rect.h)*scale;
+    double h=(fabs(s)*r->alpha_bounds.w*rect.w+fabs(c)*r->alpha_bounds.h*rect.h)*scale;
+    r->surface->artwork_bounds=(PPRect){(c*x-s*y)*scale-w*.5, (s*x+c*y)*scale-h*.5,w,h};
     drawn_source_rect=rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
 }
 bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
@@ -944,6 +959,48 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
 }
+static void test_bitmap_replacement_matches_fresh_canonical_source(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    size_t length=0;void *bytes=SDL_LoadFile(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf",&length);CHECK(bytes);
+    PPItem item={.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,
+        .text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.fallback_asset,&error));SDL_free(bytes);
+    uint64_t item_id=0;CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,&item_id,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1.5,1.5}};
+    uint64_t id=png_pull(p,scene,displays,1);
+    update(p,displays,500,400,1);
+    for(int change=0;change<2;change++) {
+        item.id=item_id;item.text_style.font_size_dip=change?96:192;
+        CHECK(pp_project_edit_item(project,item_id,&item,&error));
+        PPItemSnapshot *replacement=pp_project_snapshot(project,item_id);CHECK(replacement);
+        const PPTextResult *fresh=NULL;CHECK(pp_item_snapshot_bitmap_source(replacement,&fresh,&error));
+        CHECK(fresh->frame.width==136&&fresh->frame.height==128);
+        for(int rotation=0;rotation<2;rotation++) {
+            PPPose pose={{500,400},384,rotation?17.25:0,.5};
+            CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,500,400,2+change*3+rotation);
+            PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+            CHECK(pp_scene_replace_snapshot(scene,id,replacement,2+change*3+rotation,&error));
+            update(p,displays,500,400,2+change*3+rotation);
+            CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&pose,sizeof(pose)));
+            CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads);
+            PPRect replaced_bounds=surface_for(id)->bounds,replaced_artwork=surface_for(id)->artwork_bounds;
+            uint64_t fresh_id=png_pull(p,scene,displays,2+change*3+rotation);
+            CHECK(pp_scene_set_pose(scene,fresh_id,pose,&error));update(p,displays,500,400,2+change*3+rotation);
+            PPRect fresh_bounds=surface_for(fresh_id)->bounds,fresh_artwork=surface_for(fresh_id)->artwork_bounds;
+            printf("BITMAP replacement font=%.0f angle=%.2f replaced_artwork=%.3f,%.3f %.3fx%.3f fresh_artwork=%.3f,%.3f %.3fx%.3f retained_source=136x128 uploads_unchanged=1\n",
+                item.text_style.font_size_dip,pose.angle_deg,replaced_artwork.x,replaced_artwork.y,replaced_artwork.w,replaced_artwork.h,
+                fresh_artwork.x,fresh_artwork.y,fresh_artwork.w,fresh_artwork.h);
+            CHECK(!memcmp(&replaced_bounds,&fresh_bounds,sizeof(fresh_bounds)));
+            CHECK(!memcmp(&replaced_artwork,&fresh_artwork,sizeof(replaced_artwork)));
+            pp_scene_delete(scene,fresh_id);update(p,displays,500,400,2+change*3+rotation);
+        }
+        pp_item_snapshot_release(replacement);
+    }
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS same-artwork bitmap replacement preserves pose/detail/upload identity and matches fresh canonical placement at both font sizes and rotations");
+}
 static void test_bitmap_candidate_upload_preserves_usable_source(void) {
     PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
     CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
@@ -1320,6 +1377,7 @@ static void test_hidden_obsolete_source_releases_its_reference(void) {
   puts("PASS hidden removed/replaced artwork releases obsolete ownership while a live sibling keeps its shared source");
 }
 int main(void) {
+    test_bitmap_replacement_matches_fresh_canonical_source();
     test_hidden_obsolete_source_releases_its_reference();
     test_removed_pressed_anchor_cancels_pending_pull();
     test_zero_opacity_cancels_only_its_source_target();

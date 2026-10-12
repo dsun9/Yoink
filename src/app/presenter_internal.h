@@ -95,12 +95,8 @@ bool pp_presenter_sources(PPAnchorPresenter *p,PPError *error);
 bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_svg(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_scalable(const PPItemSnapshot *snapshot);
-bool pp_svg_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
-    const PPDisplay *display,double longest,PPError *error);
 bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double longest,PPError *error);
-bool pp_scalable_defer_if_busy(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
-    const PPDisplay *display,double longest);
 bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,PPSourcePresentation *out,PPError *error);
 void pp_scalable_poll(PPAnchorPresenter *p);

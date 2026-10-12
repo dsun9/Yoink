@@ -72,7 +72,8 @@ static bool copy_font(PPAssets *assets,PPAssetId id,uint8_t **out,size_t *bytes,
   *out=malloc(source.size);if(*out)memcpy(*out,source.data,source.size);pp_asset_release(asset);
   return *out!=NULL||fail(error,PP_ERROR_MEMORY,"Cannot copy worker font bytes");
 }
-static bool target_valid(PPItemSnapshot *snapshot,double longest,double density,PPError *error) {
+typedef struct BoundedTarget {double scale;int width,height;size_t bytes;} BoundedTarget;
+static bool bounded_target(PPItemSnapshot *snapshot,double longest,double density,BoundedTarget *out,PPError *error) {
   const PPItem *item=pp_item_snapshot_item(snapshot);PPVec2 layout=pp_item_snapshot_size(snapshot);
   double scale=longest*density/fmax(layout.x,layout.y),w=ceil(layout.x*scale),h=ceil(layout.y*scale);
   if(item&&item->kind==PP_ITEM_TEXT){w+=64;h+=64;}
@@ -80,18 +81,16 @@ static bool target_valid(PPItemSnapshot *snapshot,double longest,double density,
     return fail(error,PP_ERROR_RESOURCE_LIMIT,"Scalable target exceeds bounded worker raster limits");
   if(item->kind==PP_ITEM_TEXT&&(strlen(item->text)>65536||strlen(item->text_style.requested_family)>4096))
     return fail(error,PP_ERROR_RESOURCE_LIMIT,"Worker text or family exceeds capture limits");
+  if(out)*out=(BoundedTarget){scale,(int)w,(int)h,(size_t)w*(size_t)h*5};
   return true;
 }
 bool pp_content_capture(PPItemSnapshot *snapshot,double longest,double density,PPRasterCapture *out,size_t *limit,PPError *error) {
   *out=(PPRasterCapture){0};*limit=0;
   const PPItem *item=pp_item_snapshot_item(snapshot);PPVec2 layout=pp_item_snapshot_size(snapshot);
-  double scale=longest*density/fmax(layout.x,layout.y);double w=ceil(layout.x*scale),h=ceil(layout.y*scale);
-  bool svg=item&&item->kind==PP_ITEM_IMAGE;
-  if(!svg){w+=64;h+=64;}
-  if(!item||!isfinite(scale)||scale<=0||w<1||h<1||w>8192||h>8192||w*h>PP_WORKER_CANDIDATE_LIMIT/5.0)
-    return fail(error,PP_ERROR_RESOURCE_LIMIT,"Scalable target exceeds bounded worker raster limits");
+  BoundedTarget target;if(!bounded_target(snapshot,longest,density,&target,error))return false;
+  bool svg=item->kind==PP_ITEM_IMAGE;
   ContentCapture *c=calloc(1,sizeof(*c));if(!c)return fail(error,PP_ERROR_MEMORY,"Cannot allocate immutable content capture");
-  c->scale=scale;c->layout=layout;c->width=(int)w;c->height=(int)h;size_t bytes=sizeof(*c);
+  c->scale=target.scale;c->layout=layout;c->width=target.width;c->height=target.height;size_t bytes=sizeof(*c);
   if(svg) {
     PPAsset *asset=pp_asset_retain(pp_item_snapshot_assets(snapshot),item->image_asset);PPBytes source=pp_asset_source(asset);
     if(!asset||pp_asset_kind(asset)!=PP_ASSET_SVG||!source.size||source.size>32u*1024*1024-sizeof(*c)) {
@@ -100,9 +99,6 @@ bool pp_content_capture(PPItemSnapshot *snapshot,double longest,double density,P
     c->svg=malloc(source.size);if(c->svg)memcpy(c->svg,source.data,source.size);c->svg_bytes=source.size;pp_asset_release(asset);
     if(!c->svg){destroy_capture(c);return fail(error,PP_ERROR_MEMORY,"Cannot copy immutable SVG source");}bytes+=c->svg_bytes;
   } else {
-    if(strlen(item->text)>65536||strlen(item->text_style.requested_family)>4096) {
-      destroy_capture(c);return fail(error,PP_ERROR_RESOURCE_LIMIT,"Worker text or family exceeds capture limits");
-    }
     size_t text_bytes=strlen(item->text)+1,family_bytes=strlen(item->text_style.requested_family)+1;
     c->style=item->text_style;c->style.requested_family=NULL;c->text=malloc(text_bytes);c->family=malloc(family_bytes);
     if(c->text)memcpy(c->text,item->text,text_bytes);if(c->family)memcpy(c->family,item->text_style.requested_family,family_bytes);
@@ -111,7 +107,7 @@ bool pp_content_capture(PPItemSnapshot *snapshot,double longest,double density,P
        !copy_font(pp_item_snapshot_assets(snapshot),c->style.fallback_asset,&c->fallback,&c->fallback_bytes,error)){destroy_capture(c);return false;}
     bytes+=text_bytes+family_bytes+c->primary_bytes+c->fallback_bytes;
   }
-  *limit=(size_t)w*(size_t)h*5;*out=(PPRasterCapture){c,bytes,generate,destroy_capture};return true;
+  *limit=target.bytes;*out=(PPRasterCapture){c,bytes,generate,destroy_capture};return true;
 }
 bool pp_content_sources_create_worker(PPContentSources **out,PPAssets *assets,PPRasterWorker *worker,uint64_t generation,PPError *error) {
   if(out)*out=NULL;if(!out||!assets)return fail(error,PP_ERROR_ARGUMENT,"Content sources require assets and output");
@@ -171,7 +167,7 @@ static bool same_target(ContentEntry *e,PPItemSnapshot *snapshot,double longest,
 bool pp_content_matches(const PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density){return c&&same_target(c->desired,snapshot,longest,density);}
 bool pp_content_request(PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density,PPError *error) {
   if(!c||!snapshot)return fail(error,PP_ERROR_ARGUMENT,"Content request requires a consumer and snapshot");
-  if(!target_valid(snapshot,longest,density,error))return false;
+  if(!bounded_target(snapshot,longest,density,NULL,error))return false;
   PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);ContentEntry *e=c->desired;
   if(c->snapshot!=snapshot){pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(c->snapshot);c->snapshot=snapshot;}
   if(same_target(e,snapshot,longest,density)) {

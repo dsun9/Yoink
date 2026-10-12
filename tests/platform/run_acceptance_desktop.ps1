@@ -10,7 +10,7 @@ param(
     [switch]$ScalableRetained,
     [switch]$ScalableSharp,
     [switch]$ScalableWorkerInput,
-    [ValidateSet('', 'success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'idle', 'warmup', 'pending', 'target', 'logging', 'timeout')][string]$PerformanceControl = '',
+    [ValidateSet('', 'success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'idle', 'warmup', 'pending', 'target', 'logging', 'timeout', 'cold-missing', 'cold-gpu', 'cold-completion', 'cold-compensated', 'cold-incomplete')][string]$PerformanceControl = '',
     [string]$TestRegex = '',
     [ValidatePattern('^[a-zA-Z0-9-]+$')][string]$LogPrefix = 'task11'
 )

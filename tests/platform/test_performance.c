@@ -84,10 +84,18 @@ void pp_probe_record(enum PPProbeStage stage, double start) {
 typedef struct Acceptance {
   unsigned completed_cases, samples, gpu_observations, native_input_cases, sharp_observations, required_timing_cases;
   unsigned warmup_observations, active_samples, pending_sharp_observations, matched_sharp_observations;
+  unsigned cold_cases,cold_draws,cold_completed,cold_gpu,cold_mismatches;
   double required_p95_ms, regression_p95_ms, max_input_wait_ms, max_sharp_ms;
   bool release, default_segoe, stopped, timed_out;
 } Acceptance;
 enum { ACCEPTANCE_CASES=96, ACCEPTANCE_WARMUP=3, ACCEPTANCE_SAMPLES=20 };
+static void cold_observation(Acceptance *a,unsigned draws,unsigned completed,unsigned gpu) {
+  a->cold_draws+=draws;a->cold_completed+=completed;a->cold_gpu+=gpu;
+  if(draws!=completed||draws!=gpu)a->cold_mismatches++;
+}
+static void cold_case_complete(Acceptance *a,unsigned draws) {
+  a->cold_cases++;if(!draws)a->cold_mismatches++;
+}
 static int acceptance_result(const Acceptance *a) {
   bool failed=false;
 #define GATE(condition, message) do { if(!(condition)) { pp_probe_puts("FAIL " message); failed=true; } } while(0)
@@ -97,6 +105,9 @@ static int acceptance_result(const Acceptance *a) {
   GATE(!a->timed_out,"acceptance timeout");
   GATE(!pp_probe_log_overflow,"bounded diagnostic output incomplete");
   GATE(a->completed_cases==ACCEPTANCE_CASES,"incomplete required source/size/density/rotation cases");
+  GATE(a->cold_cases==ACCEPTANCE_CASES,"incomplete required cold source/size/density/rotation cases");
+  GATE(!a->cold_mismatches&&a->cold_draws>=a->cold_cases&&a->cold_draws==a->cold_completed&&a->cold_draws==a->cold_gpu,
+    "missing or mismatched cold draw GPU execution/completion observations");
   GATE(a->samples==ACCEPTANCE_CASES*ACCEPTANCE_SAMPLES,"missing repeated warm samples");
   GATE(a->warmup_observations==ACCEPTANCE_CASES*ACCEPTANCE_WARMUP,"missing explicit active warmup observations");
   GATE(a->active_samples==a->samples,"unchanged or untagged frames cannot satisfy active samples");
@@ -113,6 +124,8 @@ static int acceptance_result(const Acceptance *a) {
   char required[32]="unavailable",sharp[32]="unavailable";
   if(a->required_timing_cases) snprintf(required,sizeof(required),"%.3f",a->required_p95_ms);
   if(a->sharp_observations) snprintf(sharp,sizeof(sharp),"%.3f",a->max_sharp_ms);
+  pp_probe_printf("COLD TOTAL cases=%u/%u draws=%u completed=%u gpu=%u mismatches=%u\n",
+    a->cold_cases,ACCEPTANCE_CASES,a->cold_draws,a->cold_completed,a->cold_gpu,a->cold_mismatches);
   pp_probe_printf("RESULT acceptance=%s cases=%u/%u samples=%u/%u required_timing_cases=%u/2 required_p95_ms=%s regression_worst_p95_ms=%.3f input_max_ms=%.3f native_sharp_samples=%u sharp_max_ms=%s\n",
     failed?"FAIL":"PASS",a->completed_cases,ACCEPTANCE_CASES,a->samples,ACCEPTANCE_CASES*ACCEPTANCE_SAMPLES,a->required_timing_cases,required,a->regression_p95_ms,a->max_input_wait_ms,a->sharp_observations,sharp);
   pp_probe_fflush(stdout); return failed?1:0;
@@ -122,6 +135,22 @@ static int acceptance_control(const char *control) {
   Acceptance a={.completed_cases=96,.samples=1920,.gpu_observations=1920,.native_input_cases=96,
     .warmup_observations=288,.active_samples=1920,.pending_sharp_observations=20,.matched_sharp_observations=20,
     .sharp_observations=20,.required_timing_cases=2,.required_p95_ms=10,.max_input_wait_ms=5,.max_sharp_ms=20,.release=true,.default_segoe=true};
+  /* These observations reach the same executable gate before app/SDL startup.
+   * A two-draw cold sequence must include its first draw, even when its last
+   * draw has a valid GPU observation. Aggregate compensation is also invalid. */
+  for(unsigned i=0;i<ACCEPTANCE_CASES;i++) {
+    if(i==0&&!strcmp(control,"cold-incomplete"))continue;
+    if(i==0&&!strcmp(control,"cold-missing")) {
+      cold_observation(&a,0,0,0);cold_case_complete(&a,0);
+    }else if(i==0&&!strcmp(control,"cold-gpu")) {
+      cold_observation(&a,1,1,0);cold_observation(&a,1,1,1);cold_case_complete(&a,2);
+    }else if(i==0&&!strcmp(control,"cold-completion")) {
+      cold_observation(&a,1,0,1);cold_observation(&a,1,1,1);cold_case_complete(&a,2);
+    }else if(i==0&&!strcmp(control,"cold-compensated")) {
+      cold_observation(&a,1,1,0);cold_observation(&a,1,1,2);cold_case_complete(&a,2);
+    }else {cold_observation(&a,2,2,2);cold_case_complete(&a,2);}
+  }
+  pp_probe_printf("CONTROL COLD cases=%u draws=%u completed=%u gpu=%u mismatches=%u\n",a.cold_cases,a.cold_draws,a.cold_completed,a.cold_gpu,a.cold_mismatches);
   if(!strcmp(control,"budget")) a.required_p95_ms=16.8;
   else if(!strcmp(control,"input")) a.max_input_wait_ms=51;
   else if(!strcmp(control,"sharp")) a.max_sharp_ms=200.1;
@@ -134,7 +163,10 @@ static int acceptance_control(const char *control) {
   else if(!strcmp(control,"target")) a.matched_sharp_observations=19;
   else if(!strcmp(control,"logging")) pp_probe_log_overflow=true;
   else if(!strcmp(control,"timeout")) { Sleep(10000); a.timed_out=true; }
-  else if(strcmp(control,"success")) { fprintf(stderr,"Unknown acceptance control: %s\n",control); return 2; }
+  else if(strcmp(control,"success")&&strcmp(control,"cold-missing")&&strcmp(control,"cold-gpu")&&
+      strcmp(control,"cold-completion")&&strcmp(control,"cold-compensated")&&strcmp(control,"cold-incomplete")) {
+    fprintf(stderr,"Unknown acceptance control: %s\n",control); return 2;
+  }
   return acceptance_result(&a);
 }
 static const char *stage_names[] = {"text", "raster", "inspect", "find_font", "renderer_create", "transform", "ui_create", "upload", "ui_end_swap", "surface", "dib", "layered", "readback", "texture", "source_request", "cpu_draw_submission", "gpu_execution", "cpu_wait_gpu_completion", "native_set_size", "native_placement", "make_current", "gl_swap", "gl_finish", "query_result", "draw_state"};

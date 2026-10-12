@@ -293,6 +293,19 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
     double angle_deg,double opacity,double density,PPError *error) {
     return pp_renderer_draw_source(renderer,layout,(PPRect){0,0,layout.x,layout.y},longest,angle_deg,opacity,density,error);
 }
+static void source_mapping(PPGL *gl,const PPRenderUniforms *u,int width,int height,
+    int source_width,int source_height,PPVec2 layout,PPRect rect,double longest,
+    double angle,double opacity,double density) {
+    double radians=fmod(angle,360)*3.14159265358979323846/180;
+    double scale=longest*density/fmax(layout.x,layout.y);
+    gl->Uniform1i(u->image,0);gl->Uniform2f(u->destination_size,(float)width,(float)height);
+    gl->Uniform2f(u->source_size,(float)source_width,(float)source_height);
+    gl->Uniform2f(u->rotation,(float)cos(radians),(float)sin(radians));
+    gl->Uniform2f(u->scale,(float)(scale*rect.w/source_width),(float)(scale*rect.h/source_height));
+    gl->Uniform2f(u->source_offset,(float)((rect.x+rect.w*.5-layout.x*.5)*source_width/rect.w),
+        (float)((rect.y+rect.h*.5-layout.y*.5)*source_height/rect.h));
+    gl->Uniform1f(u->opacity,(float)opacity);
+}
 bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,uint64_t revision,
     PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,
     unsigned *out,int *width,int *height,PPError *error) {
@@ -317,18 +330,13 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
             ok=error_set(error,PP_ERROR_RENDER,"Incomplete UI preview framebuffer");
     }
     if(ok) {
-        double radians=fmod(angle,360)*3.14159265358979323846/180;
-        double scale=longest*density/fmax(layout.x,layout.y);
         glBindTexture(GL_TEXTURE_2D,r->textures[0]);gl->UseProgram(r->preview_program);
-#define LOCATION(name) gl->GetUniformLocation(r->preview_program,#name)
-        gl->Uniform1i(LOCATION(image),0);gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
-        gl->Uniform2f(LOCATION(source_size),(float)source->width,(float)source->height);
-        gl->Uniform2f(LOCATION(rotation),(float)cos(radians),(float)sin(radians));
-        gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/source->width),(float)(scale*rect.h/source->height));
-        gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*source->width/rect.w),
-            (float)((rect.y+rect.h*.5-layout.y*.5)*source->height/rect.h));
-        gl->Uniform1f(LOCATION(opacity),(float)opacity);
+        PPRenderUniforms uniforms;
+#define LOCATION(name) uniforms.name=gl->GetUniformLocation(r->preview_program,#name)
+        LOCATION(image);LOCATION(destination_size);LOCATION(source_size);LOCATION(rotation);
+        LOCATION(scale);LOCATION(source_offset);LOCATION(opacity);
 #undef LOCATION
+        source_mapping(gl,&uniforms,w,h,source->width,source->height,layout,rect,longest,angle,opacity,density);
         glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glDisable(GL_CULL_FACE);glDisable(GL_DEPTH_TEST);
         glViewport(0,0,w,h);gl->BindVertexArray(r->vao);glDrawArrays(GL_TRIANGLES,0,3);
         GLenum failure=glGetError();
@@ -358,8 +366,6 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
         layout.x<=0 || layout.y<=0 || !isfinite(longest) || longest<=0 || !isfinite(angle_deg) ||
         !isfinite(opacity) || opacity<0 || opacity>1 || !isfinite(density) || density<=0)
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct transform");
-    double scale=longest*density/fmax(layout.x,layout.y);
-    double angle=fmod(angle_deg,360)*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
     int extent_w,extent_h;
     if(!pp_geometry_source_extent(layout,rect,longest,angle_deg,density,&extent_w,&extent_h))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct transform exceeds drawable limits");
@@ -369,16 +375,8 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     PPGL *gl=&renderer->gl;gl->BindFramebuffer(GL_FRAMEBUFFER,0);glDrawBuffer(GL_BACK);
     gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->shared?renderer->shared->name:renderer->textures[0]);
     gl->UseProgram(renderer->program);
-#define LOCATION(name) renderer->uniforms.name
-    gl->Uniform1i(LOCATION(image),0);
-    gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
-    gl->Uniform2f(LOCATION(source_size),(float)renderer->source_width,(float)renderer->source_height);
-    gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
-    gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/renderer->source_width),(float)(scale*rect.h/renderer->source_height));
-    gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*renderer->source_width/rect.w),
-        (float)((rect.y+rect.h*.5-layout.y*.5)*renderer->source_height/rect.h));
-    gl->Uniform1f(LOCATION(opacity),(float)opacity);
-#undef LOCATION
+    source_mapping(gl,&renderer->uniforms,w,h,renderer->source_width,renderer->source_height,
+        layout,rect,longest,angle_deg,opacity,density);
     glDisable(GL_BLEND);glDisable(GL_DITHER);glViewport(0,0,w,h);
     gl->BindVertexArray(renderer->vao);glDrawArrays(GL_TRIANGLES,0,3);
     if(renderer->error_callback?renderer->draw_error:glGetError()!=GL_NO_ERROR)
@@ -400,8 +398,6 @@ static bool transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 l
         !isfinite(longest_dip) || longest_dip <= 0 || !isfinite(angle_deg) || !isfinite(opacity) || opacity < 0 || opacity > 1 ||
         !isfinite(pixels_per_dip) || pixels_per_dip <= 0)
         return error_set(error, PP_ERROR_ARGUMENT, "Invalid frame transform");
-    double scale = longest_dip*pixels_per_dip/fmax(layout.x,layout.y);
-    double angle = fmod(angle_deg, 360)*3.14159265358979323846/180, c = cos(angle), s = sin(angle);
     int drawable_w,drawable_h;
     if (!pp_geometry_source_extent(layout,rect,longest_dip,angle_deg,pixels_per_dip,&drawable_w,&drawable_h))
         return error_set(error, PP_ERROR_ARGUMENT, "Transformed frame dimensions exceed limits");
@@ -440,15 +436,10 @@ static bool transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 l
     }
     if(coverage){gl->ActiveTexture(GL_TEXTURE1); glBindTexture(GL_TEXTURE_2D,renderer->textures[1]);}
     gl->UseProgram(coverage?renderer->program:renderer->color_program);
-#define LOCATION(name) (coverage?renderer->uniforms.name:renderer->color_uniforms.name)
-    gl->Uniform1i(LOCATION(image),0); if(coverage)gl->Uniform1i(LOCATION(alpha),1);
-    gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
-    gl->Uniform2f(LOCATION(source_size),(float)source->width,(float)source->height);
-    gl->Uniform2f(LOCATION(rotation),(float)c,(float)s);
-    gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/source->width),(float)(scale*rect.h/source->height)); gl->Uniform1f(LOCATION(opacity),(float)opacity);
-    gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*source->width/rect.w),
-        (float)((rect.y+rect.h*.5-layout.y*.5)*source->height/rect.h));
-#undef LOCATION
+    const PPRenderUniforms *uniforms=coverage?&renderer->uniforms:&renderer->color_uniforms;
+    source_mapping(gl,uniforms,frame.width,frame.height,source->width,source->height,
+        layout,rect,longest_dip,angle_deg,opacity,pixels_per_dip);
+    if(coverage)gl->Uniform1i(uniforms->alpha,1);
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);
     glReadBuffer(GL_COLOR_ATTACHMENT0); glReadPixels(0,0,frame.width,frame.height,GL_RGBA,GL_UNSIGNED_BYTE,readback);

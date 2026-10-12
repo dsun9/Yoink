@@ -83,7 +83,13 @@ static bool runtime_settle(PPRuntime *runtime,uint64_t id,Acceptance *a,double d
   do {
     RuntimeObservation o;
     if(!runtime_operation(runtime,id,&o)){pp_probe_puts("INCOMPLETE runtime settle operation or removed measured sprite");return false;}
-    if(work)observation_add(work,&o);
+    if(work) {
+      observation_add(work,&o);cold_observation(a,o.draws,o.completed,o.gpu);
+      if(o.draws!=o.completed||o.draws!=o.gpu) {
+        pp_probe_printf("INCOMPLETE cold operation draws=%u completed=%u gpu=%u\n",o.draws,o.completed,o.gpu);
+        return false;
+      }
+    }
     if(!runtime_safe(&o,a,deadline))return false;
     PPSprite *s=pp_sprites_find(runtime->presenter,id);
     if(s&&!s->resizing&&!s->rotating&&!s->raster_requested&&!s->raster_retry&&s->retained.valid)return true;
@@ -282,6 +288,8 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       if(scene_ms>50)pp_probe_printf("GAP scene_create_restore_ms=%.3f\n",scene_ms);
       pp_probe_active_worker=runtime->worker;
       if(!runtime_settle(runtime,id,&a,deadline,&cold_work))goto done;
+      cold_case_complete(&a,cold_work.draws);
+      if(!cold_work.draws){pp_probe_puts("INCOMPLETE cold case has no completed draw");goto done;}
       pp_probe_active_worker=runtime->worker;
       PPPresentationMetrics cold_after=pp_runtime_presentation_metrics(runtime);
       pp_probe_printf("COLD source=%s dip=%.0f density=%.2f angle=%.2f settled_wall_ms=%.3f owner_work_ms=%.3f first_presentation_owner_ms=%.3f private_generation_ms=%.3f private_builds=%llu owner_builds=%llu contexts=%u context_creation_ms=%.3f source_upload_ms=%.3f cpu_draw_submission_ms=%.3f gpu_execution_ms=%.3f gpu_completion_wait_ms=%.3f returned_native_swap_ms=%.3f native_size_placement_ms=%.3f draws=%u completed=%u gpu=%u tagged_input_max_ms=%u\n",
@@ -360,7 +368,9 @@ done:
     if(!restored)a.stopped=true;
   }
   if(diagnostic_kind<0)return acceptance_result(&a);
-  bool ok=a.release&&!a.stopped&&!a.timed_out&&a.completed_cases==16&&a.samples==320&&a.warmup_observations==48&&a.active_samples==320&&a.gpu_observations==320&&a.native_input_cases==16&&a.max_input_wait_ms<=50;
+  bool ok=a.release&&!a.stopped&&!a.timed_out&&a.completed_cases==16&&a.cold_cases==16&&
+    !a.cold_mismatches&&a.cold_draws>=a.cold_cases&&a.cold_draws==a.cold_completed&&a.cold_draws==a.cold_gpu&&
+    a.samples==320&&a.warmup_observations==48&&a.active_samples==320&&a.gpu_observations==320&&a.native_input_cases==16&&a.max_input_wait_ms<=50;
   if(diagnostic_kind==0)ok=ok&&a.default_segoe&&a.required_timing_cases==2&&a.required_p95_ms<=16.7&&a.sharp_observations==20&&a.max_sharp_ms<=200;
   pp_probe_printf("RESULT visible_source_diagnostic=%s kind=%d cases=%u/16 warmup=%u/48 active=%u/320 required_p95_ms=%.3f sharp=%u/20 sharp_max_ms=%.3f input_max_ms=%.3f overall_96_case_acceptance=not-evaluated compositor_visible=unobserved\n",ok?"PASS":"FAIL",diagnostic_kind,a.completed_cases,a.warmup_observations,a.active_samples,a.required_p95_ms,a.sharp_observations,a.max_sharp_ms,a.max_input_wait_ms);
   return ok?0:1;

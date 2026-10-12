@@ -11,7 +11,7 @@ if ($BuildDirectory) {
     $writer = Join-Path $BuildDirectory 'Release/pointy_performance_test.exe'
     & $writer --output-control
     if ($LASTEXITCODE -ne 0) { throw 'Bounded diagnostic writer control failed.' }
-    foreach ($case in @('success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'idle', 'warmup', 'pending', 'target', 'logging')) {
+    foreach ($case in @('success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'idle', 'warmup', 'pending', 'target', 'logging', 'cold-missing', 'cold-gpu', 'cold-completion', 'cold-compensated', 'cold-incomplete')) {
         & powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runner -Performance -Configuration Release -BuildDirectory $BuildDirectory -PerformanceControl $case
         $expected = if ($case -eq 'success') { 0 } else { 1 }
         if ($LASTEXITCODE -ne $expected) { throw "Controlled $case expected $expected, received $LASTEXITCODE" }

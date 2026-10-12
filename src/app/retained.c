@@ -141,9 +141,12 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
     bool gif=pp_snapshot_is_gif(instance->snapshot);struct PPGifEntry *candidate=NULL;
     bool bitmap=pp_snapshot_is_bitmap_text(instance->snapshot);
     bool text=pp_snapshot_is_scalable(instance->snapshot);
-    if(bitmap && identity==s->retained.content_id) source.source_rect=s->retained.source_rect;
+    bool bitmap_mapping_changed=bitmap && (identity!=s->retained.content_id || instance->snapshot!=s->retained.snapshot);
+    if(bitmap && !bitmap_mapping_changed) source.source_rect=s->retained.source_rect;
     if(text&&!pp_scalable_source(p,s,instance,display,&source,error))ok=false;
-    else if(bitmap && identity!=s->retained.content_id && !pp_retained_bitmap_text_source(instance->snapshot,&source,error))ok=false;
+    /* A new canonical snapshot can change logical bitmap placement while its
+     * artwork digest still reuses the accepted source texture. */
+    else if(bitmap_mapping_changed && !pp_retained_bitmap_text_source(instance->snapshot,&source,error))ok=false;
     else if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
     else if(!gif && !bitmap && !text && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
