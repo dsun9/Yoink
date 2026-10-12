@@ -3,6 +3,10 @@
 #include <SDL3_ttf/SDL_ttf.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 typedef struct RasterJob {
   PPRasterCompletion completion;
@@ -18,6 +22,9 @@ struct PPRasterWorker {
   PPRasterStatus status;
   bool stop;
   Uint32 wake_type;
+#ifdef _WIN32
+  DWORD owner_thread;
+#endif
 };
 static bool failure(PPError *error, int code, const char *message) {
   if(error) {error->code=code;snprintf(error->message,sizeof(error->message),"%s",message);}return false;
@@ -54,8 +61,17 @@ static int SDLCALL run(void *data) {
     SDL_UnlockMutex(w->mutex);
     PPSourceMetrics delta={0};
     Uint64 start=SDL_GetPerformanceCounter();
-    if(fonts_initialized)job->completion.success=job->capture.generate(job->capture.data,limit,&job->completion.result,&delta,&job->completion.error);
-    else failure(&job->completion.error,PP_ERROR_RENDER,"Could not initialize worker font library");
+    job->completion.success=job->capture.generate(job->capture.data,limit,&job->completion.result,&delta,&job->completion.error);
+    PPTextResult *result=&job->completion.result;PPFrame *frame=&result->frame;
+    if(job->completion.success) {
+      bool valid=frame->pixels&&frame->content_alpha&&frame->width>0&&frame->height>0&&frame->width<=8192&&frame->height<=8192&&
+        frame->stride>=(size_t)frame->width*4&&frame->stride<=limit/(size_t)frame->height;
+      if(valid)valid=(size_t)frame->width*frame->height<=limit-frame->stride*(size_t)frame->height;
+      valid=valid&&isfinite(result->layout_size.x)&&result->layout_size.x>0&&isfinite(result->layout_size.y)&&result->layout_size.y>0&&
+        isfinite(result->layout_origin.x)&&isfinite(result->layout_origin.y)&&isfinite(result->raster_origin_px.x)&&isfinite(result->raster_origin_px.y)&&
+        isfinite(result->raster_density)&&result->raster_density>0;
+      if(!valid) {job->completion.success=false;pp_frame_destroy(frame);failure(&job->completion.error,PP_ERROR_RESOURCE_LIMIT,"Generator returned invalid geometry or exceeded its reserved candidate");}
+    }
     double ms=(SDL_GetPerformanceCounter()-start)*1000.0/SDL_GetPerformanceFrequency();
     SDL_LockMutex(w->mutex);
     job->done=true;w->status.pending_jobs--;w->status.completions++;w->status.source_builds+=delta.raster_builds;
@@ -65,15 +81,26 @@ static int SDLCALL run(void *data) {
       RasterJob **link=&w->jobs;while(*link!=job)link=&(*link)->next;*link=job->next;free_job(w,job);
     }
     /* Wake the event loop without any model or presenter pointer payload. */
+    SDL_UnlockMutex(w->mutex);
     SDL_Event event={0};event.type=w->wake_type;if(w->wake_type!=(Uint32)-1)SDL_PushEvent(&event);
+#ifdef _WIN32
+    /* The tray waits on the native queue, without arming SDL's wait window. */
+    PostThreadMessageW(w->owner_thread,WM_NULL,0,0);
+#endif
+    SDL_LockMutex(w->mutex);
   }
   SDL_UnlockMutex(w->mutex);if(fonts_initialized)TTF_Quit();return 0;
 }
 bool pp_raster_worker_create(PPRasterWorker **out,PPError *error) {
+  if(!out)return failure(error,PP_ERROR_ARGUMENT,"Missing raster worker output");
   *out=NULL;PPRasterWorker *w=calloc(1,sizeof(*w));
   if(!w)return failure(error,PP_ERROR_MEMORY,"Cannot allocate raster worker");
   w->mutex=SDL_CreateMutex();w->wake=SDL_CreateCondition();
   w->wake_type=SDL_RegisterEvents(1);
+#ifdef _WIN32
+  w->owner_thread=GetCurrentThreadId();
+  MSG message;PeekMessageW(&message,NULL,WM_USER,WM_USER,PM_NOREMOVE);
+#endif
   if(w->mutex&&w->wake)w->thread=SDL_CreateThread(run,"pointy-raster",w);
   if(!w->thread) {SDL_DestroyCondition(w->wake);SDL_DestroyMutex(w->mutex);free(w);return failure(error,PP_ERROR_MEMORY,"Cannot start raster worker");}
   *out=w;return true;
@@ -95,7 +122,7 @@ void pp_raster_worker_cancel(PPRasterWorker *w,uint64_t generation,uint64_t inst
 }
 bool pp_raster_worker_request(PPRasterWorker *w,PPRasterKey key,PPRasterCapture capture,
     PPAssets *assets,size_t limit,PPError *error) {
-  if(!w||!capture.data||!capture.generate||!capture.destroy||!limit||capture.bytes>32u*1024*1024) {
+  if(!w||!capture.data||!capture.generate||!capture.destroy||!limit||limit>PP_WORKER_CANDIDATE_LIMIT||capture.bytes>32u*1024*1024) {
     if(capture.destroy)capture.destroy(capture.data);return failure(error,PP_ERROR_RESOURCE_LIMIT,"Raster worker capture exceeds 32 MiB or has invalid arguments");
   }
   SDL_LockMutex(w->mutex);
@@ -105,7 +132,8 @@ bool pp_raster_worker_request(PPRasterWorker *w,PPRasterKey key,PPRasterCapture 
     SDL_UnlockMutex(w->mutex);capture.destroy(capture.data);return failure(error,PP_ERROR_RESOURCE_LIMIT,"Raster worker queue is full; previous source remains usable");
   }
   RasterJob *job=calloc(1,sizeof(*job));
-  if(!job||!pp_assets_reserve_raster(assets,limit,error)) {
+  if(!job) {SDL_UnlockMutex(w->mutex);capture.destroy(capture.data);return failure(error,PP_ERROR_MEMORY,"Cannot allocate raster job");}
+  if(!pp_assets_reserve_raster(assets,limit,error)) {
     free(job);SDL_UnlockMutex(w->mutex);capture.destroy(capture.data);return false;
   }
   job->completion=(PPRasterCompletion){.key=key,.owner_assets=assets,.reserved_bytes=limit};job->capture=capture;

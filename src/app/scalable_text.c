@@ -49,12 +49,13 @@ bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance 
   if(strlen(item->text)>65536||strlen(item->text_style.requested_family)>4096) {
     if(error)*error=(PPError){PP_ERROR_RESOURCE_LIMIT,"Worker text or family exceeds capture limits"};return false;
   }
-  TextCapture *c=calloc(1,sizeof(*c));if(!c)return false;
+  TextCapture *c=calloc(1,sizeof(*c));if(!c) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot allocate immutable text capture"};return false;}
   c->style=item->text_style;c->scale=scale;
   size_t text_bytes=strlen(item->text)+1,family_bytes=strlen(item->text_style.requested_family)+1;
   c->text=malloc(text_bytes);c->family=malloc(family_bytes);
   if(c->text)memcpy(c->text,item->text,text_bytes);if(c->family)memcpy(c->family,item->text_style.requested_family,family_bytes);
-  if(!c->text||!c->family||!copy_font(p->assets,c->style.primary_asset,&c->primary,&c->primary_bytes,error)||
+  if(!c->text||!c->family) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot copy worker text or family"};destroy_capture(c);return false;}
+  if(!copy_font(p->assets,c->style.primary_asset,&c->primary,&c->primary_bytes,error)||
       !copy_font(p->assets,c->style.fallback_asset,&c->fallback,&c->fallback_bytes,error)) {destroy_capture(c);return false;}
   c->style.requested_family=NULL;
   if(!p->worker&&!pp_raster_worker_create(&p->worker,error)) {destroy_capture(c);return false;}

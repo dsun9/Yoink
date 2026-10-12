@@ -675,7 +675,8 @@ static void test_scalable_budget_failure_and_project_teardown(void) {
     pp_assets_release_raster(assets,fill);CHECK(pp_assets_external_raster_bytes(assets)==baseline);
     /* Failed source generation preserves the usable CPU/GPU source and does
      * not turn an existing visible sprite into an interceptor without pixels. */
-    SDL_SetAtomicInt(&fail_next_worker,1);wheel.timestamp=3;CHECK(pp_anchor_presenter_event(p,&wheel,&error));wait_worker_idle(p,displays,3.2);
+    SDL_SetAtomicInt(&fail_next_worker,1);wheel.timestamp=3;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    CHECK(fabs(s->raster_target.longest_dip-usable.longest_dip*1.1)<1e-7);wait_worker_idle(p,displays,3.2);
     CHECK(p->notice.code==PP_ERROR_MEMORY&&surface->shown&&s->scalable_bytes==retained);
     CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==renderer.source_uploads&&pp_raster_worker_status(p->worker).reserved_bytes==0);
     /* Runtime ownership survives a project change. Presenter teardown cancels

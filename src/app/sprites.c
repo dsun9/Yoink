@@ -155,6 +155,7 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);
       double elapsed = fmax(0, now - instance->animation_start), next;
       if (!pp_sprite_present(p,s,instance,display,elapsed,&next,error)) {
+        pp_scalable_cancel(p,s);
         bool native = p->failed_surface == s->surface;
         if (!native && error && error->code == PP_ERROR_RENDER && !pp_snapshot_is_png(instance->snapshot) &&
             !pp_snapshot_is_gif(instance->snapshot) && !pp_item_snapshot_text_result(instance->snapshot) && !s->retained.valid)
@@ -269,7 +270,8 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     const PPDisplay *d=display_by_id(p->displays,p->display_count,s->display_id);
     const PPSceneInstance *instance=pp_scene_get(p->scene,s->id);
     if(d&&instance&&pp_surface_window_id(s->surface)&&!pp_scalable_request(p,s,instance,d,s->ease_target.longest_dip,error)) {
-      if(error)p->notice=*error;s->resizing=false;s->sharp_pending=false;
+      if(error)p->notice=*error;pp_scalable_cancel(p,s);s->resizing=false;s->sharp_pending=false;
+      s->interaction.target_pose.longest_dip=s->pose.longest_dip;s->ease_target.longest_dip=s->pose.longest_dip;
     }
   }
   if (result.command == PP_COMMAND_OPEN_DRAWER)

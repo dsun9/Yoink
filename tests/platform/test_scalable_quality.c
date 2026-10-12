@@ -40,25 +40,48 @@ int main(void) {
     for(int angle=0;angle<2;angle++) {
       double degrees=angle?17.25:0,radians=degrees*3.14159265358979323846/180,c=cos(radians),s=sin(radians),scale=384*1.5/fmax(layout.x,layout.y),opacity=.63;
       PPFrame output={0};CHECK(pp_renderer_transform_source(renderer,&completion.result.frame,layout,rect,384,degrees,opacity,1.5,&output,&error));
+      PPFrame reference={0};CHECK(pp_renderer_transform_source(renderer,&fresh.frame,layout,rect,384,degrees,opacity,1.5,&reference,&error));
+      CHECK(output.width==reference.width&&output.height==reference.height);
+      CHECK(!memcmp(output.pixels,reference.pixels,output.stride*output.height));
+      CHECK(!memcmp(output.content_alpha,reference.content_alpha,(size_t)output.width*output.height));pp_frame_destroy(&reference);
       double right=fmax(layout.x,rect.x+rect.w)-layout.x*.5,left=fmin(0,rect.x)-layout.x*.5;
       double bottom=fmax(layout.y,rect.y+rect.h)-layout.y*.5,top=fmin(0,rect.y)-layout.y*.5;
       double extent_x=fmax(fmax(fabs(c*left-s*top),fabs(c*left-s*bottom)),fmax(fabs(c*right-s*top),fabs(c*right-s*bottom)));
       double extent_y=fmax(fmax(fabs(s*left+c*top),fabs(s*left+c*bottom)),fmax(fabs(s*right+c*top),fabs(s*right+c*bottom)));
       CHECK(output.width==(int)ceil(extent_x*2*scale-1e-9)&&output.height==(int)ceil(extent_y*2*scale-1e-9));
-      unsigned max_error=0;size_t edges=0,visible=0;
+      unsigned max_error=0,raw_max_error=0;size_t edges=0,visible=0,numerical_edges=0;int worst_x=0,worst_y=0,worst_actual=0,worst_expected=0,worst_channel=0;double worst_u=0,worst_v=0;
       for(int y=0;y<output.height;y++)for(int x=0;x<output.width;x++) {
         double dx=x+.5-output.width*.5,dy=y+.5-output.height*.5;
         double local_x=(c*dx+s*dy)/scale+layout.x*.5,local_y=(-s*dx+c*dy)/scale+layout.y*.5;
         double u=(local_x-rect.x)/rect.w,v=(local_y-rect.y)/rect.h;
+        /* A double reference cannot choose the GLSL float branch at an exact
+         * source boundary. The measured failing v was -1.154e-8, rounded to
+         * zero by GL. Within two float ulps at 1.0, require either transparent
+         * or the independently sampled boundary color. All other pixels keep
+         * the two-channel-unit comparison, including partial-alpha edges. */
+        const double envelope=2.0/8388608.0;
+        bool numerical_edge=u>=-envelope&&u<=1+envelope&&v>=-envelope&&v<=1+envelope&&
+          (fabs(u)<=envelope||fabs(u-1)<=envelope||fabs(v)<=envelope||fabs(v-1)<=envelope);
+        numerical_edges+=numerical_edge;
         size_t index=(size_t)y*output.width+x;const uint8_t *pixel=output.pixels+index*4;
+        unsigned pixel_difference=0,boundary_difference=0,transparent_difference=0;
         for(int ch=0;ch<4;ch++) {
           int expected=(u<0||v<0||u>1||v>1)?0:(int)lround(channel(&fresh.frame,u*fresh.frame.width-.5,v*fresh.frame.height-.5,ch)*opacity);
-          unsigned difference=(unsigned)abs((int)pixel[ch]-expected);if(difference>max_error)max_error=difference;
+          unsigned difference=(unsigned)abs((int)pixel[ch]-expected);if(difference>raw_max_error) {raw_max_error=difference;worst_x=x;worst_y=y;worst_actual=pixel[ch];worst_expected=expected;worst_channel=ch;worst_u=u;worst_v=v;}
+          pixel_difference=SDL_max(pixel_difference,difference);
+          if(numerical_edge) {
+            int boundary=(int)lround(channel(&fresh.frame,fmin(1,fmax(0,u))*fresh.frame.width-.5,fmin(1,fmax(0,v))*fresh.frame.height-.5,ch)*opacity);
+            boundary_difference=SDL_max(boundary_difference,(unsigned)abs((int)pixel[ch]-boundary));
+            transparent_difference=SDL_max(transparent_difference,(unsigned)pixel[ch]);
+          }
         }
+        if(numerical_edge)pixel_difference=SDL_min(pixel_difference,SDL_min(boundary_difference,transparent_difference));
+        if(pixel_difference>max_error)max_error=pixel_difference;
         visible+=pixel[3]>0;edges+=pixel[3]>0&&pixel[3]<132;CHECK(pixel[0]<=pixel[3]&&pixel[1]<=pixel[3]&&pixel[2]<=pixel[3]);
       }
-      printf("QUALITY kind=%d angle=%.2f max_channel_error=%u visible=%zu edges=%zu raster=%dx%d canonical=%.0fx%.0f\n",kind,degrees,max_error,visible,edges,output.width,output.height,layout.x,layout.y);
-      CHECK(max_error<=2&&visible>100&&edges>10);pp_frame_destroy(&output);
+      printf("QUALITY kind=%d angle=%.2f max_channel_error=%u raw_max_error=%u numerical_boundary_pixels=%zu visible=%zu edges=%zu raster=%dx%d canonical=%.0fx%.0f\n",kind,degrees,max_error,raw_max_error,numerical_edges,visible,edges,output.width,output.height,layout.x,layout.y);
+      if(raw_max_error>2)printf("QUALITY difference x=%d y=%d channel=%d actual=%d expected=%d u=%.17g v=%.17g source=%dx%d rect=%.17g,%.17g,%.17g,%.17g\n",worst_x,worst_y,worst_channel,worst_actual,worst_expected,worst_u,worst_v,fresh.frame.width,fresh.frame.height,rect.x,rect.y,rect.w,rect.h);
+      CHECK(max_error<=2&&numerical_edges<=4&&visible>100&&edges>10);pp_frame_destroy(&output);
     }
     pp_frame_destroy(&fresh.frame);pp_raster_completion_release(&completion);pp_raster_worker_destroy(presenter.worker);pp_item_snapshot_release(snapshot);
   }

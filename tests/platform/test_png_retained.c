@@ -2,6 +2,7 @@
 #include "receiver_shared.h"
 #include "../test.h"
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_opengl.h>
 #include <math.h>
 #define API(expr) do{bool ok=(expr);if(!ok)fprintf(stderr,"API failure: %s\n",error.message);CHECK(ok);}while(0)
 static PPError error;
@@ -105,6 +106,13 @@ int main(int argc,char **argv){
   pp_platform_drawer_close(false);SDL_HideWindow(settings);pp_platform_settings_window(0);SDL_DestroyWindow(drawer);drawer=NULL;SDL_DestroyWindow(settings);settings=NULL;pump();pp_surface_raise(pp_sprites_find(presenter,second)->surface);CHECK(SetCursorPos(300,300));LONG right=receiver->right_ups,menus=receiver->context_menus;mouse(MOUSEEVENTF_RIGHTDOWN,0);
   CHECK(!pp_scene_get(scene,second)&&pp_scene_get(scene,id));CHECK(SetCursorPos(430,350));mouse(MOUSEEVENTF_RIGHTUP,0);CHECK(receiver->right_ups==right&&receiver->context_menus==menus);mouse(MOUSEEVENTF_RIGHTDOWN,0);mouse(MOUSEEVENTF_RIGHTUP,0);CHECK(receiver->right_ups==right+1&&receiver->context_menus==menus+1);
   CHECK(SetCursorPos(300,300));mouse(MOUSEEVENTF_LEFTDOWN,0);CHECK(DestroyWindow(window));pose(id,(PPPose){{300,300},96,20,1});mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!pp_scene_get(scene,id)&&pp_anchor_presenter_gpu_resources(presenter).retained_bytes==0);below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1&&GetForegroundWindow()==(HWND)receiver->window);
+  created=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){{300,300},96,0,1},now(),&error);CHECK(created);id=created->id;pump();
+  CHECK(SetCursorPos(300,300));mouse(MOUSEEVENTF_LEFTDOWN,0);
+  API(pp_renderer_complete(created->retained.renderer,&error));glEnable(0); /* Real GL_INVALID_ENUM, on the owning context. */
+  created->pose.angle_deg=17.25;created->dirty=true;API(pp_sprites_update(presenter,now(),&error));
+  CHECK(presenter->notice.code==PP_ERROR_RENDER&&!pp_scene_get(scene,id)&&!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
+  mouse(MOUSEEVENTF_LEFTUP,0);below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1);
+  puts("PASS real GL error removes failed sprite and releases accepted press, capture, GPU source and invisible interception");
   PPRendererMetrics total=pp_anchor_presenter_renderer_metrics(presenter);printf("PNG totals uploads=%llu draws=%llu readbacks=%llu GPU peak=%zu remaining=%zu\n",(unsigned long long)total.source_uploads,(unsigned long long)total.transform_draws,(unsigned long long)total.readbacks,pp_anchor_presenter_gpu_resources(presenter).peak_bytes,pp_anchor_presenter_gpu_resources(presenter).retained_bytes);CHECK(total.readbacks==0);
   puts("PASS native PNG immutable replacement, overlap/UI order, right deletion drain, destroyed-window failure cleanup and nonactivation; macOS runtime unverified");return 0;
 }
