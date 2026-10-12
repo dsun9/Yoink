@@ -444,7 +444,8 @@ static void test_external_change_cancels_owned_input(void) {
       if (content) {
         PPItem replacement =
             *pp_project_target(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
-        replacement.text = "Changed";
+        /* The bundled emoji fallback also covers hosts without Aptos. */
+        replacement.text = "\xf0\x9f\x91\x88";
         CHECK(pp_scene_replace(pp_app_scene(app), a, &replacement, t + .02,
                                &error));
       } else {
