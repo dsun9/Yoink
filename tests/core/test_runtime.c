@@ -137,6 +137,9 @@ bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,doubl
     if(r->surface==fail_surface){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct presentation failure"};return false;}
     r->metrics.transform_draws++;return true;
 }
+bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect rect,double size,double angle,double opacity,double density,PPError *error) {
+    (void)rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
+}
 bool pp_renderer_transform(PPRenderer *r, const PPFrame *source, double longest,
                            double angle, double opacity, double scale,
                            PPFrame *out, PPError *error) {
