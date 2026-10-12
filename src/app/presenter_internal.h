@@ -2,6 +2,7 @@
 #define POINTY_PRESENTER_INTERNAL_H
 #include "anchors.h"
 #include "raster_worker.h"
+#include "content_sources.h"
 /* Source acquisition policy stays outside retained placement/drawing. GIF
  * frame and scalable raster replacements provide their own source revision. */
 typedef struct PPSourcePresentation {
@@ -63,6 +64,7 @@ typedef struct PPSprite {
   uint64_t scalable_identity, scalable_revision, raster_serial;
   PPRasterKey raster_target;
   bool raster_requested, raster_retry;
+  PPContentConsumer *content;
 } PPSprite;
 struct PPAnchorPresenter {
   PPRenderer *renderer;
@@ -90,7 +92,10 @@ struct PPAnchorPresenter {
   bool borrowed_worker;
   PPRenderer *texture_owner;
   struct PPGifEntry *gif_entries;
+  PPContentSources *sources;
+  bool borrowed_sources;
 };
+bool pp_presenter_sources(PPAnchorPresenter *p,PPError *error);
 bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_svg(const PPItemSnapshot *snapshot);
 bool pp_snapshot_is_scalable(const PPItemSnapshot *snapshot);

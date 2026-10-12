@@ -549,7 +549,7 @@ PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *p) {
   metrics.worker_stale_results+=worker.stale_results;metrics.worker_source_builds=worker.source_builds;
   metrics.worker_pending_jobs=worker.pending_jobs;metrics.worker_reserved_bytes=worker.reserved_bytes;
   metrics.worker_source_ms=worker.source_ms;metrics.worker_source_max_ms=worker.source_max_ms;
-  for(size_t i=0;i<p->instance_count;i++)metrics.scalable_retained_bytes+=p->instances[i].scalable_bytes;
+  metrics.scalable_retained_bytes=pp_content_sources_raster_bytes(p->sources);
   return metrics;
 }
 bool pp_anchor_presenter_instance_pose(const PPAnchorPresenter *p, size_t i,
@@ -567,8 +567,11 @@ void pp_anchor_presenter_destroy(PPAnchorPresenter *p) {
     return;
   close_anchors(p);
   pp_sprites_clear(p);
-  pp_raster_worker_cancel(p->worker,p->generation,0);
-  if(!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
+  if(!p->borrowed_sources) {
+    if(p->borrowed_worker)pp_content_sources_detach_worker(p->sources);
+    pp_content_sources_destroy(p->sources);
+  }
+  if(!p->sources&&!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
   pp_gif_clear(p);
   free(p->displays);
   pp_anchors_destroy(&p->runtime);

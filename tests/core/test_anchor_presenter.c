@@ -634,6 +634,10 @@ static void test_new_scalable_pull_survives_busy_worker(void) {
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     uint64_t first=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     uint64_t second=png_pull(p,scene,displays,2);CHECK(pp_scene_count(scene)==2);
+    /* Equal targets now join one preparation. Give the second consumer a
+     * distinct endpoint to exercise a genuinely occupied waiting slot. */
+    PPPose second_pose=pp_scene_get(scene,second)->pose;second_pose.longest_dip=128;
+    CHECK(pp_scene_set_pose(scene,second,second_pose,&error));pp_sprites_sync(p);CHECK(pp_sprites_update(p,2.3,&error));
     PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
     uint64_t third=png_pull(p,scene,displays,3);
     CHECK(pp_scene_count(scene)==3&&first!=second&&second!=third);
@@ -1031,7 +1035,11 @@ static void test_svg_full_queue_keeps_new_cached_sprite(void) {
     PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
     hold_next_worker();uint64_t ids[3];
     for(int i=0;i<3;i++) {
-        PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400+i*30,300},96,0,1},1,&error);CHECK(s);ids[i]=s->id;
+        /* Three distinct endpoint sizes require three preparations; equal
+         * targets are covered by the shared-consumer regression. */
+        PPPose pose={{400+i*30,300},96+i*48,0,1};
+        PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,pose,1,&error);CHECK(s);ids[i]=s->id;
+        CHECK(pp_scene_set_pose(scene,s->id,pose,&error));
         update(p,displays,400,300,1);if(!i)CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     }
     CHECK(pp_scene_get(scene,ids[2])&&pp_scene_count(scene)==3&&pp_anchor_presenter_instance_count(p)==3);
@@ -1040,7 +1048,7 @@ static void test_svg_full_queue_keeps_new_cached_sprite(void) {
     CHECK(pp_assets_source_metrics(assets).raster_builds==1);
     release_worker();wait_worker_idle(p,displays,1);finish_worker_control();
     CHECK(pp_scene_count(scene)==3&&surface_for(ids[2])->shown&&!pp_raster_worker_status(p->worker).reserved_bytes);
-    CHECK(surface_for(ids[2])->source_width==96&&pp_raster_worker_status(p->worker).source_builds==3);
+    CHECK(surface_for(ids[2])->source_width==192&&pp_raster_worker_status(p->worker).source_builds==3);
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS full SVG worker queue preserves a newly pulled cached sprite and bounds admitted captures");
 }
@@ -1083,7 +1091,28 @@ static void test_anchor_retains_gif_clock_across_unrelated_edits(void) {
     CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS retained anchor keeps GIF clock and native artwork through an unrelated project edit");
 }
+static void test_equal_consumers_share_requested_source_preparation(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay display={1,{0,0,1920,1080},1,1.5};p->displays=malloc(sizeof(display));CHECK(p->displays);*p->displays=display;p->display_count=1;
+    hold_next_worker();
+    PPSprite *first=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{300,300},384,0,1},1,&error);CHECK(first);uint64_t a=first->id;
+    CHECK(pp_sprites_update(p,1,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPSprite *second=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{800,300},384,0,1},1.02,&error);CHECK(second);uint64_t b=second->id;
+    CHECK(pp_sprites_update(p,1.02,&error));release_worker();
+    for(int i=0;i<2000&&pp_raster_worker_status(p->worker).pending_jobs;i++){SDL_Delay(1);CHECK(pp_sprites_update(p,1.02,&error));}
+    CHECK(pp_sprites_update(p,1.02,&error));finish_worker_control();
+    CHECK(surface_for(a)->shown&&surface_for(b)->shown&&surface_for(a)->bounds.w==surface_for(b)->bounds.w);
+    CHECK(pp_anchor_presenter_metrics(p).worker_source_builds==1);
+    PPRendererMetrics drawn=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(pp_sprites_update(p,2,&error));CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==drawn.source_uploads);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS two retained consumers share one requested-resolution preparation without sharing their placement");
+}
 int main(void) {
+    test_equal_consumers_share_requested_source_preparation();
     test_anchor_retains_gif_clock_across_unrelated_edits();
     test_svg_cpu_adapter_keeps_canonical_aspect();
     test_svg_full_queue_keeps_new_cached_sprite();
