@@ -129,11 +129,14 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
     if(gif && !pp_gif_acquire(p,instance->snapshot,elapsed,&source,next,&candidate,error))ok=false;
     else if(!gif && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
-      if(source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
+      if(!gif && source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
       ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);if(!gif)*next=HUGE_VAL;
       if(ok) {pp_gif_release(p,s->retained.gif_entry);s->retained.gif_entry=candidate;candidate=NULL;}
     }
     pp_gif_release(p,candidate);
+    if(!ok && error && error->code==PP_ERROR_RENDER) {
+      pp_surface_hide(surface);p->failed_surface=surface;
+    }
     if(ok) {
       pp_item_snapshot_retain(instance->snapshot);pp_item_snapshot_release(s->retained.snapshot);
       s->retained.snapshot=instance->snapshot;s->retained.animation_start=instance->animation_start;
