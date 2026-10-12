@@ -136,7 +136,9 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
     else if(!gif && !bitmap && !text && identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
       if(!gif && source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
-      ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);if(!gif)*next=HUGE_VAL;
+      if(text&&identity!=s->retained.content_id&&!source.frame) {pp_surface_hide(surface);ok=true;}
+      else ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);
+      if(!gif)*next=HUGE_VAL;
       if(ok) {pp_gif_release(p,s->retained.gif_entry);s->retained.gif_entry=candidate;candidate=NULL;}
     }
     pp_gif_release(p,candidate);

@@ -96,13 +96,13 @@ bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *
     const PPFrame *borrowed=NULL;
     bool svg=pp_snapshot_is_svg(instance->snapshot);
     if(svg&&!current) {
-      double next;
-      if(!pp_item_snapshot_frame(instance->snapshot,0,1,&borrowed,&next,error))return false;
-      initial.frame=*borrowed;
+      PPAsset *asset=pp_asset_retain(p->assets,pp_item_snapshot_item(instance->snapshot)->image_asset);
+      borrowed=pp_asset_cached_svg(asset);if(borrowed)initial.frame=*borrowed;
+      pp_asset_release(asset);
     }
     const PPTextResult *source=current?&s->scalable:svg?&initial:pp_item_snapshot_text_result(instance->snapshot);
     *out=packet(source,identity,current?s->scalable_revision:1,svg);
-    if(borrowed)out->frame=borrowed;
+    if(svg&&!current)out->frame=borrowed;
   }
   return true;
 }

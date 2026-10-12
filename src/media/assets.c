@@ -63,6 +63,7 @@ void pp_asset_release(PPAsset *a) { if(a && a->retains) a->retains--; }
 PPBytes pp_asset_source(const PPAsset *a) { return a?(PPBytes){a->source,a->source_size}:(PPBytes){0}; }
 PPAssetKind pp_asset_kind(const PPAsset *a) { return a ? a->kind : (PPAssetKind)-1; }
 PPVec2 pp_asset_intrinsic_size(const PPAsset *a) { return a ? (PPVec2){a->info.width,a->info.height} : (PPVec2){0}; }
+const PPFrame *pp_asset_cached_svg(const PPAsset *a) { return a && a->kind==PP_ASSET_SVG ? a->frames : NULL; }
 size_t pp_assets_external_raster_bytes(const PPAssets *a) { return a ? a->external_bytes : 0; }
 size_t pp_assets_raster_bytes(const PPAssets *a) { return a ? a->cache_bytes+a->external_bytes : 0; }
 void pp_assets_trim_cache(PPAssets *assets) {

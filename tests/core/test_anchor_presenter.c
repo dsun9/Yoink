@@ -669,10 +669,15 @@ static void test_scalable_rapid_resize_drag_density_and_cancellation(void) {
      * snapshot, and deletion releases every queued owner reservation. */
     hold_next_worker();wheel.timestamp=3;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     PPItem replacement=scalable_item(assets);replacement.text="jA";replacement.text_style.color[0]=220;
+    if(svg_lifecycle) {
+        const char *blue="<svg width='13' height='7'><rect x='2' y='1' width='9' height='5' fill='blue'/></svg>";
+        CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)blue,strlen(blue)},PP_ASSET_SVG,&replacement.image_asset,&error));
+    }
     CHECK(pp_scene_replace(scene,id,&replacement,3.01,&error));update(p,displays,430,320,3.01);
     uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot);
     release_worker();wait_worker_idle(p,displays,3.01);finish_worker_control();
     CHECK(pp_sprites_find(p,id)->retained.content_id==revision);
+    if(svg_lifecycle)CHECK(surface_for(id)->blue==255&&surface_for(id)->red==0);
     CHECK(pp_anchor_presenter_metrics(p).worker_source_builds==ready.worker_source_builds+2);
     hold_next_worker();wheel.timestamp=4;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
     PPPlatformEvent remove={.surface=surface,.instance_id=id,.kind=PP_EVENT_BUTTON_DOWN,.button=PP_BUTTON_RIGHT,.timestamp=4.01};CHECK(pp_anchor_presenter_event(p,&remove,&error));
@@ -909,12 +914,58 @@ static void test_svg_shared_asset_keeps_independent_sizes(void) {
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==old_gpu&&!pp_raster_worker_status(p->worker).reserved_bytes);
     CHECK(surface_for(first)->shown&&surface_for(second)->shown&&pp_assets_external_raster_bytes(assets)==baseline);
     p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
+    hold_next_worker();wheel.timestamp=7;CHECK(pp_anchor_presenter_event(p,&wheel,&error));CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPPlatformEvent first_wheel=wheel;first_wheel.surface=surface_for(first);first_wheel.instance_id=first;first_wheel.timestamp=7.001;
+    CHECK(pp_anchor_presenter_event(p,&first_wheel,&error));wheel.timestamp=7.002;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    CHECK(p->notice.code==PP_ERROR_RESOURCE_LIMIT&&pp_raster_worker_status(p->worker).pending_jobs==2);
+    CHECK(a->scalable.frame.width==96&&b->scalable.frame.width==337&&surface_for(first)->shown&&surface_for(second)->shown);
+    release_worker();wait_worker_idle(p,displays,7.02);finish_worker_control();CHECK(!pp_raster_worker_status(p->worker).reserved_bytes);
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS shared SVG sprites retain independent sharp sizes and mappings across shared-cache edits, transforms and rejected CPU/GPU overlap");
 }
+static void test_empty_svg_releases_input(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=svg_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);wait_worker_idle(p,displays,1.3);PPSurface *surface=surface_for(id);
+    event(p,surface,PP_EVENT_BUTTON_DOWN,400,300,2);CHECK(capture_owner==surface);
+    const char *empty="<svg width='13' height='7'><rect width='13' height='7' fill='none'/></svg>";
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)empty,strlen(empty)},PP_ASSET_SVG,&item.image_asset,&error));
+    CHECK(pp_scene_replace(scene,id,&item,2.01,&error));update(p,displays,400,300,2.01);wait_worker_idle(p,displays,2.01);
+    CHECK(!capture_owner&&!surface->shown&&!pp_sprites_find(p,id)->retained.visual_alpha);
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
+    PPPose pose=pp_scene_get(scene,id)->pose;pose.center.x+=37;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,437,300,3);update(p,displays,437,300,4);
+    CHECK(!surface->shown&&pp_anchor_presenter_renderer_metrics(p).transform_draws==before.transform_draws&&pp_assets_source_metrics(assets).raster_builds==builds);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS empty SVG hides and releases input after replacement, with retained hidden translation reuse");
+}
+static void test_svg_initial_source_is_cached(void) {
+  for(int evicted=0;evicted<2;evicted++) {
+    PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));
+    PPItem item=svg_item(assets);if(evicted)pp_assets_trim_cache(assets);
+    PPProject *project=NULL;CHECK(pp_project_create(assets,&project,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    PPScene *scene=NULL;CHECK(pp_scene_create(&scene,&error));PPAnchorPresenter *p=NULL;
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    PPSprite *created=pp_sprites_create(p,PP_ANCHOR_TOP_RIGHT,(PPPose){{400,300},96,0,1},1,&error);CHECK(created);
+    hold_next_worker();uint64_t id=created->id;update(p,displays,400,300,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    CHECK(surface_for(id)->shown==!evicted);release_worker();
+    wait_worker_idle(p,displays,1);CHECK(surface_for(id)->shown&&pp_sprites_find(p,id)->scalable.frame.width==96);
+    finish_worker_control();
+    CHECK(pp_assets_source_metrics(assets).raster_builds==1);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  }
+    puts("PASS initial SVG sprite uses the available asset raster while its isolated requested-resolution endpoint prepares");
+}
 int main(void) {
+    test_svg_initial_source_is_cached();
     test_svg_endpoint_worker_reuses_cached_artwork();
     test_svg_shared_asset_keeps_independent_sizes();
+    test_empty_svg_releases_input();
     svg_lifecycle=true;
     test_scalable_publication_failure_releases_interceptor();
     test_scalable_budget_failure_and_project_teardown();
@@ -969,6 +1020,7 @@ int main(void) {
     event(p,sprite,PP_EVENT_POINTER_MOVE,-10,200,1.05);update(p,d,-10,200,1.05);check_grab(p,-10,-62.5,144);
     event(p,sprite,PP_EVENT_POINTER_MOVE,10,200,1.06);update(p,d,10,200,1.06);check_grab(p,10,-25,96);
     event(p,sprite,PP_EVENT_BUTTON_UP,10,200,1.07);update(p,d,10,200,1.07);check_grab(p,10,-25,96);
+    wait_worker_idle(p,d,1.07);
     CHECK(sprite->red==255 && sprite->blue==0 && sprite->source_width==96);
     d[1].drawable_pixels_per_dip=2;
     update(p,d,10,200,1.08);wait_worker_idle(p,d,1.08);

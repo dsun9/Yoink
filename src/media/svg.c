@@ -37,7 +37,7 @@ bool pp_svg_render_bounded(PPBytes source,int w,int h,size_t limit,size_t scratc
     if(!pp_svg_validate(source,e)) return false;
     plutosvg_document_t *d=document(source,e);if(!d)return false;
     double iw=ceil(plutosvg_document_get_width(d)),ih=ceil(plutosvg_document_get_height(d));size_t intrinsic;
-    if(!isfinite(iw)||!isfinite(ih)||iw>PP_MEDIA_MAX_DIMENSION||ih>PP_MEDIA_MAX_DIMENSION||
+    if(!isfinite(iw)||!isfinite(ih)||iw<1||ih<1||iw>PP_MEDIA_MAX_DIMENSION||ih>PP_MEDIA_MAX_DIMENSION||
         !pp_media_size((int)iw,(int)ih,1,&intrinsic,e)) {
         plutosvg_document_destroy(d);return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"SVG intrinsic dimensions exceed raster limits");
     }

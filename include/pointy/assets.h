@@ -38,6 +38,10 @@ void pp_asset_release(PPAsset *asset);
 PPBytes pp_asset_source(const PPAsset *asset);
 PPAssetKind pp_asset_kind(const PPAsset *asset);
 PPVec2 pp_asset_intrinsic_size(const PPAsset *asset);
+/* Borrows the last available SVG raster without parsing, rendering, eviction
+ * or metric changes. NULL means no decoded cache is available. Retain the asset
+ * during use; a successful pp_asset_frame at a new size invalidates the borrow. */
+const PPFrame *pp_asset_cached_svg(const PPAsset *asset);
 /* Isolated SVG rendering from immutable bytes. No asset/cache/reservation or
  * GL state is touched. Validates the same supported SVG subset as import,
  * parses one private document and renders only the requested resolution.
