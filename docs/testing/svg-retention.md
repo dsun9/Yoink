@@ -44,6 +44,12 @@ once, including completed work discarded after cancellation. A failed generator
 or rejected candidate preserves usable artwork. A broken native/GL publication
 removes the failed sprite and releases input interception.
 
+When another sprite occupies the waiting slot, the presenter keeps cached
+artwork and stores only the latest target key. It defers copying source bytes
+and reservation until admission is available, then retries automatically on
+an owner update. This preserves a newly pulled third sprite while one job is
+running and a second is waiting. The worker still admits at most two captures.
+
 The owner reserves exact candidate RGBA plus source alpha, five bytes per pixel,
 before dispatch. Retained CPU bytes and candidates share the 512 MiB asset budget;
 each candidate has a 64 MiB cap. The private SVG generator checks temporary
@@ -58,7 +64,7 @@ hide their native window and release input.
 The presenter seam holds production SVG generation at its public immutable
 content boundary. It checks immediate publication, twenty-target coalescing,
 drag/density geometry, stale running and completed results, replacement/deletion,
-cross-sprite queue rejection, CPU/GPU overlap pressure, source/native failure,
+cross-sprite queue deferral, CPU/GPU overlap pressure, source/native failure,
 empty artwork and teardown before a held capture finishes. The content check
 compares an owned requested-resolution raster with the existing fresh asset
 renderer, checks exact output/scratch limits, and preserves unsupported-feature
@@ -78,3 +84,34 @@ require an exclusive supervised desktop run. The full 16.7 ms warm-frame,
 50 ms input and 200 ms sharp acceptance matrix remains ticket #11 work. Mac
 continues to use its supported compatibility adapter; Mac native/runtime SVG
 behavior requires platform verification.
+
+## Recorded validation
+
+The final Release all-target build passed with parallelism four. The headless
+suite passed 28 checks in 43.08 seconds, including the existing runtime test,
+the SVG runtime generation check and the SVG/presenter regressions. Four
+separately audited input/event/dialog/process boundary checks passed in
+1.31 seconds. An earlier mixed extra-test run included hidden real GL in
+`shaped_editor`, `ui_density` and `drawer_hidden` without the exclusive grant.
+Those observations are excluded from authorized acceptance evidence.
+
+The final supervised quality test passed in 0.69 seconds. All three SVG fixtures
+matched fresh requested-resolution GL output byte for byte in RGBA and alpha
+at both angles. Their independent normal and raw channel errors were at most
+one under the unchanged tolerance of two; the shifted-viewBox gradient counted
+two separately bounded numerical boundary pixels at 17.25 degrees. The existing
+hybrid-text raw boundary difference of 35 remains separately reported under the
+unchanged narrow float-edge policy.
+
+The accompanying PNG regression failed its first premultiplied compositor
+sample at `test_png_retained.c:75`: white 255,255,255 appeared where
+255,191,159 was required. Its tolerance of three was unchanged. This supervised
+suite therefore passed one of two tests, with input, cursor and exact saved
+foreground HWND 525984 restored. The PNG check did not reach its GL error
+injection in that run. The parent task retains this failure for separate
+investigation before final specification acceptance. Earlier held-input refusal
+and accepted-press/cursor-clip failure are also retained separately.
+
+These records establish SVG source ownership, canonical geometry and requested
+GL quality. They do not establish the full specification's native/compositor
+or performance acceptance.

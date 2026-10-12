@@ -42,8 +42,11 @@ initialization reference until its worker finishes.
 
 The queue admits one executing job and one waiting job. Repeated requests for
 one sprite replace its waiting job and mark its executing job obsolete. A full
-waiting slot for another sprite rejects the new operation and preserves its
-usable visual. An executing generator finishes with owned data after
+waiting slot for another sprite defers presenter admission while preserving
+available artwork, including a newly pulled sprite. The presenter stores only
+the latest target key and retries when the slot is available. It copies no new
+capture and reserves no candidate during deferral. The worker request API still
+rejects unavailable admission as a resource error. An executing generator finishes with owned data after
 cancellation; it never reads a retired presenter or project. Its output is
 discarded and its successful source work still counts. Cancellation does not
 join during project replacement. Final runtime shutdown releases native
