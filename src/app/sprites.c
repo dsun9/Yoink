@@ -174,6 +174,11 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
           s->next_frame = HUGE_VAL;
           PPItemSnapshot *usable=s->retained.snapshot?s->retained.snapshot:s->seen_snapshot;
           double start=s->retained.snapshot?s->retained.animation_start:s->seen_animation_start;
+          if(pp_snapshot_is_gif(usable)) {
+            PPFrameSelection selected;
+            if(pp_item_snapshot_select_frame(usable,fmax(0,now-start),1,&selected,NULL))
+              s->next_frame=start+selected.next_change;
+          }
           pp_scene_restore(p->scene,s->id,usable,s->pose,start,NULL);
           pp_item_snapshot_release(s->seen_snapshot);s->seen_snapshot=pp_item_snapshot_retain(usable);
           s->replaced=false;

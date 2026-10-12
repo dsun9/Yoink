@@ -6,6 +6,7 @@ param(
     [string]$BuildDirectory = '',
     [switch]$Performance,
     [switch]$PngRetained,
+    [switch]$GifRetained,
     [ValidateSet('', 'success', 'budget', 'input', 'sharp', 'stop', 'missing', 'incomplete', 'timeout')][string]$PerformanceControl = '',
     [string]$TestRegex = '',
     [ValidatePattern('^[a-zA-Z0-9-]+$')][string]$LogPrefix = 'task11'
@@ -54,6 +55,8 @@ if ($PerformanceControl) {
 }
 if ($Performance -and $Configuration -ne 'Release') { throw 'Performance acceptance requires a Release build.' }
 if ($PngRetained -and -not $Performance) { throw 'PngRetained requires Performance.' }
+if ($GifRetained -and -not $Performance) { throw 'GifRetained requires Performance.' }
+if ($GifRetained -and $PngRetained) { throw 'Choose one source diagnostic.' }
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -108,7 +111,7 @@ $exitCode = 1
 try {
     if ($Performance) {
         $probePath = Join-Path $BuildDirectory "$Configuration/pointy_performance_test.exe"
-        $probeMode = if ($PngRetained) { '--png-retained' } else { '--acceptance' }
+        $probeMode = if ($PngRetained) { '--png-retained' } elseif ($GifRetained) { '--gif-retained' } else { '--acceptance' }
         $exitCode = Invoke-PointyBoundedProcess $probePath @($probeMode) $log $stderr $ProcessTimeoutMilliseconds
     } else {
         $ctest = (Get-Command ctest).Source

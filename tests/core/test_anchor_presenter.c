@@ -16,6 +16,7 @@ static uint32_t window_serial;
 static PPSurface *capture_owner,*failed_gl_surface;
 static bool fail_gl_upload;
 static bool fail_gl_context;
+static bool fail_shared_context;
 static size_t native_planes = 4;
 static PPRect drawn_source_rect;
 size_t pp_surface_raster_bytes(int width,int height) {return (size_t)width*height*native_planes;}
@@ -38,7 +39,7 @@ void pp_renderer_destroy(PPRenderer *r) {if(r && r!=(PPRenderer *)1) free(r);}
 PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRenderer *)1?(PPRendererMetrics){cpu_transforms,cpu_transforms,cpu_transforms*2}:r?r->metrics:(PPRendererMetrics){0};}
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++window_serial;return true;}
 uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
-bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;return true;}
+bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive)pp_surface_cancel_input(s);return true;}
 void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
 void pp_surface_inherit_order(PPSurface *s,PPSurface *old) {(void)s;(void)old;}
 bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
@@ -49,6 +50,7 @@ bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) 
 bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {(void)error;*out=calloc(1,sizeof(**out));return *out!=NULL;}
 bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {(void)owner;return pp_renderer_create_for_window(out,id,error);}
 bool pp_shared_texture_create(PPRenderer *owner,const PPFrame *frame,PPSharedTexture **out,PPError *error) {
+    if(fail_shared_context){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected producer context failure"};return false;}
     if(fail_gl_upload){if(error)*error=(PPError){PP_ERROR_MEMORY,"Injected shared allocation rejection"};return false;}
     *out=malloc(sizeof(**out));CHECK(*out);(*out)->frame=frame;owner->metrics.source_uploads++;return true;
 }
@@ -87,6 +89,28 @@ bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,do
 }
 void pp_frame_destroy(PPFrame *f) {free(f->pixels);free(f->content_alpha);*f=(PPFrame){0};}
 static PPSurface *instance_surface(void) {for(PPSurface *s=surfaces;s;s=s->next) if(s->id==1) return s;return NULL;}
+static PPItem gif_item(PPAssets *assets,const char *name) {
+    char path[1024];snprintf(path,sizeof(path),"%s/%s",PP_MEDIA_FIXTURES,name);
+    FILE *file=fopen(path,"rb");CHECK(file);CHECK(!fseek(file,0,SEEK_END));long n=ftell(file);CHECK(n>0);rewind(file);
+    uint8_t *bytes=malloc((size_t)n);CHECK(bytes);CHECK(fread(bytes,1,(size_t)n,file)==(size_t)n);fclose(file);
+    PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};PPError error={0};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)n},PP_ASSET_GIF,&item.image_asset,&error));free(bytes);return item;
+}
+static void test_gif_producer_failure_isolates_interceptor(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=gif_item(assets,"finite.gif");CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(d));*p->displays=d;p->display_count=1;
+    PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(s);uint64_t a=s->id;
+    CHECK(pp_sprites_update(p,1,&error));PPSurface *usable=pp_sprites_find(p,a)->surface;
+    s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{400,200},96,0,1},.94,&error);CHECK(s);uint64_t b=s->id;
+    fail_shared_context=true;CHECK(pp_sprites_update(p,1,&error));fail_shared_context=false;
+    CHECK(!pp_scene_get(p->scene,b) && pp_scene_get(p->scene,a) && usable->shown);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==12);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
+    puts("PASS failed GIF producer context removes only the failed interceptor");
+}
 static void test_gif_independent_clocks_and_shared_frames(void) {
     PPAssets *assets=NULL;PPError error={0};CHECK(pp_assets_create(&assets,&error));
     FILE *file=fopen(PP_MEDIA_FIXTURES "/finite.gif","rb");CHECK(file);
@@ -108,15 +132,21 @@ static void test_gif_independent_clocks_and_shared_frames(void) {
     CHECK(first.source_uploads-before.source_uploads==2 && first.transform_draws-before.transform_draws==3 && first.readbacks==before.readbacks);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==24);
     CHECK(pp_sprites_find(p,ids[0])->surface->red==0 && pp_sprites_find(p,ids[1])->surface->red==255);
+    CHECK(fabs(pp_sprites_find(p,ids[0])->next_frame-1.1)<1e-8 && fabs(pp_sprites_find(p,ids[1])->next_frame-1.11)<1e-8);
     PPSprite *s=pp_sprites_find(p,ids[1]);s->pose.center.x+=20;s->dirty=true;
     CHECK(pp_scene_set_pose(p->scene,s->id,s->pose,&error));CHECK(pp_sprites_update(p,1.081,&error));
     PPRendererMetrics moved=pp_anchor_presenter_renderer_metrics(p);
     CHECK(moved.source_uploads==first.source_uploads && moved.transform_draws==first.transform_draws);
     CHECK(pp_assets_source_metrics(assets).raster_builds==builds);
+    s->pose.angle_deg=37;s->pose.longest_dip=192;s->dirty=true;d.drawable_pixels_per_dip=1.5;*p->displays=d;
+    CHECK(pp_sprites_update(p,1.082,&error));PPRendererMetrics transformed=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(transformed.source_uploads==moved.source_uploads && transformed.transform_draws==moved.transform_draws+3 && transformed.readbacks==moved.readbacks);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds);
     CHECK(pp_sprites_update(p,1.28,&error));
     PPRendererMetrics stopped=pp_anchor_presenter_renderer_metrics(p);
     CHECK(pp_sprites_update(p,3,&error));
     CHECK(pp_anchor_presenter_renderer_metrics(p).transform_draws==stopped.transform_draws);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==stopped.source_uploads);
     CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==12);
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
 }
@@ -416,6 +446,68 @@ static void test_png_candidate_preserves_compatibility_clock(void) {
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
     puts("PASS rejected PNG candidate preserves independent compatibility surface, immutable source and animation start");
 }
+static void test_gif_budget_sharing_and_png_transitions(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem png=png_item(assets,"budget-0.png",96),gif=gif_item(assets,"finite.gif");
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&png,NULL,&error));CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t ids[4];for(int i=0;i<4;i++)ids[i]=png_pull(p,scene,displays,1+i);
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,ids[0])->snapshot);
+    double accepted_start=pp_scene_get(scene,ids[0])->animation_start;
+    PPRendererMetrics warm=pp_anchor_presenter_renderer_metrics(p);
+    CHECK(pp_scene_replace(scene,ids[0],&gif,5,&error));update(p,displays,400,300,5);
+    CHECK(pp_item_snapshot_revision(pp_scene_get(scene,ids[0])->snapshot)==revision && pp_scene_get(scene,ids[0])->animation_start==accepted_start);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==268435456 && pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads);
+    pp_scene_delete(scene,ids[3]);update(p,displays,400,300,6);
+    CHECK(pp_scene_replace(scene,ids[0],&gif,7,&error));CHECK(pp_scene_replace(scene,ids[1],&gif,7,&error));update(p,displays,400,300,7);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==67108876);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads+1);
+    pp_scene_delete(scene,ids[0]);update(p,displays,400,300,7.01);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==67108876);
+    PPItem small=png_item(assets,"retained-blue.png",96);CHECK(pp_scene_replace(scene,ids[1],&small,7.02,&error));update(p,displays,400,300,7.02);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==67108992 && surface_for(ids[1])->blue==255);
+    pp_scene_clear(scene);update(p,displays,400,300,8);CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS bounded GIF candidate overlap, PNG/GIF transitions, unique sharing and reference cleanup");
+}
+static void test_gif_transparent_frame_releases_capture(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=gif_item(assets,"changing-alpha.gif");CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(d));*p->displays=d;p->display_count=1;
+    PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(s);
+    CHECK(pp_sprites_update(p,1,&error));PPSurface *surface=s->surface;CHECK(surface->shown);
+    event(p,surface,PP_EVENT_BUTTON_DOWN,200,200,1.05);CHECK(capture_owner==surface);
+    CHECK(pp_sprites_update(p,1.11,&error));CHECK(!surface->shown && !capture_owner && fabs(s->next_frame-1.2)<1e-8);
+    event(p,surface,PP_EVENT_CANCEL,200,200,1.11);
+    PPRendererMetrics hidden=pp_anchor_presenter_renderer_metrics(p);
+    s->pose.center.x+=10;s->dirty=true;CHECK(pp_sprites_update(p,1.12,&error));
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==hidden.source_uploads && pp_anchor_presenter_renderer_metrics(p).transform_draws==hidden.transform_draws);
+    CHECK(pp_sprites_update(p,1.21,&error));CHECK(surface->shown && surface->red==255 && fabs(s->next_frame-1.3)<1e-8);
+    CHECK(!s->dragging && !s->interaction.pressed);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
+    puts("PASS transparent GIF frame hides/releases input and retains the next independent animation deadline");
+}
+static void test_gif_rejected_replacement_preserves_clock(void) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=gif_item(assets,"finite.gif");CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(d));*p->displays=d;p->display_count=1;
+    PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(s);uint64_t id=s->id;
+    CHECK(pp_sprites_update(p,1,&error));PPSurface *surface=s->surface;
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot);
+    PPItem replacement=gif_item(assets,"changing-alpha.gif");CHECK(pp_scene_replace(p->scene,id,&replacement,1.02,&error));
+    pp_sprites_sync(p);fail_gl_upload=true;CHECK(pp_sprites_update(p,1.02,&error));fail_gl_upload=false;
+    CHECK(pp_scene_get(p->scene,id)->animation_start==1 && pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot)==revision);
+    CHECK(surface==s->surface && surface->shown && surface->red==255 && fabs(s->next_frame-1.05)<1e-8);
+    CHECK(pp_sprites_update(p,1.08,&error));CHECK(surface->red==0 && s->retained.source_revision==2 && fabs(s->next_frame-1.1)<1e-8);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==12);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
+    puts("PASS rejected GIF replacement retains old source/start and continues its accepted deadlines");
+}
 static void test_canonical_source_mapping(void) {
     PPError error={0};PPAnchorPresenter p={0};PPSurface *surface=NULL;
     CHECK(pp_surface_create_gl(&surface,&error));PPRetainedPresentation retained={0};
@@ -518,8 +610,14 @@ static void test_bitmap_candidate_context_preserves_usable_source(void) {
     puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
 }
 int main(void) {
-    test_canonical_source_mapping();
+    test_gif_transparent_frame_releases_capture();
+#if defined(_WIN32)
+    test_gif_budget_sharing_and_png_transitions();
+    test_gif_rejected_replacement_preserves_clock();
+    test_gif_producer_failure_isolates_interceptor();
     test_gif_independent_clocks_and_shared_frames();
+#endif
+    test_canonical_source_mapping();
 #if defined(_WIN32)
     test_bitmap_text_transform_reuses_useful_source();
     test_bitmap_candidate_context_preserves_usable_source();
