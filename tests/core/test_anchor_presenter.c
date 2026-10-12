@@ -475,6 +475,27 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads);
     PPVec2 canonical=pp_item_snapshot_size(pp_scene_get(scene,id)->snapshot);CHECK(canonical.x==120&&canonical.y==113);
     CHECK(pp_scene_get(scene,id)->pose.angle_deg==23.5&&pp_scene_get(scene,id)->pose.opacity==.5);
+    PPPose usable=pp_scene_get(scene,id)->pose;PPRect usable_bounds=sprite->bounds;
+    pose.longest_dip=4096;pose.angle_deg=45;displays[1].drawable_pixels_per_dip=3;
+    CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,5);
+    CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&usable,sizeof(usable))&&!memcmp(&sprite->bounds,&usable_bounds,sizeof(usable_bounds)));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_gpu_resources(p).retained_bytes==69632);
+    displays[1].drawable_pixels_per_dip=1.5;uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot);
+    CHECK(pp_scene_replace(scene,id,&item,6,&error));fail_gl_upload=true;update(p,displays,600,300,6);fail_gl_upload=false;
+    CHECK(pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot)==revision&&surface_for(id)==sprite&&sprite->shown);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==69632&&pp_assets_external_raster_bytes(assets)==137437);
+    for(int i=0;i<16;i++) {
+        CHECK(pp_scene_replace(scene,id,&item,7+i,&error));update(p,displays,600,300,7+i);
+        CHECK(surface_for(id)==sprite&&sprite->source_width==136&&pp_anchor_presenter_gpu_resources(p).retained_bytes==69632);
+        CHECK(pp_assets_external_raster_bytes(assets)==274869); /* Project's shared original and one live replacement. */
+    }
+    CHECK(pp_anchor_presenter_gpu_resources(p).peak_bytes==139264);
+    pose=pp_scene_get(scene,id)->pose;event(p,sprite,PP_EVENT_BUTTON_DOWN,pose.center.x,pose.center.y,24);CHECK(capture_owner==sprite);
+    pose.opacity=0;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,25);CHECK(!sprite->shown&&!capture_owner);
+    pose.opacity=1;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,26);
+    event(p,sprite,PP_EVENT_BUTTON_DOWN,pose.center.x,pose.center.y,26.1);CHECK(capture_owner==sprite);
+    failed_gl_surface=sprite;pose.angle_deg+=10;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,27);failed_gl_surface=NULL;
+    CHECK(!pp_scene_get(scene,id)&&!surface_for(id)&&!capture_owner&&pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
 }
