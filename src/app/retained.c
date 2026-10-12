@@ -123,7 +123,7 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
   if(s->pose.opacity<=0) {
     pp_scalable_cancel(p,s);pp_sprite_hide(s);*next=HUGE_VAL;return true;
   }
-#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+#if !defined(PP_TEST_COMPAT_PRESENTATION) && (defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT))
   bool direct=pp_snapshot_is_svg(instance->snapshot)||pp_snapshot_is_png(instance->snapshot)||pp_snapshot_is_gif(instance->snapshot)||pp_item_snapshot_text_result(instance->snapshot)!=NULL;
 #else
   bool direct=false;

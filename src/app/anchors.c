@@ -111,7 +111,7 @@ static void close_anchor_surface(PPAnchorPresenter *p, AnchorSurface *a) {
 static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot *snapshot,
     PPPose pose,double elapsed,double *next,PPError *error) {
   bool direct=false;
-#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+#if !defined(PP_TEST_COMPAT_PRESENTATION) && (defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT))
   direct=true;
 #endif
   if(direct!=(pp_surface_window_id(a->preview)!=0)) {
@@ -141,7 +141,7 @@ static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot 
   pp_gif_release(p,candidate);return ok;
 }
 static bool create_anchor_target(PPSurface **out,PPError *error) {
-#if defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT)
+#if !defined(PP_TEST_COMPAT_PRESENTATION) && (defined(_WIN32) || defined(PP_TEST_DIRECT_TEXT))
   return pp_surface_create_gl(out,error);
 #else
   return pp_surface_create(out,error);

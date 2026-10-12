@@ -441,10 +441,36 @@ static void test_failure_isolation(void) {
   pp_runtime_tick(r, 23);
   CHECK(!memcmp(&pp_scene_get(pp_app_scene(app), a)->pose, &before,
                 sizeof(before)));
-  /* Native failure removes only this sprite's GPU/input ownership. The other
-   * sprite still retains their shared, once-charged CPU source. */
+  /* The 96 x 96 arrow endpoint has one RGBA + alpha charge shared by equal
+   * consumers. Compatibility windows also retain a private RGBA native copy. */
+  PPContentSources *sources=pp_app_content_sources(app,&error);
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  PPItemSnapshot *snapshot=pp_scene_get(pp_app_scene(app),b)->snapshot;
+  const PPFrame *canonical=NULL;double next;
+  CHECK(pp_item_snapshot_frame(snapshot,0,1,&canonical,&next,&error));
+  size_t canonical_bytes=canonical->stride*(size_t)canonical->height;
+  uint8_t *canonical_pixels=malloc(canonical_bytes);CHECK(canonical_pixels);
+  memcpy(canonical_pixels,canonical->pixels,canonical_bytes);
+  size_t before_observer=pp_assets_external_raster_bytes(pp_app_assets(app));
+  PPContentConsumer *observer=NULL;PPContentFrame shared={0};
+  CHECK(pp_content_consumer_create(sources,&observer,&error));
+  CHECK(pp_content_frame(observer,snapshot,96,1,0,&shared,&next,&error));
+  pp_content_accept(observer);
+  CHECK(shared.frame&&shared.frame->width==96&&shared.frame->height==96);
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==before_observer);
+  const PPFrame *shared_frame=shared.frame;
+  uint8_t shared_pixels[36864];memcpy(shared_pixels,shared.frame->pixels,sizeof(shared_pixels));
+  uint8_t shared_alpha[9216];memcpy(shared_alpha,shared.frame->content_alpha,sizeof(shared_alpha));
+  CHECK(sa->bounds.w==96&&sa->bounds.h==96);
+  CHECK(sb->red==255&&sb->blue==0);
+  PPRect sibling_bounds=sb->bounds;
+  step(r,sb,PP_EVENT_BUTTON_DOWN,320,210,23.1);
+  CHECK(capture_owner==sb);
+  unsigned releases=capture_releases;
   size_t charged = pp_assets_external_raster_bytes(pp_app_assets(app));
   size_t gpu_charged=pp_runtime_gpu_resources(r).retained_bytes;
+  bool was_direct=sa->window_id!=0;
   fail_surface = sa;
   pp_runtime_event(r, &(PPPlatformEvent){.surface = sa,
                                          .instance_id = a,
@@ -456,9 +482,21 @@ static void test_failure_isolation(void) {
   CHECK(!r->failed && !sprite(a) && sprite(b) == sb);
   CHECK(!pp_scene_get(pp_app_scene(app), a) &&
         pp_scene_get(pp_app_scene(app), b));
-  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==charged);
-  CHECK(pp_runtime_gpu_resources(r).retained_bytes<gpu_charged);
+  CHECK(pp_assets_external_raster_bytes(pp_app_assets(app))==charged-(was_direct?0:36864));
+  CHECK(pp_runtime_gpu_resources(r).retained_bytes==gpu_charged-(was_direct?36864:0));
+  CHECK(pp_content_sources_raster_bytes(sources)==46080);
+  CHECK(pp_content_frame(observer,snapshot,96,1,0,&shared,&next,&error));
+  CHECK(shared.frame==shared_frame);
+  CHECK(!memcmp(shared.frame->pixels,shared_pixels,sizeof(shared_pixels)));
+  CHECK(!memcmp(shared.frame->content_alpha,shared_alpha,sizeof(shared_alpha)));
+  const PPFrame *after_canonical=NULL;
+  CHECK(pp_item_snapshot_frame(snapshot,0,1,&after_canonical,&next,&error));
+  CHECK(after_canonical==canonical&&!memcmp(after_canonical->pixels,canonical_pixels,canonical_bytes));
+  free(canonical_pixels);
+  CHECK(sb->red==255&&sb->blue==0&&!memcmp(&sb->bounds,&sibling_bounds,sizeof(sibling_bounds)));
+  CHECK(capture_owner==sb&&capture_releases==releases);
   CHECK(strstr(pp_app_diagnostic(app), "presentation failure"));
+  step(r,sb,PP_EVENT_BUTTON_UP,320,210,24.3);CHECK(!capture_owner);
   pointer = (PPVec2){8, 8};
   pp_runtime_tick(r, 25);
   for (PPSurface *preview = surfaces; preview; preview = preview->next)
@@ -473,8 +511,20 @@ static void test_failure_isolation(void) {
   pp_runtime_tick(r, 25.02);
   fail_surface = NULL;
   CHECK(!r->failed && sprite(b) == sb && pp_scene_get(pp_app_scene(app), b));
+  pp_content_consumer_destroy(observer);
   pp_runtime_destroy(r);
   CHECK(!surfaces);
+  CHECK(!pp_content_sources_raster_bytes(sources)&&!pp_content_gpu_resources(sources).retained_bytes);
+  pp_scene_clear(pp_app_scene(app));
+  for(int anchor=0;anchor<PP_ANCHOR_COUNT;anchor++) {
+    const PPAnchorList *list=pp_project_anchor(pp_app_project(app),(PPAnchor)anchor);
+    while(list->count) {
+      CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_REMOVE_ITEM,
+        .anchor=(PPAnchor)anchor,.item_id=list->default_id},&error));
+      list=pp_project_anchor(pp_app_project(app),(PPAnchor)anchor);
+    }
+  }
+  CHECK(!pp_assets_external_raster_bytes(pp_app_assets(app)));
   pp_app_destroy(app);
 }
 static void test_external_change_cancels_owned_input(void) {
@@ -640,9 +690,10 @@ static void test_rejected_source_is_repreparable_by_new_consumer(void) {
   puts("PASS a new consumer prepares an equal rejected-empty endpoint while the prior owner suppresses repeated attempts");
 }
 int main(int argc,char **argv) {
+  if(argc==2&&!strcmp(argv[1],"--failure-isolation")){test_failure_isolation();return 0;}
   test_rejected_source_is_repreparable_by_new_consumer();
   test_app_source_owner_survives_runtime_and_project_epochs();
-#if defined(_WIN32)
+#if defined(_WIN32) && !defined(PP_TEST_COMPAT_PRESENTATION)
   if(argc==2&&!strcmp(argv[1],"--svg")){test_svg_runtime_generation_cleanup();return 0;}
   test_svg_runtime_generation_cleanup();
   test_png_runtime_reuse_and_generation_cleanup();
