@@ -23,17 +23,9 @@ static void text_diagnostics(PPSettings *settings) {
   editor->diagnostics[0] = 0;
   if (editor->draft.kind != PP_ITEM_TEXT)
     return;
-  PPFrame frame = {0};
-  PPTextDiagnostics diagnostics;
-  PPError error;
-  if (!pp_text_render(pp_app_assets(settings->app), editor->draft.text,
-                      &editor->draft.text_style, .5, &frame, &diagnostics,
-                      &error)) {
-    snprintf(editor->diagnostics, sizeof(editor->diagnostics), "Preview: %s",
-             error.message);
-    return;
-  }
-  pp_frame_destroy(&frame);
+  const PPTextDiagnostics *prepared=pp_item_snapshot_text_diagnostics(editor->preview);
+  if(!prepared)return;
+  PPTextDiagnostics diagnostics=*prepared;
   PPAsset *fallback = pp_asset_retain(pp_app_assets(settings->app),
                                       editor->draft.text_style.fallback_asset);
   PPFontInfo info = {0};
@@ -65,11 +57,15 @@ void pp_item_editor_sync(PPSettings *settings) {
     pp_item_snapshot_release(snapshot);
     return;
   }
-  if(!pp_ui_shaped_reset(settings->backend)) {
+  bool selection_changed=editor->id!=id||editor->generation!=pp_app_generation(settings->app);
+  PPAssetId previous=pp_item_snapshot_artwork_id(editor->preview),current=pp_item_snapshot_artwork_id(snapshot);
+  bool content_changed=selection_changed||memcmp(&previous,&current,sizeof(current));
+  if(content_changed&&!pp_ui_shaped_reset(settings->backend)) {
     pp_item_snapshot_release(snapshot);
     snprintf(editor->content_error,sizeof(editor->content_error),"Cannot bind editor context; retry selection.");
     return;
   }
+  if(selection_changed)pp_item_editor_release_preview(settings);
   pp_item_snapshot_release(editor->preview);
   editor->preview = snapshot;
   editor->id = id;
@@ -77,7 +73,7 @@ void pp_item_editor_sync(PPSettings *settings) {
   editor->revision = pp_project_revision(pp_app_project(settings->app));
   editor->content_error[0] = editor->appearance_error[0] =
       editor->font_error[0] = 0;
-  editor->animation_start = SDL_GetTicks() / 1000.0;
+  if(content_changed)editor->animation_start = SDL_GetTicks() / 1000.0;
   editor->preview_dirty = true;
   if (!snapshot)
     return;
@@ -194,9 +190,14 @@ static void commit(PPSettings *settings) {
     return;
   }
   editor->draft = item;
+  PPAssetId previous=pp_item_snapshot_artwork_id(editor->preview);
   pp_item_snapshot_release(editor->preview);
   editor->preview =
       pp_project_snapshot(pp_app_project(settings->app), editor->id);
+  PPAssetId current=pp_item_snapshot_artwork_id(editor->preview);
+  if(memcmp(&previous,&current,sizeof(current))) {
+    editor->animation_start=SDL_GetTicks()/1000.0;
+  }
   editor->revision = pp_project_revision(pp_app_project(settings->app));
   editor->preview_dirty = true;
   text_diagnostics(settings);
@@ -227,31 +228,20 @@ static void preview(PPSettings *settings) {
                    ((x / 18 + y / 18) % 2) ? pp_ui_theme.canvas
                                            : pp_ui_theme.surface);
   double now = SDL_GetTicks() / 1000.0;
-  if (editor->preview && (editor->preview_dirty || now >= editor->next_frame)) {
-    const PPFrame *source;
+  if (editor->preview) {
     double next;
     PPError error = {0};
     PPVec2 size = pp_item_snapshot_size(editor->preview);
     double longest = fmax(size.x, size.y);
     double fit = fmin(150.0 / longest, (rect.w - 28) / longest);
     fit = fmin(1, fit);
-    if (!editor->renderer && !pp_renderer_create(&editor->renderer, &error))
+    if(!pp_ui_preview_update(ui,settings->app,&editor->retained,editor->preview,
+        longest*fit,editor->draft.angle_deg,editor->draft.opacity,ui->scale,
+        fmax(0,now-editor->animation_start),&next,&error))
       goto preview_failed;
-    if (!pp_item_snapshot_frame(editor->preview, now - editor->animation_start,
-                                fit * ui->scale, &source, &next, &error))
-      goto preview_failed;
-    PPFrame transformed = {0};
-    if (!pp_renderer_transform(editor->renderer, source, longest * fit,
-                               editor->draft.angle_deg, editor->draft.opacity,
-                               ui->scale, &transformed, &error))
-      goto preview_failed;
-    bool uploaded =
-        pp_ui_upload_frame(ui, &editor->preview_texture, &transformed, &error);
-    editor->preview_width = transformed.width;
-    editor->preview_height = transformed.height;
-    pp_frame_destroy(&transformed);
-    if (!uploaded)
-      goto preview_failed;
+    editor->renderer=editor->retained.renderer;
+    editor->preview_texture=editor->retained.texture;
+    editor->preview_width=editor->retained.width;editor->preview_height=editor->retained.height;
     editor->preview_dirty = false;
     editor->next_frame = editor->animation_start + next;
     goto preview_ready;
@@ -261,11 +251,13 @@ static void preview(PPSettings *settings) {
     editor->next_frame = INFINITY;
     editor->preview_dirty = false;
     SDL_GL_MakeCurrent(ui->window, ui->gl_context);
+    editor->renderer=editor->retained.renderer;editor->preview_texture=editor->retained.texture;
+    editor->preview_width=editor->retained.width;editor->preview_height=editor->retained.height;
   }
 preview_ready:
   if (editor->preview_texture) {
-    float w = editor->preview_width / ui->scale,
-          h = editor->preview_height / ui->scale;
+    float w = editor->preview_width / editor->retained.density,
+          h = editor->preview_height / editor->retained.density;
     float fit = fminf(1, fminf((rect.w - 12) / w, (rect.h - 12) / h));
     w *= fit;
     h *= fit;
@@ -374,10 +366,10 @@ void pp_item_editor_destroy(PPSettings *settings) {
   PPItemEditor *editor = &settings->editor;
   pp_item_snapshot_release(editor->preview);
   free(editor->text);
-  if (editor->preview_texture &&
-      SDL_GL_MakeCurrent(settings->backend->window,
-                         settings->backend->gl_context))
-    glDeleteTextures(1, &editor->preview_texture);
-  pp_renderer_destroy(editor->renderer);
+  pp_item_editor_release_preview(settings);
   memset(editor, 0, sizeof(*editor));
+}
+void pp_item_editor_release_preview(PPSettings *settings) {
+  PPItemEditor *editor=&settings->editor;pp_ui_preview_release(&editor->retained);
+  editor->renderer=NULL;editor->preview_texture=0;editor->preview_width=editor->preview_height=0;editor->preview_dirty=true;
 }

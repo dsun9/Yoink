@@ -578,6 +578,7 @@ static void test_gif_rejected_replacement_preserves_clock(void) {
 }
 static void test_canonical_source_mapping(void) {
     PPError error={0};PPAnchorPresenter p={0};PPSurface *surface=NULL;
+    CHECK(pp_assets_create(&p.assets,&error));
     CHECK(pp_surface_create_gl(&surface,&error));PPRetainedPresentation retained={0};
     uint8_t pixels[4]={255,0,0,255};PPFrame frame={pixels,NULL,1,1,4};
     PPSourcePresentation source={.frame=&frame,.content_id=1,.source_revision=1,
@@ -593,6 +594,7 @@ static void test_canonical_source_mapping(void) {
     CHECK(surface->bounds.x==175 && surface->bounds.w==50 && retained.drawn.longest_dip==100);
     CHECK(pp_renderer_metrics(retained.renderer).source_uploads==1);
     pp_retained_release(&p,&retained);pp_surface_destroy(surface);
+    pp_content_sources_destroy(p.sources);pp_assets_destroy(p.assets);
     puts("PASS source origin mapping preserves canonical center/aspect and includes overhang without reupload");
 }
 static bool svg_lifecycle;

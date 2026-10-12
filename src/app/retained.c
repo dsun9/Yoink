@@ -35,14 +35,25 @@ PPRendererMetrics pp_anchor_presenter_renderer_metrics(const PPAnchorPresenter *
   return sum;
 }
 PPGpuResources pp_anchor_presenter_gpu_resources(const PPAnchorPresenter *p) {
-  PPGpuResources result=p?p->gpu:(PPGpuResources){0};
+  PPGpuResources result=p&&p->sources?pp_content_gpu_resources(p->sources):p?p->gpu:(PPGpuResources){0};
   if(!result.limit_bytes) result.limit_bytes=PP_RETAINED_GPU_LIMIT;return result;
+}
+bool pp_presenter_gpu_reserve(PPAnchorPresenter *p,size_t bytes,PPError *error) {
+  if(!p->gpu.limit_bytes)p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
+  if(bytes>p->gpu.limit_bytes||p->gpu.retained_bytes>p->gpu.limit_bytes-bytes)
+    return fail(error,PP_ERROR_RESOURCE_LIMIT,"Retained GPU sources exceed 256 MiB including candidate overlap");
+  if(!pp_presenter_sources(p,error)||!pp_content_gpu_reserve(p->sources,bytes,error))return false;
+  p->gpu.retained_bytes+=bytes;if(p->gpu.retained_bytes>p->gpu.peak_bytes)p->gpu.peak_bytes=p->gpu.retained_bytes;
+  return true;
+}
+void pp_presenter_gpu_release(PPAnchorPresenter *p,size_t bytes) {
+  p->gpu.retained_bytes-=bytes;pp_content_gpu_release(p->sources,bytes);
 }
 void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   add_metrics(&p->retired_renderer_metrics,pp_renderer_metrics(r->renderer));
   pp_renderer_destroy(r->renderer);pp_item_snapshot_release(r->snapshot);
   pp_gif_release(p,r->gif_entry);
-  p->gpu.retained_bytes-=r->gpu_bytes;memset(r,0,sizeof(*r));
+  pp_presenter_gpu_release(p,r->gpu_bytes);memset(r,0,sizeof(*r));
 }
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *s) {
   pp_scalable_release(p,s);
@@ -73,25 +84,19 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
       return fail(error,PP_ERROR_ARGUMENT,"Changed retained source requires a validated frame");
     size_t candidate=(size_t)frame->width*frame->height*4;
     bool overlap=!source.shared_texture && (r->content_id!=source.content_id || r->source_width!=frame->width || r->source_height!=frame->height);
-    if(!p->gpu.limit_bytes) p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
-    if(overlap && (candidate>p->gpu.limit_bytes || p->gpu.retained_bytes>p->gpu.limit_bytes-candidate))
-      return fail(error,PP_ERROR_RESOURCE_LIMIT,"Retained GPU sources exceed 256 MiB including candidate overlap");
-    if(overlap) {
-      p->gpu.retained_bytes+=candidate;
-      if(p->gpu.retained_bytes>p->gpu.peak_bytes) p->gpu.peak_bytes=p->gpu.retained_bytes;
-    }
+    if(overlap&&!pp_presenter_gpu_reserve(p,candidate,error))return false;
     bool ok=r->renderer || (pp_presenter_texture_owner(p,error) && pp_renderer_create_shared_window(&r->renderer,pp_surface_window_id(surface),p->texture_owner,error));
     if(ok) ok=source.shared_texture?pp_renderer_bind_shared(r->renderer,source.shared_texture,source.content_id,source.source_revision,error):
         pp_renderer_upload_source(r->renderer,frame,source.content_id,source.source_revision,error);
     if(!ok) {
-      if(overlap) p->gpu.retained_bytes-=candidate;
+      if(overlap) pp_presenter_gpu_release(p,candidate);
       /* A protective allocation rejection leaves the transactional old texture
        * usable. A broken context/presentation cannot keep intercepting input. */
       if(error && error->code==PP_ERROR_RENDER) goto native_failure;
       return false;
     }
-    if(overlap) {p->gpu.retained_bytes-=r->gpu_bytes;r->gpu_bytes=candidate;}
-    else if(source.shared_texture) {p->gpu.retained_bytes-=r->gpu_bytes;r->gpu_bytes=0;}
+    if(overlap) {pp_presenter_gpu_release(p,r->gpu_bytes);r->gpu_bytes=candidate;}
+    else if(source.shared_texture) {pp_presenter_gpu_release(p,r->gpu_bytes);r->gpu_bytes=0;}
     r->source_width=frame->width;r->source_height=frame->height;
     r->content_id=source.content_id;r->source_revision=source.source_revision;
     r->visual_alpha=source.visual_alpha;

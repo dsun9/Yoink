@@ -77,6 +77,7 @@ bool pp_item_snapshot_update(PPItemSnapshot *previous,const PPItem *replacement,
 /* Borrowed immutable canonical text raster/geometry, NULL for images.
  * Compatibility frame requests never mutate these source bytes or mapping. */
 const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot);
+const PPTextDiagnostics *pp_item_snapshot_text_diagnostics(const PPItemSnapshot *snapshot);
 /* Borrowed immutable useful-strike source for completely bitmap artwork.
  * Source RGBA remains valid through all requested-resolution frame calls and
  * retainers. It has no presentation coverage plane; alpha is validated before

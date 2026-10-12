@@ -27,6 +27,16 @@ bool pp_renderer_create(PPRenderer **out, PPError *error);
 /* Direct presentation is opt-in until native feasibility has passed. Borrows
  * an SDL OpenGL window by ID; destroy the renderer before the owning surface. */
 bool pp_renderer_create_for_window(PPRenderer **out, uint32_t window_id, PPError *error);
+/* UI adapter borrows its owning window/context. Destroy before that context.
+ * It restores the caller's context and GL state on every draw/failure. */
+bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t window_id,void *context,PPError *error);
+/* Retained top-down straight-alpha color texture in the borrowed UI context.
+ * Source remains premultiplied. No coverage attachment, CPU transform or readback.
+ * Caller reserves source and old/candidate output texture bytes before drawing. */
+bool pp_renderer_preview_source(PPRenderer *renderer,const PPFrame *source,
+    uint64_t content_id,uint64_t source_revision,PPVec2 layout,PPRect source_rect,
+    double longest_dip,double angle_deg,double opacity,double density,
+    unsigned *texture,int *width,int *height,PPError *error);
 /* Retains one RGBA texture, no coverage texture. A matching nonzero content ID
  * and revision reuses the upload. Source bytes are borrowed only during upload. */
 bool pp_renderer_upload_source(PPRenderer *renderer, const PPFrame *source,

@@ -58,6 +58,9 @@ bool pp_settings_create_scaled(PPSettings **out, PPApp *app, float scale,
     free(settings);
     return false;
   }
+  settings->backend->content_sources=pp_app_content_sources(app,error);
+  settings->backend->text_assets=pp_app_assets(app);
+  if(!settings->backend->content_sources){pp_ui_backend_destroy(settings->backend);free(settings);return false;}
   settings->generation = pp_app_generation(app);
   pp_settings_revert(settings);
   pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SHOW_SETTINGS});
@@ -82,6 +85,7 @@ static void geometry(PPSettings *settings) {
 void pp_settings_close(PPSettings *settings) {
   geometry(settings);
   pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_CLOSE_SETTINGS});
+  pp_item_editor_release_preview(settings);
 }
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (!settings || !event ||
@@ -403,13 +407,15 @@ void pp_settings_draw(PPSettings *settings) {
   pp_platform_poll_dialogs();
   if (settings->failed)
     return;
-  if (!pp_app_ui(settings->app)->settings_open) {
-    pp_ui_show(settings->backend, false);
-    return;
-  }
   if (settings->generation != pp_app_generation(settings->app)) {
+    pp_item_editor_release_preview(settings);
     settings->generation = pp_app_generation(settings->app);
     pp_settings_revert(settings);
+  }
+  if (!pp_app_ui(settings->app)->settings_open) {
+    pp_item_editor_release_preview(settings);
+    pp_ui_show(settings->backend, false);
+    return;
   }
   PPUIBackend *ui = settings->backend;
   PPError error = {0};
@@ -487,8 +493,10 @@ void pp_settings_draw(PPSettings *settings) {
     goto failed;
   if (!settings->render_hidden)
     pp_ui_show(ui, pp_app_ui(settings->app)->settings_open);
+  if(!pp_app_ui(settings->app)->settings_open)pp_item_editor_release_preview(settings);
   return;
 failed:
+  pp_item_editor_release_preview(settings);
   settings->failed = true;
   if (!settings->render_failure[0])
     snprintf(settings->render_failure,sizeof(settings->render_failure),"%s",error.message);

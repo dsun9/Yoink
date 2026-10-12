@@ -12,7 +12,8 @@ struct PPRenderer {
     PFNGLDEBUGMESSAGECALLBACKPROC error_callback;
     bool draw_error;
     uint32_t window_id;
-    bool owns_window;
+    bool owns_window,borrows_context;
+    GLuint preview_program,preview_texture;
     int source_width, source_height;
     uint64_t content_id, revision;
     PPRendererMetrics metrics;
@@ -49,6 +50,63 @@ static const char *fragment_shader =
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
+static const char *preview_shader =
+    "#version 150\n"
+    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 source_size;"
+    "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
+    "out vec4 color; void main() {"
+    "vec2 d=gl_FragCoord.xy-destination_size*0.5;"
+    "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
+    "vec2 uv=(s-source_offset)/source_size+0.5;"
+    "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) color=vec4(0);"
+    "else { color=texture(image,uv)*opacity; if(color.a>0) color.rgb/=color.a; else color.rgb=vec3(0); } }";
+typedef struct GLState {
+    GLint program,vao,draw_fbo,read_fbo,draw_buffer,read_buffer,viewport[4];
+    GLint active,texture0,active_texture,unpack_alignment,unpack_rows;
+    GLboolean blend,dither,scissor,cull,depth;
+} GLState;
+static void save_state(PPGL *gl,GLState *state) {
+    glGetIntegerv(GL_CURRENT_PROGRAM,&state->program);glGetIntegerv(GL_VERTEX_ARRAY_BINDING,&state->vao);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&state->draw_fbo);glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&state->read_fbo);
+    glGetIntegerv(GL_DRAW_BUFFER,&state->draw_buffer);glGetIntegerv(GL_READ_BUFFER,&state->read_buffer);
+    glGetIntegerv(GL_VIEWPORT,state->viewport);glGetIntegerv(GL_ACTIVE_TEXTURE,&state->active);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&state->active_texture);gl->ActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D,&state->texture0);gl->ActiveTexture(state->active);
+    glGetIntegerv(GL_UNPACK_ALIGNMENT,&state->unpack_alignment);glGetIntegerv(GL_UNPACK_ROW_LENGTH,&state->unpack_rows);
+    state->blend=glIsEnabled(GL_BLEND);state->dither=glIsEnabled(GL_DITHER);state->scissor=glIsEnabled(GL_SCISSOR_TEST);
+    state->cull=glIsEnabled(GL_CULL_FACE);state->depth=glIsEnabled(GL_DEPTH_TEST);
+}
+static void enabled(GLenum setting,GLboolean value){if(value)glEnable(setting);else glDisable(setting);}
+static void restore_state(PPGL *gl,const GLState *state) {
+    gl->UseProgram(state->program);gl->BindVertexArray(state->vao);
+    gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER,state->draw_fbo);glDrawBuffer(state->draw_buffer);
+    gl->BindFramebuffer(GL_READ_FRAMEBUFFER,state->read_fbo);glReadBuffer(state->read_buffer);
+    glViewport(state->viewport[0],state->viewport[1],state->viewport[2],state->viewport[3]);
+    gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,state->texture0);
+    gl->ActiveTexture(state->active);glBindTexture(GL_TEXTURE_2D,state->active_texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT,state->unpack_alignment);glPixelStorei(GL_UNPACK_ROW_LENGTH,state->unpack_rows);
+    enabled(GL_BLEND,state->blend);enabled(GL_DITHER,state->dither);enabled(GL_SCISSOR_TEST,state->scissor);
+    enabled(GL_CULL_FACE,state->cull);enabled(GL_DEPTH_TEST,state->depth);
+}
+static bool restore_context(SDL_Window *window,SDL_GLContext context,PPError *error) {
+    return SDL_GL_MakeCurrent(window,context)||error_set(error,PP_ERROR_RENDER,"Cannot restore caller graphics context");
+}
+bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t id,void *context,PPError *error) {
+    if(out)*out=NULL;SDL_Window *window=SDL_GetWindowFromID(id);
+    if(!out||!window||!context)return error_set(error,PP_ERROR_ARGUMENT,"Missing UI context or renderer output");
+    SDL_Window *previous_window=SDL_GL_GetCurrentWindow();SDL_GLContext previous_context=SDL_GL_GetCurrentContext();
+    if(!SDL_GL_MakeCurrent(window,context))return error_set(error,PP_ERROR_RENDER,SDL_GetError());
+    PPRenderer *r=calloc(1,sizeof(*r));if(!r){restore_context(previous_window,previous_context,NULL);return error_set(error,PP_ERROR_MEMORY,"Cannot allocate UI renderer");}
+    r->window=window;r->window_id=id;r->context=context;r->borrows_context=true;r->group=r;
+    bool ok=pp_gl_load(&r->gl,error),saved=ok;GLState state={0};if(saved)save_state(&r->gl,&state);
+    if(ok){r->preview_program=pp_gl_program(&r->gl,vertex_shader,preview_shader,error);ok=r->preview_program!=0;}
+    if(ok){r->gl.GenVertexArrays(1,&r->vao);r->gl.GenFramebuffers(1,&r->fbo);glGenTextures(4,r->textures);ok=glGetError()==GL_NO_ERROR;}
+    PPGL gl=r->gl;
+    if(!ok){if(saved)pp_renderer_destroy(r);else free(r);}
+    if(saved)restore_state(&gl,&state);
+    if(!restore_context(previous_window,previous_context,error)) {if(ok)pp_renderer_destroy(r);return false;}
+    if(!ok)return false;*out=r;return true;
+}
 static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool texture_owner, PPError *error) {
     if (!out) return error_set(error, PP_ERROR_ARGUMENT, "Missing renderer output");
     *out = NULL;
@@ -220,6 +278,57 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
     double angle_deg,double opacity,double density,PPError *error) {
     return pp_renderer_draw_source(renderer,layout,(PPRect){0,0,layout.x,layout.y},longest,angle_deg,opacity,density,error);
 }
+bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,uint64_t revision,
+    PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,
+    unsigned *out,int *width,int *height,PPError *error) {
+    int w,h;
+    if(!r||!r->borrows_context||!out||!width||!height||!source||!source->pixels||
+        !isfinite(opacity)||opacity<0||opacity>1||
+        !pp_geometry_source_extent(layout,rect,longest,angle,density,&w,&h)||w>8192||h>8192)
+        return error_set(error,PP_ERROR_ARGUMENT,"Invalid retained UI transform");
+    SDL_Window *previous_window=SDL_GL_GetCurrentWindow();SDL_GLContext previous_context=SDL_GL_GetCurrentContext();
+    if(!current(r,error)) {restore_context(previous_window,previous_context,NULL);return false;}
+    GLState state;PPGL *gl=&r->gl;save_state(gl,&state);
+    bool ok=pp_renderer_upload_source(r,source,id,revision,error);GLuint candidate=0;
+    if(ok) {
+        gl->ActiveTexture(GL_TEXTURE0);glGenTextures(1,&candidate);
+        texture(candidate,GL_RGBA8,GL_RGBA,w,h,NULL);
+        gl->BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
+        gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,candidate,0);
+        glDrawBuffer(GL_COLOR_ATTACHMENT0);
+        if(gl->CheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE)
+            ok=error_set(error,PP_ERROR_RENDER,"Incomplete UI preview framebuffer");
+    }
+    if(ok) {
+        double radians=fmod(angle,360)*3.14159265358979323846/180;
+        double scale=longest*density/fmax(layout.x,layout.y);
+        glBindTexture(GL_TEXTURE_2D,r->textures[0]);gl->UseProgram(r->preview_program);
+#define LOCATION(name) gl->GetUniformLocation(r->preview_program,#name)
+        gl->Uniform1i(LOCATION(image),0);gl->Uniform2f(LOCATION(destination_size),(float)w,(float)h);
+        gl->Uniform2f(LOCATION(source_size),(float)source->width,(float)source->height);
+        gl->Uniform2f(LOCATION(rotation),(float)cos(radians),(float)sin(radians));
+        gl->Uniform2f(LOCATION(scale),(float)(scale*rect.w/source->width),(float)(scale*rect.h/source->height));
+        gl->Uniform2f(LOCATION(source_offset),(float)((rect.x+rect.w*.5-layout.x*.5)*source->width/rect.w),
+            (float)((rect.y+rect.h*.5-layout.y*.5)*source->height/rect.h));
+        gl->Uniform1f(LOCATION(opacity),(float)opacity);
+#undef LOCATION
+        glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glDisable(GL_CULL_FACE);glDisable(GL_DEPTH_TEST);
+        glViewport(0,0,w,h);gl->BindVertexArray(r->vao);glDrawArrays(GL_TRIANGLES,0,3);
+        GLenum failure=glGetError();
+        if(failure!=GL_NO_ERROR)ok=error_set(error,failure==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Retained UI drawing failed");
+    }
+    gl->BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
+    gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
+    if(ok) {
+        if(state.texture0==(GLint)r->preview_texture&&r->preview_texture)state.texture0=candidate;
+        if(state.active_texture==(GLint)r->preview_texture&&r->preview_texture)state.active_texture=candidate;
+        glDeleteTextures(1,&r->preview_texture);r->preview_texture=candidate;
+        *out=candidate;*width=w;*height=h;r->metrics.transform_draws++;
+    } else if(candidate)glDeleteTextures(1,&candidate);
+    restore_state(gl,&state);
+    if(!restore_context(previous_window,previous_context,error))return false;
+    return ok;
+}
 bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
     double angle_deg,double opacity,double density,PPError *error) {
     if(!renderer || renderer->owns_window || !renderer->content_id || !isfinite(layout.x) || !isfinite(layout.y) ||
@@ -323,18 +432,34 @@ bool pp_renderer_transform_source(PPRenderer *renderer,const PPFrame *source,PPV
 }
 void pp_renderer_destroy(PPRenderer *renderer) {
     if (!renderer) return;
+    SDL_Window *previous_window=SDL_GL_GetCurrentWindow();SDL_GLContext previous_context=SDL_GL_GetCurrentContext();
+    GLState state={0};bool saved=false;
     SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
     if (window && renderer->context && SDL_GL_MakeCurrent(window, renderer->context)) {
+        if(renderer->borrows_context){save_state(&renderer->gl,&state);saved=true;}
         if(renderer->error_callback)renderer->error_callback(NULL,NULL);
         if(renderer->shared) {glFinish();glBindTexture(GL_TEXTURE_2D,0);renderer->shared=NULL;}
         PPGL *gl = &renderer->gl;
         if (renderer->program) gl->DeleteProgram(renderer->program);
+        if (renderer->preview_program) gl->DeleteProgram(renderer->preview_program);
         if (renderer->vao) gl->DeleteVertexArrays(1,&renderer->vao);
         if (renderer->fbo) gl->DeleteFramebuffers(1,&renderer->fbo);
         glDeleteTextures(4,renderer->textures);
+        glDeleteTextures(1,&renderer->preview_texture);
+        if(saved) {
+            for(unsigned i=0;i<4;i++) {
+                if(state.texture0==(GLint)renderer->textures[i])state.texture0=0;
+                if(state.active_texture==(GLint)renderer->textures[i])state.active_texture=0;
+            }
+            if(state.texture0==(GLint)renderer->preview_texture)state.texture0=0;
+            if(state.active_texture==(GLint)renderer->preview_texture)state.active_texture=0;
+            restore_state(&renderer->gl,&state);
+        }
     }
-    if (renderer->context) SDL_GL_DestroyContext(renderer->context);
+    if (renderer->context&&!renderer->borrows_context) SDL_GL_DestroyContext(renderer->context);
     if (window && renderer->owns_window) SDL_DestroyWindow(window);
     bool owns_window=renderer->owns_window;
+    bool borrowed=renderer->borrows_context;
     free(renderer); if(owns_window) SDL_QuitSubSystem(SDL_INIT_VIDEO);
+    if(borrowed)restore_context(previous_window,previous_context,NULL);
 }

@@ -2,10 +2,12 @@
 #define POINTY_DRAWER_INTERNAL_H
 #include "pointy/runtime.h"
 #include "pointy/ui.h"
+#include "preview.h"
 typedef struct PPDrawerThumbnail {
   PPItemSnapshot *snapshot; /* Retained immutable content identity, not raster identity. */
   float scale;
   int width, height;
+  PPUIContentPreview retained;
 } PPDrawerThumbnail;
 typedef struct PPDrawerCache {
   PPUIBackend *backend; /* Owned when no drawer has checked it out. */

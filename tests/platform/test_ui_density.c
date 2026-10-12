@@ -5,6 +5,9 @@
 #include "../../src/ui/shaped_edit.h"
 #include "../test.h"
 #include <string.h>
+static void cleanup(void);
+#undef CHECK
+#define CHECK(expr) do {if(!(expr)){fprintf(stderr,"%s:%d: CHECK(%s) failed\n",__FILE__,__LINE__,#expr);cleanup();exit(1);}}while(0)
 
 static float density = 1;
 float SDLCALL pp_test_window_density(SDL_Window *window) {
@@ -14,8 +17,9 @@ float SDLCALL pp_test_window_density(SDL_Window *window) {
 static PPApp *app;
 static PPSettings *settings;
 static void cleanup(void) {
-  pp_settings_destroy(settings);
-  pp_app_destroy(app);
+  PPSettings *owned_settings=settings;settings=NULL;
+  PPApp *owned_app=app;app=NULL;
+  pp_settings_destroy(owned_settings);pp_app_destroy(owned_app);
 }
 static void draw(void) {
   pp_settings_draw(settings);
@@ -48,6 +52,7 @@ int main(void) {
   SDL_Window *window = ui->window;
   CHECK(SDL_SetWindowSize(window, 1040, 1800));
   draw();
+  CHECK(pp_renderer_metrics(settings->editor.renderer).readbacks==0);
   pp_ui_focus(ui, "item-text");
   key(PP_KEY_END, 0);
   pp_settings_event(
@@ -104,7 +109,10 @@ int main(void) {
         if (view->rows[row].frame.width == reused_width &&
             view->rows[row].frame.height == reused_height)
           row_texture = true;
-      CHECK(row_texture);
+      const PPUIContentPreview *retained=&settings->editor.retained;
+      bool preview_texture=(reused_width==retained->width&&reused_height==retained->height)||
+        (reused_width==retained->source_width&&reused_height==retained->source_height);
+      CHECK(row_texture||preview_texture);
     }
     GLint atlas_width = 0, atlas_height = 0;
     glBindTexture(GL_TEXTURE_2D, ui->font_texture);
@@ -150,5 +158,8 @@ int main(void) {
   puts("PASS hidden Settings density 1->2->1: real font/preview rasters "
        "refresh, old texture released; drafts, selection, focus, window and "
        "geometry preserved");
+  /* Join private source work before CRT exit callbacks acquire the onexit
+   * lock; HarfBuzz may register its own finalizer during that work. */
+  cleanup();
   return 0;
 }

@@ -15,6 +15,7 @@ struct PPItemSnapshot {
     PPAsset *image, *primary, *fallback;
     PPVec2 size;
     PPTextResult text_result;
+    PPTextDiagnostics diagnostics;
     PPTextResult compatibility;
     PPTextResult bitmap_source;
     double text_scale;
@@ -71,7 +72,7 @@ static bool retain_font(PPAssets *assets, PPAssetId id, int face, PPAsset **out,
 static bool render_text(PPItemSnapshot *snapshot, double scale, PPError *error) {
     PPTextResult candidate = {0};
     if (!pp_text_render_result(snapshot->assets, snapshot->item.text, &snapshot->item.text_style,
-            scale, &candidate, NULL, error)) return false;
+            scale, &candidate, snapshot->text_result.frame.pixels?NULL:&snapshot->diagnostics, error)) return false;
     /* Text validates per-frame dimensions/bytes before allocating. The fresh
      * output is transient until reserved here; old retained pixels remain
      * charged until commit, so failure preserves the existing cache. */
@@ -198,6 +199,10 @@ uint64_t pp_item_snapshot_content_id(const PPItemSnapshot *snapshot){uint64_t va
 const PPTextResult *pp_item_snapshot_text_result(const PPItemSnapshot *snapshot) {
     snapshot=content_owner((PPItemSnapshot *)snapshot);
     return snapshot && snapshot->item.kind==PP_ITEM_TEXT?&snapshot->text_result:NULL;
+}
+const PPTextDiagnostics *pp_item_snapshot_text_diagnostics(const PPItemSnapshot *snapshot) {
+    snapshot=content_owner((PPItemSnapshot *)snapshot);
+    return snapshot&&snapshot->item.kind==PP_ITEM_TEXT?&snapshot->diagnostics:NULL;
 }
 bool pp_item_snapshot_bitmap_source(PPItemSnapshot *snapshot,const PPTextResult **out,PPError *error) {
     snapshot=content_owner(snapshot);

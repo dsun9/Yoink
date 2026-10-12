@@ -107,6 +107,16 @@ bool pp_renderer_create(PPRenderer **out, PPError *error) {
   return true;
 }
 void pp_renderer_destroy(PPRenderer *r) {if(r && r!=(PPRenderer *)1)free(r);}
+bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t id,void *context,PPError *error) {
+  (void)out;(void)id;(void)context;(void)error;CHECK(false);return false;
+}
+bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,uint64_t revision,
+    PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,
+    unsigned *texture,int *width,int *height,PPError *error) {
+  (void)r;(void)source;(void)id;(void)revision;(void)layout;(void)rect;(void)longest;
+  (void)angle;(void)opacity;(void)density;(void)texture;(void)width;(void)height;(void)error;
+  CHECK(false);return false;
+}
 PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRenderer *)1?(PPRendererMetrics){cpu_transforms,cpu_transforms,cpu_transforms*2}:r?r->metrics:(PPRendererMetrics){0};}
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++direct_window_serial;return true;}
 uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}

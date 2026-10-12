@@ -16,6 +16,8 @@ typedef struct ContentEntry {
   PPError error;
   size_t references,bytes;
   bool requested,retry,done,owns_frame;
+  bool visual_alpha,native;
+  uint64_t native_revision;
 } ContentEntry;
 struct PPContentConsumer {
   struct PPContentConsumer *next;
@@ -32,10 +34,12 @@ struct PPContentSources {
   bool owns_worker;
   ContentEntry *entries;
   PPContentConsumer *consumers;
+  PPGpuResources gpu;
 };
 static bool fail(PPError *error,int code,const char *message) {
   if(error){error->code=code;snprintf(error->message,sizeof(error->message),"%s",message);}return false;
 }
+static bool visual_alpha(const PPFrame *frame);
 typedef struct ContentCapture {
   PPTextStyle style;
   char *text,*family;
@@ -137,8 +141,10 @@ void pp_content_consumer_destroy(PPContentConsumer *c) {
   PPContentConsumer **link=&s->consumers;while(*link&&*link!=c)link=&(*link)->next;if(*link)*link=c->next;free(c);
 }
 void pp_content_sources_destroy(PPContentSources *s) {
-  if(!s)return;while(s->consumers)pp_content_consumer_destroy(s->consumers);
-  if(s->owns_worker)pp_raster_worker_destroy(s->worker);free(s);
+  if(!s)return;
+  while(s->consumers)pp_content_consumer_destroy(s->consumers);
+  if(s->owns_worker)pp_raster_worker_destroy(s->worker);
+  free(s);
 }
 bool pp_content_consumer_create(PPContentSources *s,PPContentConsumer **out,PPError *error) {
   if(out)*out=NULL;if(!s||!out)return fail(error,PP_ERROR_ARGUMENT,"Content consumer requires a source owner");
@@ -194,7 +200,7 @@ void pp_content_sources_poll(PPContentSources *s) {
     ContentEntry *e=s->entries;while(e&&(e->key.instance_id!=completion.key.instance_id||e->key.serial!=completion.key.serial))e=e->next;
     if(e&&e->requested) {
       e->requested=false;e->done=true;e->error=completion.error;
-      if(completion.success){e->bytes=pp_raster_completion_take(&completion);e->result=completion.result;e->owns_frame=true;completion.result=(PPTextResult){0};}
+      if(completion.success){e->bytes=pp_raster_completion_take(&completion);e->result=completion.result;e->owns_frame=true;e->visual_alpha=visual_alpha(&e->result.frame);completion.result=(PPTextResult){0};}
     }
     pp_raster_completion_release(&completion);
   }
@@ -242,21 +248,31 @@ void pp_content_reject(PPContentConsumer *c) {
 size_t pp_content_sources_raster_bytes(const PPContentSources *s) {
   size_t bytes=0;for(ContentEntry *e=s?s->entries:NULL;e;e=e->next)bytes+=e->bytes;return bytes;
 }
+bool pp_content_gpu_reserve(PPContentSources *s,size_t bytes,PPError *error) {
+  if(!s)return fail(error,PP_ERROR_ARGUMENT,"GPU reservation requires content owner");
+  s->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
+  if(bytes>s->gpu.limit_bytes||s->gpu.retained_bytes>s->gpu.limit_bytes-bytes)
+    return fail(error,PP_ERROR_RESOURCE_LIMIT,"Retained GPU textures exceed 256 MiB including candidate overlap");
+  s->gpu.retained_bytes+=bytes;if(s->gpu.retained_bytes>s->gpu.peak_bytes)s->gpu.peak_bytes=s->gpu.retained_bytes;
+  return true;
+}
+void pp_content_gpu_release(PPContentSources *s,size_t bytes){if(s)s->gpu.retained_bytes-=bytes;}
+PPGpuResources pp_content_gpu_resources(const PPContentSources *s){PPGpuResources result=s?s->gpu:(PPGpuResources){0};result.limit_bytes=PP_RETAINED_GPU_LIMIT;return result;}
 static bool visual_alpha(const PPFrame *frame) {
   if(!frame||!frame->pixels)return false;
   for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++)if(frame->pixels[(size_t)y*frame->stride+x*4+3])return true;
   return false;
 }
-static PPContentFrame packet(const PPTextResult *r,uint64_t identity,uint64_t revision,bool svg) {
+static PPContentFrame packet(const PPTextResult *r,uint64_t identity,uint64_t revision,bool svg,bool visible) {
   return(PPContentFrame){.frame=&r->frame,.content_id=identity,.source_revision=revision,.layout=r->layout_size,
-    .visual_alpha=visual_alpha(&r->frame),.source_rect=svg?(PPRect){0,0,r->layout_size.x,r->layout_size.y}:
+    .visual_alpha=visible,.source_rect=svg?(PPRect){0,0,r->layout_size.x,r->layout_size.y}:
       (PPRect){r->layout_origin.x-r->raster_origin_px.x/r->raster_density,r->layout_origin.y-r->raster_origin_px.y/r->raster_density,
         r->frame.width/r->raster_density,r->frame.height/r->raster_density}};
 }
 static ContentEntry *seed(PPContentConsumer *c,PPItemSnapshot *snapshot,bool svg,bool bitmap,PPError *error) {
   PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);PPAssetId artwork=pp_item_snapshot_artwork_id(snapshot);
   ContentEntry *e=s->entries;PPVec2 layout=pp_item_snapshot_size(snapshot);
-  while(e&&(memcmp(&e->artwork,&artwork,sizeof(artwork))||e->key.longest_dip!=0||e->result.layout_size.x!=layout.x||e->result.layout_size.y!=layout.y))e=e->next;
+  while(e&&(e->native||memcmp(&e->artwork,&artwork,sizeof(artwork))||e->key.longest_dip!=0||e->result.layout_size.x!=layout.x||e->result.layout_size.y!=layout.y))e=e->next;
   if(e){e->references++;return e;}
   PPTextResult initial={.layout_size=pp_item_snapshot_size(snapshot),.raster_density=1};const PPTextResult *source=NULL;
   if(bitmap) {if(!pp_item_snapshot_bitmap_source(snapshot,&source,error))return NULL;}
@@ -280,7 +296,23 @@ static ContentEntry *seed(PPContentConsumer *c,PPItemSnapshot *snapshot,bool svg
     memcpy(e->result.frame.pixels,source->frame.pixels,rgba);if(alpha)memcpy(e->result.frame.content_alpha,source->frame.content_alpha,alpha);
     e->owns_frame=true;e->bytes=rgba+alpha;
   }
+  e->visual_alpha=visual_alpha(&e->result.frame);
   e->snapshot=pp_item_snapshot_retain(snapshot);e->references=1;e->next=s->entries;s->entries=e;return e;
+}
+static ContentEntry *native_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,PPFrameSelection selected,PPError *error) {
+  PPContentSources *s=c->sources;PPAssetId artwork=pp_item_snapshot_artwork_id(snapshot);
+  ContentEntry *e=s->entries;
+  while(e&&(!e->native||e->native_revision!=selected.revision||memcmp(&e->artwork,&artwork,sizeof(artwork))))e=e->next;
+  if(!e) {
+    if(s->next_owner==UINT64_MAX){fail(error,PP_ERROR_RESOURCE_LIMIT,"Content ownership IDs exhausted");return NULL;}
+    e=calloc(1,sizeof(*e));if(!e){fail(error,PP_ERROR_MEMORY,"Cannot retain native content metadata");return NULL;}
+    e->key=(PPRasterKey){s->generation,s->next_owner++,pp_item_snapshot_revision(snapshot),1,0,0};
+    e->native=true;e->native_revision=selected.revision;e->artwork=artwork;e->done=true;
+    e->snapshot=pp_item_snapshot_retain(snapshot);e->result.frame=*selected.frame;
+    e->visual_alpha=visual_alpha(selected.frame);e->next=s->entries;s->entries=e;
+  }
+  if(c->desired!=e){e->references++;pp_content_cancel(c);c->desired=e;}
+  return e;
 }
 bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density,double elapsed,
     PPContentFrame *out,double *next,PPError *error) {
@@ -291,10 +323,10 @@ bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longe
   if(item->kind==PP_ITEM_IMAGE) {
     PPAsset *asset=pp_asset_retain(c->sources->assets,item->image_asset);svg=pp_asset_kind(asset)==PP_ASSET_SVG;pp_asset_release(asset);
     if(!svg) {
-      if(c->desired||c->seed)pp_content_cancel(c);
       PPFrameSelection selected;if(!pp_item_snapshot_select_frame(snapshot,elapsed,1,&selected,error))return false;
+      ContentEntry *e=native_frame(c,snapshot,selected,error);if(!e)return false;
       *out=(PPContentFrame){.frame=selected.frame,.content_id=identity,.source_revision=selected.revision,
-        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=visual_alpha(selected.frame)};*next=selected.next_change;return true;
+        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=e->visual_alpha};*next=selected.next_change;return true;
     }
   }
   if(bitmap&&c->desired)pp_content_cancel(c);
@@ -309,7 +341,8 @@ bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longe
   }
   *next=HUGE_VAL;
   if(available) {
-    *out=packet(available,identity,revision,svg);PPVec2 layout=pp_item_snapshot_size(snapshot);
+    ContentEntry *entry=c->sources->entries;while(entry&&&entry->result!=available)entry=entry->next;
+    *out=packet(available,identity,revision,svg,entry&&entry->visual_alpha);PPVec2 layout=pp_item_snapshot_size(snapshot);
     double sx=layout.x/out->layout.x,sy=layout.y/out->layout.y;
     out->source_rect=(PPRect){out->source_rect.x*sx,out->source_rect.y*sy,out->source_rect.w*sx,out->source_rect.h*sy};out->layout=layout;
   }

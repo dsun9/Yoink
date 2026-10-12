@@ -124,6 +124,8 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,
     PPRetainedPresentation *retained,PPSourcePresentation source,PPPose pose,
     const PPDisplay *display,PPError *error);
 void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *retained);
+bool pp_presenter_gpu_reserve(PPAnchorPresenter *p,size_t bytes,PPError *error);
+void pp_presenter_gpu_release(PPAnchorPresenter *p,size_t bytes);
 
 PPSprite *pp_sprites_find(PPAnchorPresenter *p, uint64_t id);
 PPSprite *pp_sprites_create(PPAnchorPresenter *p, PPAnchor anchor, PPPose pose,

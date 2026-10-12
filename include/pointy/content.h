@@ -37,4 +37,9 @@ void pp_content_accept(PPContentConsumer *consumer);
 void pp_content_reject(PPContentConsumer *consumer);
 void pp_content_cancel(PPContentConsumer *consumer); /* Cancels only this consumer's desired work. */
 size_t pp_content_sources_raster_bytes(const PPContentSources *sources);
+/* App aggregate includes native/UI source and UI output textures. Shared
+ * textures charge once; callers keep old allocations charged until commit. */
+bool pp_content_gpu_reserve(PPContentSources *sources,size_t bytes,PPError *error);
+void pp_content_gpu_release(PPContentSources *sources,size_t bytes);
+PPGpuResources pp_content_gpu_resources(const PPContentSources *sources);
 #endif
