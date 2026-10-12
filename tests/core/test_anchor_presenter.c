@@ -1213,7 +1213,40 @@ static void test_removed_pressed_anchor_cancels_pending_pull(void) {
   }
   puts("PASS removing a pressed source cancels its pending pull without spawning removed content or clearing another owner");
 }
+static void test_hidden_obsolete_source_releases_its_reference(void) {
+  for(int sibling=0;sibling<2;sibling++)for(int replacement=0;replacement<2;replacement++) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    const char *red="<svg width='13.5' height='7.5'><rect width='13.5' height='7.5' fill='red'/></svg>";
+    const char *blue="<svg width='7.5' height='13.5'><rect width='7.5' height='13.5' fill='blue'/></svg>";
+    PPItem a={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1},b=a;uint64_t removed;
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)red,strlen(red)},PP_ASSET_SVG,&a.image_asset,&error));
+    CHECK(pp_asset_import(assets,(PPBytes){(const uint8_t *)blue,strlen(blue)},PP_ASSET_SVG,&b.image_asset,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&a,&removed,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&b,NULL,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay display={1,{0,0,1920,1080},1,1};
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++){SDL_Delay(1);CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));}
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));uint64_t id=0;
+    if(sibling){PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{500,500},96,0,1},1,&error);CHECK(s);id=s->id;CHECK(pp_sprites_update(p,1,&error));}
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){500,500},2,&error));
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){500,500},2.5,&error));
+    CHECK(pp_assets_external_raster_bytes(assets)==25925);
+    uint64_t requests=pp_anchor_presenter_metrics(p).worker_requests;
+    CHECK(pp_project_set_name(project,"Hidden artwork",&error));
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){500,500},2.75,&error));
+    CHECK(pp_assets_external_raster_bytes(assets)==25925&&pp_anchor_presenter_metrics(p).worker_requests==requests);
+    if(replacement)CHECK(pp_project_edit_item(project,removed,&b,&error));
+    else CHECK(pp_project_remove_item(project,PP_ANCHOR_TOP_LEFT,removed,&error));
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){500,500},3,&error));
+    CHECK(pp_assets_external_raster_bytes(assets)==(sibling?25925:5));
+    if(sibling){CHECK(surface_for(id)->shown&&surface_for(id)->red==255);pp_scene_delete(p->scene,id);CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){500,500},3.1,&error));CHECK(pp_assets_external_raster_bytes(assets)==5);}
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  }
+  puts("PASS hidden removed/replaced artwork releases obsolete ownership while a live sibling keeps its shared source");
+}
 int main(void) {
+    test_hidden_obsolete_source_releases_its_reference();
     test_removed_pressed_anchor_cancels_pending_pull();
     test_anchor_pose_edits_keep_artwork_preparation();
     test_scalable_anchor_pull_reuses_prepared_content();

@@ -305,6 +305,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
     PPItemSnapshot *current=item?pp_project_snapshot(p->project,item->id):NULL;
     uint64_t revision=pp_item_snapshot_revision(current);
     uint64_t content_id=pp_item_snapshot_content_id(current);
+    PPAssetId artwork=pp_item_snapshot_artwork_id(current);
     pp_item_snapshot_release(current);
     double scale = a->display.desktop_units_per_dip;
     if (a->failed) {
@@ -332,7 +333,11 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
         a->shown = false;
       }
       pp_content_cancel(a->content);
-      if(!item){pp_content_consumer_destroy(a->content);a->content=NULL;pp_item_snapshot_release(a->snapshot);a->snapshot=NULL;a->source=(PPSourcePresentation){0};}
+      PPAssetId accepted=pp_item_snapshot_artwork_id(a->snapshot);
+      if(!item||memcmp(&accepted,&artwork,sizeof(artwork))) {
+        pp_content_consumer_destroy(a->content);a->content=NULL;
+        pp_item_snapshot_release(a->snapshot);a->snapshot=NULL;a->source=(PPSourcePresentation){0};
+      }
       continue;
     }
     if (!a->shown || a->opacity != r->opacity || a->scale != scale || a->density!=a->display.drawable_pixels_per_dip ||
