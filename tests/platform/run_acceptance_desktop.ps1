@@ -91,6 +91,7 @@ public static class PointyDesktopRecovery {
     bool cursor=current.X==point.X&&current.Y==point.Y;
     bool valid=IsWindow(foreground);
     bool focus=valid&&GetForegroundWindow()==foreground;
+    Console.WriteLine("SUITE FOREGROUND original-hwnd={0} actual-hwnd={1}",foreground,GetForegroundWindow());
     Console.WriteLine("SUITE RESTORE input={0} cursor={1} original-window-valid={2} foreground={3}",sent&&Released()?"released":"FAILED",cursor?"restored":"FAILED",valid?"yes":"no",!valid?"unavailable":focus?"restored":"FAILED");
     return sent&&Released()&&cursor&&focus;
   }
@@ -100,6 +101,7 @@ if (-not [PointyDesktopRecovery]::Released()) { throw 'Desktop input is held; no
 $savedPoint = New-Object PointyDesktopRecovery+Point
 if (-not [PointyDesktopRecovery]::GetCursorPos([ref]$savedPoint)) { throw 'Cannot record cursor position.' }
 $savedForeground = [PointyDesktopRecovery]::GetForegroundWindow()
+Write-Output "SUITE SAVED foreground-hwnd=$savedForeground cursor=$($savedPoint.X),$($savedPoint.Y)"
 $desktopLock = New-Object System.Threading.Mutex($false, 'Local\PointyPointerDesktopAcceptance')
 if (-not $desktopLock.WaitOne(0)) { $desktopLock.Dispose(); throw 'Another supervised desktop acceptance command is running.' }
 $exitCode = 1
