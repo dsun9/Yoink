@@ -83,11 +83,17 @@ bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *
   double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
   bool current=s->scalable.frame.pixels&&s->scalable_identity==identity;
   bool matches=s->raster_target.content_revision==identity&&s->raster_target.longest_dip==target&&s->raster_target.density==display->drawable_pixels_per_dip;
-  if(!matches||(!current&&!s->raster_requested)) {
+  if(!matches) {
     if(!pp_scalable_request(p,s,instance,display,target,error))return false;
   }
-  const PPTextResult *source=current?&s->scalable:pp_item_snapshot_text_result(instance->snapshot);
-  *out=packet(source,identity,current?s->scalable_revision:1);return true;
+  if(s->retained.content_id==identity) {
+    *out=(PPSourcePresentation){.content_id=identity,.source_revision=s->retained.source_revision,
+      .layout=s->retained.layout,.source_rect=s->retained.source_rect,.visual_alpha=s->retained.visual_alpha};
+  } else {
+    const PPTextResult *source=current?&s->scalable:pp_item_snapshot_text_result(instance->snapshot);
+    *out=packet(source,identity,current?s->scalable_revision:1);
+  }
+  return true;
 }
 void pp_scalable_poll(PPAnchorPresenter *p) {
   PPRasterCompletion c={0};

@@ -7,6 +7,23 @@
 #include "../../src/app/presenter_internal.h"
 #include <math.h>
 #include <SDL3/SDL.h>
+#undef pp_text_render_result_bounded
+bool pp_text_render_result_bounded(PPAssets *,const char *,const PPTextStyle *,double,size_t,PPTextResult *,PPTextDiagnostics *,PPError *);
+static SDL_AtomicInt block_next_worker, fail_next_worker;
+static SDL_Semaphore *worker_entered, *worker_continue;
+/* Controls scheduling at the agreed font/content boundary; generation still
+ * uses the production renderer and isolated worker manager. */
+bool pp_test_worker_text(PPAssets *assets,const char *text,const PPTextStyle *style,double scale,size_t limit,PPTextResult *out,PPTextDiagnostics *diagnostics,PPError *error) {
+    if(SDL_CompareAndSwapAtomicInt(&block_next_worker,1,0)) {SDL_SignalSemaphore(worker_entered);CHECK(SDL_WaitSemaphoreTimeout(worker_continue,5000));}
+    if(SDL_CompareAndSwapAtomicInt(&fail_next_worker,1,0)) {if(error)*error=(PPError){PP_ERROR_MEMORY,"Injected candidate generation failure"};return false;}
+    return pp_text_render_result_bounded(assets,text,style,scale,limit,out,diagnostics,error);
+}
+static void hold_next_worker(void) {
+    worker_entered=SDL_CreateSemaphore(0);worker_continue=SDL_CreateSemaphore(0);CHECK(worker_entered&&worker_continue);
+    SDL_SetAtomicInt(&block_next_worker,1);
+}
+static void release_worker(void) {SDL_SignalSemaphore(worker_continue);}
+static void finish_worker_control(void) {SDL_DestroySemaphore(worker_entered);SDL_DestroySemaphore(worker_continue);worker_entered=worker_continue=NULL;}
 struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;};
 struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
 struct PPSharedTexture {const PPFrame *frame;};
@@ -467,6 +484,26 @@ static void test_async_latest_text_resize(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(pp_assets_external_raster_bytes(assets)==0);pp_assets_destroy(assets);
     puts("PASS latest resize starts during input, uses isolated source work and publishes before easing settles");
 }
+static void wait_worker_idle(PPAnchorPresenter *p,PPDisplay *displays,double now) {
+    for(int i=0;i<2000&&pp_anchor_presenter_metrics(p).worker_pending_jobs;i++) {SDL_Delay(1);update(p,displays,400,300,now);}
+    update(p,displays,400,300,now);CHECK(!pp_anchor_presenter_metrics(p).worker_pending_jobs);
+}
+static void test_cached_source_survives_compatibility_request(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));hold_next_worker();
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);CHECK(SDL_WaitSemaphoreTimeout(worker_entered,2000));
+    PPSprite *s=pp_sprites_find(p,id);PPRect mapping=s->retained.source_rect;PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);
+    const PPFrame *frame=NULL;double next;CHECK(pp_item_snapshot_frame(pp_scene_get(scene,id)->snapshot,0,3,&frame,&next,&error));
+    PPPose pose=pp_scene_get(scene,id)->pose;pose.angle_deg=23.5;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,400,300,2);
+    CHECK(!memcmp(&mapping,&s->retained.source_rect,sizeof(mapping)));
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads);
+    release_worker();wait_worker_idle(p,displays,2);finish_worker_control();
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS available scalable raster keeps its own mapping after compatibility snapshot raster changes");
+}
 static void test_bitmap_text_transform_reuses_useful_source(void) {
     PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
@@ -511,6 +548,7 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
 }
 int main(void) {
+    test_cached_source_survives_compatibility_request();
     test_async_latest_text_resize();
     test_canonical_source_mapping();
     test_gif_independent_clocks_and_shared_frames();
