@@ -30,8 +30,9 @@ bool pp_renderer_create_for_window(PPRenderer **out, uint32_t window_id, PPError
 /* UI adapter borrows its owning window/context. Destroy before that context.
  * It restores the caller's context and GL state on every draw/failure. */
 bool pp_renderer_create_for_ui(PPRenderer **out,uint32_t window_id,void *context,PPError *error);
-/* Retained top-down straight-alpha color texture in the borrowed UI context.
- * Source remains premultiplied. No coverage attachment, CPU transform or readback.
+/* Retained top-down premultiplied color texture in the borrowed UI context.
+ * A UI adapter converts after its final linear sample at the blend boundary.
+ * No coverage attachment, CPU transform or readback.
  * Caller reserves source and old/candidate output texture bytes before drawing. */
 bool pp_renderer_preview_source(PPRenderer *renderer,const PPFrame *source,
     uint64_t content_id,uint64_t source_revision,PPVec2 layout,PPRect source_rect,

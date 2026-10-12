@@ -59,7 +59,7 @@ static const char *preview_shader =
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) color=vec4(0);"
-    "else { color=texture(image,uv)*opacity; if(color.a>0) color.rgb/=color.a; else color.rgb=vec3(0); } }";
+    "else color=texture(image,uv)*opacity; }";
 typedef struct GLState {
     GLint program,vao,draw_fbo,read_fbo,draw_buffer,read_buffer,viewport[4];
     GLint active,texture0,active_texture,unpack_alignment,unpack_rows;

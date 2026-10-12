@@ -4,6 +4,7 @@
 #include <math.h>
 #include <string.h>
 static void release_graphics(PPUIContentPreview *p) {
+  if(p->ui)pp_ui_premultiplied_texture(p->ui,p->texture,0);
   pp_renderer_destroy(p->renderer);p->renderer=NULL;
   pp_content_gpu_release(p->sources,p->source_bytes+p->target_bytes);
   p->source_bytes=p->target_bytes=0;p->texture=0;p->width=p->height=0;p->valid=false;
@@ -20,6 +21,7 @@ bool pp_ui_preview_update(PPUIBackend *ui,PPApp *app,PPUIContentPreview *p,
   if(p->snapshot&&pp_item_snapshot_item(p->snapshot)->id!=pp_item_snapshot_item(snapshot)->id)
     pp_ui_preview_release(p);
   if(!p->sources)p->sources=pp_app_content_sources(app,error);
+  p->ui=ui;
   if(!p->sources||(!p->consumer&&!pp_content_consumer_create(p->sources,&p->consumer,error)))return false;
   pp_content_sources_poll(p->sources);PPContentFrame source={0};
   if(!pp_content_frame(p->consumer,snapshot,longest,density,elapsed,&source,next,error))return false;
@@ -40,6 +42,7 @@ bool pp_ui_preview_update(PPUIBackend *ui,PPApp *app,PPUIContentPreview *p,
   size_t target_bytes=(size_t)w*h*4;
   if(!pp_content_gpu_reserve(p->sources,source_bytes+target_bytes,error)){pp_content_reject(p->consumer);return false;}
   PPRendererMetrics before=pp_renderer_metrics(p->renderer);
+  unsigned previous_texture=p->texture;
   bool ok=p->renderer||pp_renderer_create_for_ui(&p->renderer,SDL_GetWindowID(ui->window),ui->gl_context,error);
   if(ok)ok=pp_renderer_preview_source(p->renderer,source.frame,source.content_id,source.source_revision,
       source.layout,source.source_rect,longest,angle,opacity,density,&p->texture,&p->width,&p->height,error);
@@ -48,6 +51,7 @@ bool pp_ui_preview_update(PPUIBackend *ui,PPApp *app,PPUIContentPreview *p,
   if(source_overlap&&uploaded){pp_content_gpu_release(p->sources,p->source_bytes);p->source_bytes=source_bytes;}
   else pp_content_gpu_release(p->sources,source_bytes);
   if(ok) {
+    pp_ui_premultiplied_texture(ui,previous_texture,p->texture);
     pp_content_gpu_release(p->sources,p->target_bytes);p->target_bytes=target_bytes;
     p->source=source;p->pose=pose;p->density=density;p->valid=true;pp_content_accept(p->consumer);
     if(p->snapshot!=snapshot){pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(p->snapshot);p->snapshot=snapshot;}

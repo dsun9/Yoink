@@ -15,6 +15,13 @@ typedef struct PPUIVertex {
   nk_byte color[4];
 } PPUIVertex;
 typedef struct PPUITextureCharge {struct PPUITextureCharge *next;GLuint texture;size_t bytes;} PPUITextureCharge;
+void pp_ui_premultiplied_texture(PPUIBackend *ui,GLuint previous,GLuint current) {
+  for(size_t i=0;i<16;i++)if(previous&&ui->premultiplied_textures[i]==previous)ui->premultiplied_textures[i]=0;
+  if(!current)return;
+  for(size_t i=0;i<16;i++)if(ui->premultiplied_textures[i]==current)return;
+  for(size_t i=0;i<16;i++)if(!ui->premultiplied_textures[i]){ui->premultiplied_textures[i]=current;return;}
+  ui->failed=true;
+}
 void pp_ui_release_texture_charges(PPUIBackend *ui,size_t count,const GLuint *textures) {
   for(size_t i=0;i<count;i++) {
     PPUITextureCharge **link=&ui->texture_charges;
@@ -204,8 +211,10 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
       "main(){UV=TexCoord;Tint=Color;gl_Position=Projection*vec4(Position,0,1);"
       "}";
   const char *fragment =
-      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; out "
-      "vec4 color; void main(){color=Tint*texture(Texture,UV);}";
+      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; uniform int Premultiplied; out "
+      "vec4 color; void main(){vec4 sample_color=texture(Texture,UV);"
+      "if(Premultiplied!=0){if(sample_color.a>0)sample_color.rgb/=sample_color.a;else sample_color.rgb=vec3(0);}"
+      "color=Tint*sample_color;}";
   ui->program = pp_gl_program(&ui->gl, vertex, fragment, error);
   if (!ui->program)
     goto failed;
@@ -539,6 +548,9 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error) {
     if (!command->elem_count)
       continue;
     glBindTexture(GL_TEXTURE_2D, (GLuint)command->texture.id);
+    bool premultiplied=false;
+    for(size_t i=0;i<16;i++)if(ui->premultiplied_textures[i]&&(GLuint)command->texture.id==ui->premultiplied_textures[i])premultiplied=true;
+    ui->gl.Uniform1i(ui->gl.GetUniformLocation(ui->program,"Premultiplied"),premultiplied?1:0);
     glScissor(
         (GLint)(command->clip_rect.x * sx),
         (GLint)((ui->height - command->clip_rect.y - command->clip_rect.h) *

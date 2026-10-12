@@ -4,6 +4,7 @@
 #include "pointy/content.h"
 typedef struct PPUIContentPreview {
   PPContentSources *sources;
+  PPUIBackend *ui;
   PPContentConsumer *consumer;
   PPRenderer *renderer;
   PPItemSnapshot *snapshot;
