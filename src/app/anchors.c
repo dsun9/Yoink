@@ -12,6 +12,7 @@ static void finish_anchor_pull(PPAnchorPresenter *p, AnchorSurface *anchor,
     instance->dragging = false;
   if (reveal)
     reveal->held = false;
+  pp_surface_cancel_input(anchor->target);pp_surface_cancel_input(anchor->preview);
   anchor->pulled_id = 0;
   pp_item_snapshot_release(anchor->pull_snapshot);anchor->pull_snapshot=NULL;
 }
@@ -22,9 +23,9 @@ static bool anchor_source_available(const PPAnchorPresenter *p,
   if (!target || target->opacity <= 0)
     return false;
   const PPSceneInstance *instance = pp_scene_get(p->scene, anchor->pulled_id);
-  if (!instance)
-    return true;
-  uint64_t source_id = pp_item_snapshot_item(instance->snapshot)->id;
+  PPItemSnapshot *pressed=anchor->pull_snapshot?anchor->pull_snapshot:instance?instance->snapshot:NULL;
+  if(!pressed)return true;
+  uint64_t source_id = pp_item_snapshot_item(pressed)->id;
   const PPItem *source = pp_project_item(p->project, source_id);
   return source && source->opacity > 0;
 }
@@ -466,7 +467,7 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
                          &a->grab_dip, error)) {
           if (error)
             p->notice = *error;
-          pp_platform_release_capture();
+          pp_surface_cancel_input(event->surface);
           return true;
         }
       } else
@@ -502,7 +503,6 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
            * * its queued trajectory until a fresh source press begins. */
           finish_anchor_pull(p, a, reveal);
           a->interaction = (PPInteraction){0};
-          pp_platform_release_capture();
           return true;
         }
         s = pp_sprites_create_snapshot(p,a->pull_snapshot,a->anchor,pose,event->timestamp,error);
@@ -511,7 +511,6 @@ bool pp_anchor_presenter_event(PPAnchorPresenter *p,
             p->notice = *error;
           finish_anchor_pull(p, a, reveal);
           a->interaction = (PPInteraction){0};
-          pp_platform_release_capture();
           return true;
         }
         a->pulled_id = s->id;

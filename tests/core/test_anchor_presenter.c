@@ -1185,7 +1185,36 @@ static void test_anchor_pose_edits_keep_artwork_preparation(void) {
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS anchor rotation/opacity edits redraw the pose while retaining prepared artwork");
 }
+static void test_removed_pressed_anchor_cancels_pending_pull(void) {
+  for(int unrelated=0;unrelated<2;unrelated++) {
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem item=svg_item(assets);uint64_t removed,other;
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,&removed,&error));
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,&other,&error));
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay display={1,{0,0,1920,1080},1,1};
+    CHECK(pp_anchor_presenter_update(p,&display,1,(PPVec2){8,8},1,&error));
+    size_t before=0;PPSurface *independent=NULL;uint64_t independent_id=0;
+    if(unrelated) {
+      PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{800,500},96,0,1},1,&error);CHECK(s);
+      independent=s->surface;independent_id=s->id;CHECK(pp_sprites_update(p,1,&error));before=1;
+    }
+    AnchorSurface *anchor=p->anchors;event(p,anchor->preview,PP_EVENT_BUTTON_DOWN,8,24,1.01);
+    CHECK(anchor->interaction.pressed&&anchor->pull_snapshot&&capture_owner==anchor->preview);
+    if(unrelated)event(p,independent,PP_EVENT_BUTTON_DOWN,800,500,1.015);
+    CHECK(pp_project_remove_item(project,PP_ANCHOR_TOP_LEFT,removed,&error));
+    CHECK(pp_project_target(project,PP_ANCHOR_TOP_LEFT)->id==other);
+    event(p,anchor->preview,PP_EVENT_POINTER_MOVE,400,300,1.02);
+    CHECK(pp_scene_count(p->scene)==before);
+    CHECK(!anchor->interaction.pressed&&!anchor->pull_snapshot&&!p->runtime.entries[0].held);
+    CHECK(capture_owner==independent);
+    if(unrelated)CHECK(pp_sprites_find(p,independent_id)->interaction.pressed&&pp_scene_get(p->scene,independent_id));
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+  }
+  puts("PASS removing a pressed source cancels its pending pull without spawning removed content or clearing another owner");
+}
 int main(void) {
+    test_removed_pressed_anchor_cancels_pending_pull();
     test_anchor_pose_edits_keep_artwork_preparation();
     test_scalable_anchor_pull_reuses_prepared_content();
     test_equal_consumers_share_requested_source_preparation();
