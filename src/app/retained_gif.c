@@ -50,7 +50,7 @@ bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed
         entry->next=p->gif_entries;p->gif_entries=entry;
     }
     entry->refs++;*out=entry;*next=selected.next_change;
-    *source=(PPSourcePresentation){.frame=selected.frame,.content_id=pp_item_snapshot_revision(snapshot),.source_revision=selected.revision,
+    *source=(PPSourcePresentation){.frame=selected.frame,.content_id=pp_item_snapshot_content_id(snapshot),.source_revision=selected.revision,
         .layout=pp_item_snapshot_size(snapshot),.visual_alpha=entry->visual_alpha,.shared_texture=entry->texture};
     return true;
 }

@@ -7,6 +7,10 @@
 typedef struct ContentEntry {
   struct ContentEntry *next;
   PPItemSnapshot *snapshot;
+  PPAssetId artwork;
+  int target_width,target_height;
+  long glyph_em;
+  PPVec2 relative_layout;
   PPRasterKey key;
   PPTextResult result;
   PPError error;
@@ -18,6 +22,7 @@ struct PPContentConsumer {
   PPContentSources *sources;
   ContentEntry *desired,*current,*seed;
   PPItemSnapshot *snapshot;
+  PPRasterKey target;
   uint64_t rejected,reported;
 };
 struct PPContentSources {
@@ -123,6 +128,7 @@ static void release_entry(PPContentSources *s,ContentEntry *e) {
 }
 void pp_content_cancel(PPContentConsumer *c) {
   if(!c)return;release_entry(c->sources,c->desired);c->desired=NULL;c->rejected=c->reported=0;
+  c->target=(PPRasterKey){0};
   release_entry(c->sources,c->seed);c->seed=NULL;
 }
 void pp_content_consumer_destroy(PPContentConsumer *c) {
@@ -148,22 +154,37 @@ static bool start_entry(PPContentSources *s,ContentEntry *e,PPError *error) {
   if(!pp_raster_worker_request(s->worker,e->key,capture,s->assets,limit,error))return false;
   e->requested=true;e->retry=false;return true;
 }
+static bool same_target(ContentEntry *e,PPItemSnapshot *snapshot,double longest,double density) {
+  if(!e)return false;PPAssetId artwork=pp_item_snapshot_artwork_id(snapshot);PPVec2 layout=pp_item_snapshot_size(snapshot);
+  const PPItem *item=pp_item_snapshot_item(snapshot);double scale=longest*density/fmax(layout.x,layout.y);
+  PPVec2 relative=item->kind==PP_ITEM_TEXT?(PPVec2){layout.x/item->text_style.font_size_dip,layout.y/item->text_style.font_size_dip}:(PPVec2){0};
+  long em=item->kind==PP_ITEM_TEXT?lround(item->text_style.font_size_dip*scale*64):0;
+  return !memcmp(&e->artwork,&artwork,sizeof(artwork))&&e->target_width==(int)ceil(layout.x*scale)&&
+    e->target_height==(int)ceil(layout.y*scale)&&e->glyph_em==em&&e->relative_layout.x==relative.x&&e->relative_layout.y==relative.y;
+}
+bool pp_content_matches(const PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density){return c&&same_target(c->desired,snapshot,longest,density);}
 bool pp_content_request(PPContentConsumer *c,PPItemSnapshot *snapshot,double longest,double density,PPError *error) {
   if(!c||!snapshot)return fail(error,PP_ERROR_ARGUMENT,"Content request requires a consumer and snapshot");
   if(!target_valid(snapshot,longest,density,error))return false;
   PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);ContentEntry *e=c->desired;
-  if(e&&e->key.content_revision==identity&&e->key.longest_dip==longest&&e->key.density==density) {
+  if(c->snapshot!=snapshot){pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(c->snapshot);c->snapshot=snapshot;}
+  if(same_target(e,snapshot,longest,density)) {
+    c->target=(PPRasterKey){s->generation,e->key.instance_id,identity,e->key.serial,longest,density};
     if(e->retry&&!start_entry(s,e,error))return false;return true;
   }
   pp_content_cancel(c);
-  for(e=s->entries;e;e=e->next)if(e->key.content_revision==identity&&e->key.longest_dip==longest&&e->key.density==density)break;
+  for(e=s->entries;e;e=e->next)if(e->key.longest_dip>0&&same_target(e,snapshot,longest,density))break;
   if(!e) {
     if(s->next_owner==UINT64_MAX)return fail(error,PP_ERROR_RESOURCE_LIMIT,"Content ownership IDs exhausted");
     e=calloc(1,sizeof(*e));if(!e)return fail(error,PP_ERROR_MEMORY,"Cannot allocate shared content entry");
     e->snapshot=pp_item_snapshot_retain(snapshot);e->key=(PPRasterKey){s->generation,s->next_owner++,identity,1,longest,density};
+    e->artwork=pp_item_snapshot_artwork_id(snapshot);PPVec2 layout=pp_item_snapshot_size(snapshot);const PPItem *item=pp_item_snapshot_item(snapshot);
+    double scale=longest*density/fmax(layout.x,layout.y);e->target_width=(int)ceil(layout.x*scale);e->target_height=(int)ceil(layout.y*scale);
+    if(item->kind==PP_ITEM_TEXT){e->glyph_em=lround(item->text_style.font_size_dip*scale*64);e->relative_layout=(PPVec2){layout.x/item->text_style.font_size_dip,layout.y/item->text_style.font_size_dip};}
     e->next=s->entries;s->entries=e;
   }
   e->references++;c->desired=e;
+  c->target=(PPRasterKey){s->generation,e->key.instance_id,identity,e->key.serial,longest,density};
   if(!e->done&&!e->requested&&!start_entry(s,e,error)){pp_content_cancel(c);return false;}return true;
 }
 void pp_content_sources_poll(PPContentSources *s) {
@@ -178,7 +199,7 @@ void pp_content_sources_poll(PPContentSources *s) {
     pp_raster_completion_release(&completion);
   }
 }
-PPRasterKey pp_content_target(const PPContentConsumer *c){return c&&c->desired?c->desired->key:(PPRasterKey){0};}
+PPRasterKey pp_content_target(const PPContentConsumer *c){return c?c->target:(PPRasterKey){0};}
 bool pp_content_requested(const PPContentConsumer *c){return c&&c->desired&&c->desired->requested;}
 bool pp_content_retry(const PPContentConsumer *c){return c&&c->desired&&c->desired->retry;}
 bool pp_content_error(PPContentConsumer *c,PPError *error) {
@@ -233,8 +254,9 @@ static PPContentFrame packet(const PPTextResult *r,uint64_t identity,uint64_t re
         r->frame.width/r->raster_density,r->frame.height/r->raster_density}};
 }
 static ContentEntry *seed(PPContentConsumer *c,PPItemSnapshot *snapshot,bool svg,bool bitmap,PPError *error) {
-  PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);
-  ContentEntry *e=s->entries;while(e&&(e->key.content_revision!=identity||e->key.longest_dip!=0))e=e->next;
+  PPContentSources *s=c->sources;uint64_t identity=pp_item_snapshot_revision(snapshot);PPAssetId artwork=pp_item_snapshot_artwork_id(snapshot);
+  ContentEntry *e=s->entries;PPVec2 layout=pp_item_snapshot_size(snapshot);
+  while(e&&(memcmp(&e->artwork,&artwork,sizeof(artwork))||e->key.longest_dip!=0||e->result.layout_size.x!=layout.x||e->result.layout_size.y!=layout.y))e=e->next;
   if(e){e->references++;return e;}
   PPTextResult initial={.layout_size=pp_item_snapshot_size(snapshot),.raster_density=1};const PPTextResult *source=NULL;
   if(bitmap) {if(!pp_item_snapshot_bitmap_source(snapshot,&source,error))return NULL;}
@@ -247,6 +269,7 @@ static ContentEntry *seed(PPContentConsumer *c,PPItemSnapshot *snapshot,bool svg
   if(s->next_owner==UINT64_MAX){fail(error,PP_ERROR_RESOURCE_LIMIT,"Content ownership IDs exhausted");return NULL;}
   e=calloc(1,sizeof(*e));if(!e){fail(error,PP_ERROR_MEMORY,"Cannot retain available content source");return NULL;}
   e->key=(PPRasterKey){s->generation,s->next_owner++,identity,1,0,0};e->result=*source;e->done=true;
+  e->artwork=artwork;
   if(svg) {
     size_t rgba=source->frame.stride*(size_t)source->frame.height,alpha=source->frame.content_alpha?(size_t)source->frame.width*source->frame.height:0;
     if(rgba>256u*1024*1024-alpha||!pp_assets_reserve_raster(s->assets,rgba+alpha,error)){free(e);return NULL;}
@@ -263,7 +286,7 @@ bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longe
     PPContentFrame *out,double *next,PPError *error) {
   if(!c||!snapshot||!out||!next||!isfinite(elapsed)||elapsed<0)return fail(error,PP_ERROR_ARGUMENT,"Invalid retained content source request");
   if(c->snapshot!=snapshot){pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(c->snapshot);c->snapshot=snapshot;}
-  const PPItem *item=pp_item_snapshot_item(snapshot);uint64_t identity=pp_item_snapshot_revision(snapshot);
+  const PPItem *item=pp_item_snapshot_item(snapshot);uint64_t identity=pp_item_snapshot_content_id(snapshot);PPAssetId artwork=pp_item_snapshot_artwork_id(snapshot);
   const PPTextResult *text=pp_item_snapshot_text_result(snapshot);bool bitmap=text&&text->artwork.bitmap_only,svg=false;
   if(item->kind==PP_ITEM_IMAGE) {
     PPAsset *asset=pp_asset_retain(c->sources->assets,item->image_asset);svg=pp_asset_kind(asset)==PP_ASSET_SVG;pp_asset_release(asset);
@@ -277,15 +300,19 @@ bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longe
   if(bitmap&&c->desired)pp_content_cancel(c);
   if(!bitmap&&!pp_content_request(c,snapshot,longest,density,error))return false;
   uint64_t revision=0;const PPTextResult *available=pp_content_candidate(c,&revision);
-  if(!available&&c->current&&c->current->key.content_revision==identity){available=&c->current->result;revision=c->current->key.instance_id+2;}
+  if(!available&&c->current&&!memcmp(&c->current->artwork,&artwork,sizeof(artwork))){available=&c->current->result;revision=c->current->key.instance_id+2;}
   if(!available) {
-    if(c->seed&&c->seed->key.content_revision!=identity){release_entry(c->sources,c->seed);c->seed=NULL;}
+    if(c->seed&&memcmp(&c->seed->artwork,&artwork,sizeof(artwork))){release_entry(c->sources,c->seed);c->seed=NULL;}
     if(!c->seed)c->seed=seed(c,snapshot,svg,bitmap,error);
     if(c->seed&&c->seed->result.frame.pixels&&c->rejected!=c->seed->key.instance_id){available=&c->seed->result;revision=c->seed->key.instance_id+2;}
     if(!available&&error&&error->code)return false;
   }
   *next=HUGE_VAL;
-  if(available)*out=packet(available,identity,revision,svg);
+  if(available) {
+    *out=packet(available,identity,revision,svg);PPVec2 layout=pp_item_snapshot_size(snapshot);
+    double sx=layout.x/out->layout.x,sy=layout.y/out->layout.y;
+    out->source_rect=(PPRect){out->source_rect.x*sx,out->source_rect.y*sy,out->source_rect.w*sx,out->source_rect.h*sy};out->layout=layout;
+  }
   else *out=(PPContentFrame){.content_id=identity,.source_revision=1,.layout=pp_item_snapshot_size(snapshot)};
   return true;
 }

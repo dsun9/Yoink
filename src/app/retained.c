@@ -128,7 +128,7 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
   }
   bool ok;
   if(direct) {
-    uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
+    uint64_t identity=pp_item_snapshot_content_id(instance->snapshot);
     PPSourcePresentation source={NULL,identity,1,pp_item_snapshot_size(instance->snapshot)};
     bool gif=pp_snapshot_is_gif(instance->snapshot);struct PPGifEntry *candidate=NULL;
     bool bitmap=pp_snapshot_is_bitmap_text(instance->snapshot);

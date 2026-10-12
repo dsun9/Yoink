@@ -563,7 +563,9 @@ static void test_svg_runtime_generation_cleanup(void) {
   CHECK(before.worker_source_builds==1&&!before.worker_pending_jobs&&pp_runtime_gpu_resources(r).retained_bytes==19968);
   step(r,sprite(id),PP_EVENT_BUTTON_DOWN,320,210,2);step(r,sprite(id),PP_EVENT_POINTER_MOVE,400,300,2.01);step(r,sprite(id),PP_EVENT_BUTTON_UP,400,300,2.02);pp_runtime_tick(r,2.03);
   CHECK(pp_runtime_renderer_metrics(r).transform_draws==renderer.transform_draws&&pp_runtime_renderer_metrics(r).source_uploads==renderer.source_uploads);
-  for(int i=0;i<20;i++)pp_runtime_event(r,&(PPPlatformEvent){.surface=sprite(id),.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=.02,.modifiers=PP_MOD_ALT,.timestamp=3+i*.001});
+  /* Twenty distinct physical targets exercise coalescing; subpixel-equivalent
+   * endpoints now correctly share their requested raster. */
+  for(int i=0;i<20;i++)pp_runtime_event(r,&(PPPlatformEvent){.surface=sprite(id),.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=.125,.modifiers=PP_MOD_ALT,.timestamp=3+i*.001});
   CHECK(pp_runtime_presentation_metrics(r).worker_requests==before.worker_requests+20&&pp_runtime_presentation_metrics(r).worker_pending_jobs<=2);
   pp_runtime_tick(r,3.04);CHECK(pp_assets_source_metrics(pp_app_assets(app)).raster_builds==owner_builds);
   PPRasterWorker *service=r->worker;
@@ -583,7 +585,7 @@ static void test_app_source_owner_survives_runtime_and_project_epochs(void) {
   PPContentSources *sources=pp_app_content_sources(app,&error);CHECK(sources);
   PPContentConsumer *preview=NULL;CHECK(pp_content_consumer_create(sources,&preview,&error));
   const PPItem *item=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT);
-  PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(app),item->id);uint64_t revision=pp_item_snapshot_revision(snapshot);
+  PPItemSnapshot *snapshot=pp_project_snapshot(pp_app_project(app),item->id);uint64_t revision=pp_item_snapshot_content_id(snapshot);
   PPContentFrame source={0};double next;
   CHECK(pp_content_frame(preview,snapshot,48,1,0,&source,&next,&error));CHECK(source.content_id==revision&&source.frame);
   CHECK(pp_runtime_create(&runtime,app,&error));pointer=(PPVec2){500,500};pp_runtime_tick(runtime,1);CHECK(!runtime->failed);

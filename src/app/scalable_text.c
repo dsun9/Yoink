@@ -31,12 +31,6 @@ void pp_scalable_release(PPAnchorPresenter *p,PPSprite *s) {
   (void)p;pp_content_consumer_destroy(s->content);s->content=NULL;
   s->scalable=(PPTextResult){0};s->scalable_bytes=0;s->raster_requested=s->raster_retry=false;
 }
-static PPSourcePresentation packet(const PPTextResult *r,uint64_t identity,uint64_t revision,bool svg) {
-  return(PPSourcePresentation){.frame=&r->frame,.content_id=identity,.source_revision=revision,
-    .layout=r->layout_size,.visual_alpha=pp_source_visual_alpha(&r->frame),
-    .source_rect=svg?(PPRect){0,0,r->layout_size.x,r->layout_size.y}:(PPRect){r->layout_origin.x-r->raster_origin_px.x/r->raster_density,
-      r->layout_origin.y-r->raster_origin_px.y/r->raster_density,r->frame.width/r->raster_density,r->frame.height/r->raster_density}};
-}
 bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,PPSourcePresentation *out,PPError *error) {
   double target=s->resizing?s->ease_target.longest_dip:s->pose.longest_dip;
@@ -51,6 +45,9 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     const PPSceneInstance *instance=pp_scene_get(p->scene,s->id);const PPDisplay *d=NULL;
     for(size_t j=0;j<p->display_count;j++)if(p->displays[j].id==s->display_id)d=p->displays+j;
     PPRasterKey key=pp_content_target(s->content);
+    if(instance&&d&&pp_content_matches(s->content,instance->snapshot,s->resizing?s->ease_target.longest_dip:s->pose.longest_dip,d->drawable_pixels_per_dip)) {
+      PPError ignored={0};pp_content_request(s->content,instance->snapshot,s->resizing?s->ease_target.longest_dip:s->pose.longest_dip,d->drawable_pixels_per_dip,&ignored);key=pp_content_target(s->content);
+    }
     if(key.content_revision&&(!instance||!d||pp_item_snapshot_revision(instance->snapshot)!=key.content_revision||
         d->drawable_pixels_per_dip!=key.density||(s->resizing?s->ease_target.longest_dip:s->pose.longest_dip)!=key.longest_dip))pp_scalable_cancel(p,s);
   }
@@ -63,7 +60,8 @@ void pp_scalable_poll(PPAnchorPresenter *p) {
     for(size_t j=0;j<p->display_count;j++)if(p->displays[j].id==s->display_id)d=p->displays+j;
     if(!candidate||!instance||!d){i++;continue;}
     PPRasterKey key=pp_content_target(s->content);
-    PPSourcePresentation source=packet(candidate,key.content_revision,revision,pp_snapshot_is_svg(instance->snapshot));
+    PPSourcePresentation source={0};double next;
+    if(!pp_content_frame(s->content,instance->snapshot,key.longest_dip,key.density,0,&source,&next,&error)){p->notice=error;i++;continue;}
     if(!pp_retained_present(p,s->surface,&s->retained,source,s->pose,d,&error)) {
       p->notice=error;pp_content_reject(s->content);
       if(p->failed_surface==s->surface) {

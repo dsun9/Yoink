@@ -301,6 +301,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
     const PPItem *item=pp_project_target(p->project,a->anchor);
     PPItemSnapshot *current=item?pp_project_snapshot(p->project,item->id):NULL;
     uint64_t revision=pp_item_snapshot_revision(current);
+    uint64_t content_id=pp_item_snapshot_content_id(current);
     pp_item_snapshot_release(current);
     double scale = a->display.desktop_units_per_dip;
     if (a->failed) {
@@ -333,7 +334,7 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
     }
     if (!a->shown || a->opacity != r->opacity || a->scale != scale || a->density!=a->display.drawable_pixels_per_dip ||
         a->revision != revision || now >= a->next_frame || pp_content_candidate(a->content,NULL) || pp_content_retry(a->content)) {
-      if (!a->shown || a->revision != revision)
+      if (!a->shown || !a->snapshot || pp_item_snapshot_content_id(a->snapshot)!=content_id)
         a->animation_start = now;
       const PPItem *item = pp_project_target(p->project, a->anchor);
       PPItemSnapshot *snapshot = pp_project_snapshot(p->project, item->id);
