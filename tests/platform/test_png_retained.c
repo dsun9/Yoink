@@ -21,6 +21,8 @@ static POINT old_cursor;
 static SDL_Window *settings,*drawer;
 static bool left_held,right_held,alt_held,no_displays;
 static unsigned downs[3],ups[3],moves[3],wheels[3];
+bool pp_test_desktop_capture_start(RECT rectangle);
+unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new);
 static double now(void){LARGE_INTEGER n,f;QueryPerformanceCounter(&n);QueryPerformanceFrequency(&f);return(double)n.QuadPart/f.QuadPart;}
 static void cleanup(void){
   pp_platform_settings_window(0);pp_platform_drawer_close(false);SDL_DestroyWindow(drawer);SDL_DestroyWindow(settings);
@@ -70,7 +72,8 @@ static PPItem image(const char *name){
 }
 static HWND native(PPSurface *surface){SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(surface));CHECK(window);return SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);}
 static void pixel(const char *name,int x,int y,int r,int g,int b){
-  pump();HDC dc=GetDC(NULL);CHECK(dc);COLORREF value=GetPixel(dc,x,y);ReleaseDC(NULL,dc);CHECK(value!=CLR_INVALID);
+  pump();unsigned char *sample=pp_test_desktop_capture((RECT){x,y,x+1,y+1},false);CHECK(sample);
+  COLORREF value=RGB(sample[2],sample[1],sample[0]);free(sample);
   printf("PNG compositor %s RGB=%d,%d,%d expected=%d,%d,%d\n",name,GetRValue(value),GetGValue(value),GetBValue(value),r,g,b);
   CHECK(abs((int)GetRValue(value)-r)<=3&&abs((int)GetGValue(value)-g)<=3&&abs((int)GetBValue(value)-b)<=3);
 }
@@ -84,7 +87,9 @@ int main(int argc,char **argv){
   CHECK(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&child));ULONGLONG until=GetTickCount64()+4000;while(!receiver->window&&GetTickCount64()<until)Sleep(10);CHECK(receiver->window);
   do{SetForegroundWindow((HWND)receiver->window);pump();}while(GetForegroundWindow()!=(HWND)receiver->window&&GetTickCount64()<until);CHECK(GetForegroundWindow()==(HWND)receiver->window);
   API(pp_assets_create(&assets,&error));API(pp_project_create(assets,&project,&error));API(pp_scene_create(&scene,&error));PPItem item=image("alpha.png");API(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&item,NULL,&error));
-  API(pp_renderer_create(&renderer,&error));API(pp_platform_displays(&displays,&display_count,&error));API(pp_anchor_presenter_create_shared(&presenter,renderer,project,scene,&error));pump();
+  API(pp_renderer_create(&renderer,&error));API(pp_platform_displays(&displays,&display_count,&error));
+  CHECK(pp_test_desktop_capture_start((RECT){220,220,500,420}));
+  API(pp_anchor_presenter_create_shared(&presenter,renderer,project,scene,&error));pump();
   PPSprite *created=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){{300,300},96,0,1},now(),&error);CHECK(created);uint64_t id=created->id;PPSurface *surface=created->surface;pump();HWND window=native(surface);RECT rectangle;CHECK(GetWindowRect(window,&rectangle));
   printf("PNG native origin=%ld,%ld bounds=%ldx%ld visible=%d alpha=%d draws=%llu source=3x1 density=%.2f retained_gpu=%zu\n",rectangle.left,rectangle.top,rectangle.right-rectangle.left,rectangle.bottom-rectangle.top,IsWindowVisible(window),created->retained.visual_alpha,(unsigned long long)pp_anchor_presenter_renderer_metrics(presenter).transform_draws,pp_display_at(displays,display_count,(PPVec2){300,300})->drawable_pixels_per_dip,pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
   pixel("transparent padding",300,300,255,255,255);pixel("premultiplied source",rectangle.left+5,300,255,191,159);

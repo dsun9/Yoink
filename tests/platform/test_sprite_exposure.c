@@ -1,4 +1,5 @@
 #include "../../src/app/presenter_internal.h"
+#include "../../src/core/geometry_internal.h"
 #include "receiver_shared.h"
 #include "../test.h"
 #include <SDL3/SDL.h>
@@ -95,7 +96,12 @@ static void compare(uint64_t id,const unsigned char *reference,const char *stage
   }
   free(pixels);printf("Desktop comparison %s mismatched_pixels=%zu total=%zu\n",stage,missing,count);CHECK(missing==0);
 }
-static uint64_t spawn(PPVec2 center,double size){PPSprite *s=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){center,size,0,1},now(),&error);CHECK(s);uint64_t id=s->id;pump();return id;}
+static uint64_t spawn(PPVec2 center,double size){
+  PPPose requested={center,size,0,1};PPSprite *s=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,requested,now(),&error);CHECK(s);uint64_t id=s->id;
+  /* Scene spawning inherits the item's default size. Set the test's requested
+   * pose before the first update can create any native presentation. */
+  API(pp_scene_set_pose(scene,id,requested,&error));pump();CHECK(pp_scene_get(scene,id)->pose.longest_dip==size);return id;
+}
 static void remove_sprite(uint64_t id){pp_scene_delete(scene,id);pump();}
 static void set_position(uint64_t id,PPVec2 center){PPPose pose=pp_scene_get(scene,id)->pose;pose.center=center;API(pp_scene_set_pose(scene,id,pose,&error));pump();}
 static void exercise(int side,double size){
@@ -104,6 +110,13 @@ static void exercise(int side,double size){
   ULONGLONG until=GetTickCount64()+2000;
   do {pump();}while(pp_anchor_presenter_metrics(presenter).worker_pending_jobs&&GetTickCount64()<until);
   CHECK(!pp_anchor_presenter_metrics(presenter).worker_pending_jobs);RECT ref=rectangle(reference_id);
+  PPSprite *reference_sprite=pp_sprites_find(presenter,reference_id);CHECK(reference_sprite->pose.longest_dip==size);
+  int expected_w,expected_h;
+  CHECK(pp_geometry_source_extent(reference_sprite->retained.layout,reference_sprite->retained.source_rect,size,0,displays[0].drawable_pixels_per_dip,&expected_w,&expected_h));
+  CHECK(ref.right-ref.left==expected_w&&ref.bottom-ref.top==expected_h);
+  if(pp_item_snapshot_item(pp_scene_get(scene,reference_id)->snapshot)->kind==PP_ITEM_IMAGE)
+    CHECK(expected_w==(int)round(size*displays[0].drawable_pixels_per_dip));
+  printf("REALIZED requested_dip=%.0f actual_dip=%.0f density=%.2f drawable=%dx%d native=%ldx%ld\n",size,reference_sprite->pose.longest_dip,displays[0].drawable_pixels_per_dip,expected_w,expected_h,ref.right-ref.left,ref.bottom-ref.top);
   CHECK(ref.left>=screen.x&&ref.top>=screen.y&&ref.right<=screen.x+screen.w&&ref.bottom<=screen.y+screen.h);
   unsigned char *reference=NULL;
   if(capture_enabled) {
@@ -207,7 +220,7 @@ int main(int argc,char **argv){
   bool only_ownership=!strcmp(argv[3],"--ownership");
   if(!only_ownership&&capture_enabled)CHECK(pp_test_desktop_capture_start((RECT){(LONG)displays[0].bounds.x,(LONG)displays[0].bounds.y,(LONG)(displays[0].bounds.x+displays[0].bounds.w),(LONG)(displays[0].bounds.y+displays[0].bounds.h)}));
   PPRect screen=displays[0].bounds;SetWindowLongPtrW((HWND)receiver->window,GWL_STYLE,WS_POPUP|WS_VISIBLE);
-  CHECK(SetWindowPos((HWND)receiver->window,HWND_TOP,(int)screen.x,(int)screen.y,(int)screen.w,(int)screen.h,SWP_FRAMECHANGED|SWP_SHOWWINDOW));
+  CHECK(SetWindowPos((HWND)receiver->window,HWND_TOPMOST,(int)screen.x,(int)screen.y,(int)screen.w,(int)screen.h,SWP_FRAMECHANGED|SWP_SHOWWINDOW));
   do{SetForegroundWindow((HWND)receiver->window);pump();}while(GetForegroundWindow()!=(HWND)receiver->window&&GetTickCount64()<until);CHECK(GetForegroundWindow()==(HWND)receiver->window);
   if(!strcmp(argv[2],"hand"))API(pp_project_default(assets,&project,&error));
   else {

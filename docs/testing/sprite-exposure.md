@@ -57,39 +57,70 @@ its fullscreen window, so abrupt fixture termination also closes the receiver.
 On 2026-10-12 the Release build and all 36 tests outside the desktop suite passed.
 The native ownership case passed with verified cursor/input/foreground recovery,
 including destroyed-window shared-object cleanup and deferred group accounting.
-Desktop Duplication received no initial desktop frame on this host, so the new
-visible regression remains unverified. Earlier
-diagnostic logs recorded 5,040 missing PNG pixels and 6,275 missing hand pixels;
-those logs establish the issue's reproduction, not a pass for this change.
-The existing bitmap GDI pixel check also failed with the same white sample in
-both this implementation and a probe using the original renderer. That check
-cannot supply visible recovery evidence on this host.
+The PNG presentation test also passed after replacing GDI sampling with Desktop
+Duplication. It verifies transparent padding, premultiplied source color,
+display opacity, captured movement, nonactivation, overlap/UI ordering, and
+hidden/zero-opacity/failed-window input cleanup.
 
-The explicit `--timing-only` diagnostic skips desktop capture and labels visible
-correctness unverified. It runs the same initial edge placement, captured
-movement, GL refresh, GPU completion, zero raster/upload/transform/readback
-checks, and tagged input hook. Supervised temporary CTest registrations ran all
-eight timing cases on this host at 1536 DIP and actual 150% drawable density.
-Each case recorded 25 ordinary movement samples and 24 exposure samples.
+The same edge fixture was linked against the original renderer from `1fad8fa`,
+with no-op adapters for the new exposure APIs. Every baseline case failed during
+the real return drag with persistent missing pixels. All eight fixed ordinary
+cases and all eight fixed large cases passed with zero mismatched displayed
+pixels during return, after release, repeated partial excursions, and a complete
+off-screen placement.
+
+| Source | Edge | Baseline missing pixels at 96 DIP | Fixed mismatched pixels |
+| --- | --- | ---: | ---: |
+| Default hand | Left | 3,279 | 0 |
+| Default hand | Top | 4,090 | 0 |
+| Default hand | Right | 2,346 | 0 |
+| Default hand | Bottom | 1,699 | 0 |
+| PNG | Left | 5,040 | 0 |
+| PNG | Top | 4,896 | 0 |
+| PNG | Right | 4,968 | 0 |
+| PNG | Bottom | 4,752 | 0 |
+
+The fixture sets the requested scene pose before its first update, then asserts
+both the accepted pose and native dimensions. This prevents an item default
+size from silently replacing the requested target. The large cases realized
+1536 DIP at actual 1.5 drawable density, with native/drawable bounds of
+2304x2131 pixels for the hand and 2304x1152 for the PNG. Each recorded 25 ordinary
+movement samples and 24 exposure samples, alongside the full desktop image
+comparisons.
 
 | Source | Edge | Ordinary p95 ms | Exposure p95 ms |
 | --- | --- | ---: | ---: |
-| Default hand | Left | 2.046 | 3.513 |
-| Default hand | Top | 1.817 | 3.249 |
-| Default hand | Right | 1.972 | 3.235 |
-| Default hand | Bottom | 2.002 | 3.080 |
-| PNG | Left | 2.016 | 2.851 |
-| PNG | Top | 2.035 | 3.076 |
-| PNG | Right | 2.028 | 3.047 |
-| PNG | Bottom | 2.129 | 3.358 |
+| Default hand | Left | 2.082 | 3.435 |
+| Default hand | Top | 2.119 | 3.349 |
+| Default hand | Right | 2.033 | 3.369 |
+| Default hand | Bottom | 2.336 | 3.459 |
+| PNG | Left | 2.155 | 4.159 |
+| PNG | Top | 2.273 | 2.949 |
+| PNG | Right | 2.117 | 4.012 |
+| PNG | Bottom | 2.426 | 3.419 |
 
-All eight timing diagnostics passed. Their worst completed exposure sample was
-4.864 ms and their tagged hook arrival maximum was 0 ms at the Windows tick
-clock's resolution. The existing complete rendering performance probe also
-passed all 96 cases and 1,920 warm samples: required target p95 1.190 ms,
-matrix worst p95 8.204 ms, maximum tagged input wait 31 ms, and maximum sharp
-settlement 143.890 ms. Its cold draw/completion/GPU counts matched 120/120/120.
-Neither diagnostic establishes compositor cadence or the pending desktop image
-comparison. Logs are `build/exposure-timing-details.log` and
-`build/exposure-rendering-performance-desktop.log`, with supervised input,
-cursor, and foreground restoration verified.
+The largest completed exposure sample was 5.421 ms. The maximum tagged hook
+arrival wait was 16 ms at the Windows tick clock's resolution. The existing
+complete rendering performance probe also passed all 96 cases and 1,920 warm
+samples: required target p95 1.190 ms, matrix worst p95 8.204 ms, maximum tagged
+input wait 31 ms, and maximum sharp settlement 143.890 ms. Its cold
+draw/completion/GPU counts matched 120/120/120.
+
+Use an idle desktop with notification popups closed. The fullscreen white test
+receiver stays topmost behind the sprites, but system notification bands can
+still cover transparent padding. The test compares every displayed pixel and
+does not exclude those regions. Such interference must be cleared before
+acceptance. Input, cursor, and foreground restoration were verified for each
+supervised run.
+
+The optional `--timing-only` diagnostic skips desktop capture and explicitly
+labels visible correctness unverified. Earlier diagnostic timings that inherited
+the item default size were invalid and are superseded by the asserted-size
+captured results above. Neither timing mode establishes compositor cadence.
+Physical mixed-monitor and rotated-output correctness remain separate work.
+
+Evidence logs are `build/exposure-baseline-final-summary.log`,
+`build/exposure-standard-final-desktop.log`,
+`build/exposure-large-accepted-details.log`,
+`build/exposure-png-composition-desktop.log`, and
+`build/exposure-rendering-performance-desktop.log`.
