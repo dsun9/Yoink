@@ -39,6 +39,7 @@ void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   p->gpu.retained_bytes-=r->gpu_bytes;memset(r,0,sizeof(*r));
 }
 void pp_sprite_release_presentation(PPAnchorPresenter *p,PPSprite *s) {
+  pp_scalable_release(p,s);
   pp_retained_release(p,&s->retained);
   pp_assets_release_raster(p->assets,s->raster_bytes);s->raster_bytes=0;
 }
@@ -107,7 +108,7 @@ native_failure:
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {
 #if defined(_WIN32)
-  bool direct=pp_snapshot_is_png(instance->snapshot);
+  bool direct=pp_snapshot_is_png(instance->snapshot)||pp_snapshot_is_scalable_text(instance->snapshot);
 #else
   bool direct=false;
 #endif
@@ -121,7 +122,9 @@ bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *i
   if(direct) {
     uint64_t identity=pp_item_snapshot_revision(instance->snapshot);
     PPSourcePresentation source={NULL,identity,1,pp_item_snapshot_size(instance->snapshot)};
-    if(identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
+    bool text=pp_snapshot_is_scalable_text(instance->snapshot);
+    if(text&&!pp_scalable_source(p,s,instance,display,&source,error)) ok=false;
+    else if(!text&&identity!=s->retained.content_id && !pp_item_snapshot_frame(instance->snapshot,elapsed,1,&source.frame,next,error)) ok=false;
     else {
       if(source.frame) source.visual_alpha=pp_source_visual_alpha(source.frame);
       ok=pp_retained_present(p,surface,&s->retained,source,s->pose,display,error);*next=HUGE_VAL;

@@ -9,7 +9,7 @@
 #include <miniz.h>
 #include <math.h>
 #include <string.h>
-PPProbeMetric pp_probe_metrics[PROBE_COUNT];
+__declspec(thread) PPProbeMetric pp_probe_metrics[PROBE_COUNT];
 bool pp_probe_completion_enabled;
 static struct {const char *family; bool found; size_t bytes; double ms;} font_events[32];
 static unsigned font_count;

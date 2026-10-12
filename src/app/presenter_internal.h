@@ -1,6 +1,7 @@
 #ifndef POINTY_PRESENTER_INTERNAL_H
 #define POINTY_PRESENTER_INTERNAL_H
 #include "anchors.h"
+#include "raster_worker.h"
 typedef struct AnchorSurface {
   PPSurface *target, *preview;
   PPDisplay display;
@@ -54,6 +55,11 @@ typedef struct PPSprite {
   bool sharp_pending;
   PPRetainedPresentation retained;
   double drawable_density;
+  PPTextResult scalable;
+  size_t scalable_bytes;
+  uint64_t scalable_identity, scalable_revision, raster_serial;
+  PPRasterKey raster_target;
+  bool raster_requested;
 } PPSprite;
 struct PPAnchorPresenter {
   PPRenderer *renderer;
@@ -76,7 +82,18 @@ struct PPAnchorPresenter {
   PPPresentationMetrics metrics;
   PPGpuResources gpu;
   PPRendererMetrics retired_renderer_metrics;
+  PPRasterWorker *worker;
+  uint64_t generation;
+  bool borrowed_worker;
 };
+bool pp_snapshot_is_scalable_text(const PPItemSnapshot *snapshot);
+bool pp_scalable_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
+    const PPDisplay *display,double longest,PPError *error);
+bool pp_scalable_source(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
+    const PPDisplay *display,PPSourcePresentation *out,PPError *error);
+void pp_scalable_poll(PPAnchorPresenter *p);
+void pp_scalable_cancel(PPAnchorPresenter *p,PPSprite *s);
+void pp_scalable_release(PPAnchorPresenter *p,PPSprite *s);
 bool pp_snapshot_is_png(const PPItemSnapshot *snapshot);
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *sprite,
     const PPSceneInstance *instance,const PPDisplay *display,double elapsed,

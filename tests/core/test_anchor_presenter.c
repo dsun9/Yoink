@@ -6,6 +6,7 @@
 #include "../../src/core/geometry_internal.h"
 #include "../../src/app/presenter_internal.h"
 #include <math.h>
+#include <SDL3/SDL.h>
 struct PPSurface {uint64_t id;PPRect bounds;bool shown;struct PPSurface *next;int source_width, raster_width;uint8_t red,blue;uint32_t window_id;};
 struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
 static PPSurface *surfaces;
@@ -389,7 +390,39 @@ static void test_canonical_source_mapping(void) {
     pp_retained_release(&p,&retained);pp_surface_destroy(surface);
     puts("PASS source origin mapping preserves canonical center/aspect and includes overhang without reupload");
 }
+static PPItem scalable_item(PPAssets *assets) {
+    FILE *file=fopen(PP_FONT_FIXTURES "/PointyOverhang.ttf","rb");CHECK(file);
+    CHECK(!fseek(file,0,SEEK_END));long length=ftell(file);CHECK(length>0);rewind(file);
+    uint8_t *bytes=malloc((size_t)length);CHECK(bytes);CHECK(fread(bytes,1,(size_t)length,file)==(size_t)length);fclose(file);
+    PPError error={0};PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81\nAj",.text_style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}},.opacity=1};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));free(bytes);return item;
+}
+static void test_async_latest_text_resize(void) {
+    PPError error={0};PPAssets *assets=NULL;PPProject *project=NULL;PPScene *scene=NULL;PPAnchorPresenter *p=NULL;
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));CHECK(pp_scene_create(&scene,&error));
+    PPItem item=scalable_item(assets);CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_RIGHT,&item,NULL,&error));
+    CHECK(pp_anchor_presenter_create_shared(&p,(PPRenderer *)1,project,scene,&error));
+    PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    uint64_t id=png_pull(p,scene,displays,1);PPSurface *sprite=surface_for(id);CHECK(sprite&&sprite->shown);
+    PPSourceMetrics before=pp_assets_source_metrics(assets);PPPresentationMetrics metrics=pp_anchor_presenter_metrics(p);
+    PPRendererMetrics renderer_before=pp_anchor_presenter_renderer_metrics(p);
+    PPPlatformEvent wheel={.surface=sprite,.instance_id=id,.kind=PP_EVENT_WHEEL,.desktop_point={400,300},.wheel_delta=1,.modifiers=PP_MOD_ALT,.timestamp=2};
+    CHECK(pp_anchor_presenter_event(p,&wheel,&error));wheel.timestamp=2.01;CHECK(pp_anchor_presenter_event(p,&wheel,&error));
+    CHECK(pp_anchor_presenter_metrics(p).worker_requests==metrics.worker_requests+2);
+    CHECK(pp_assets_source_metrics(assets).raster_builds==before.raster_builds);
+    update(p,displays,400,300,2.015);
+    for(int i=0;i<1000 && pp_anchor_presenter_metrics(p).sharp_publications==metrics.sharp_publications;i++) {SDL_Delay(1);update(p,displays,400,300,2.015);}
+    PPPresentationMetrics sharp=pp_anchor_presenter_metrics(p);CHECK(sharp.sharp_publications==metrics.sharp_publications+1);
+    CHECK(sharp.last_sharp_input_timestamp==2.01 && sharp.last_sharp_instance_id==id && sharp.last_sharp_drawable_density==1);
+    CHECK(pp_scene_get(scene,id)->pose.longest_dip<sharp.last_sharp_longest_dip);
+    CHECK(sharp.worker_source_builds>metrics.worker_source_builds && sharp.worker_pending_jobs==0);
+    CHECK(sprite==surface_for(id) && sprite->shown && sharp.scalable_retained_bytes>0);
+    CHECK(pp_anchor_presenter_renderer_metrics(p).readbacks==renderer_before.readbacks);
+    pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(pp_assets_external_raster_bytes(assets)==0);pp_assets_destroy(assets);
+    puts("PASS latest resize starts during input, uses isolated source work and publishes before easing settles");
+}
 int main(void) {
+    test_async_latest_text_resize();
     test_canonical_source_mapping();
 #if defined(_WIN32)
     test_png_translation_reuses_presentation();

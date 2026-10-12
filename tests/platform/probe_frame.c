@@ -49,11 +49,13 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #define pp_renderer_create pp_raw_renderer_create
 #define pp_renderer_transform pp_raw_renderer_transform
 #define pp_renderer_draw pp_raw_renderer_draw
+#define pp_renderer_draw_source pp_raw_renderer_draw_source
 #define pp_renderer_complete pp_raw_renderer_complete
 #include "../../src/render/frame.c"
 #undef pp_renderer_create
 #undef pp_renderer_transform
 #undef pp_renderer_draw
+#undef pp_renderer_draw_source
 #undef pp_renderer_complete
 static bool complete_measurement(PPRenderer *renderer,PPError *error) {
   if(!pp_probe_completion_enabled) return true;
@@ -70,6 +72,11 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout_size,double longest,dou
   bool ok=pp_raw_renderer_draw(renderer,layout_size,longest,angle,opacity,density,error);
   if(ok) ok=complete_measurement(renderer,error);
   else discard_query();
+  pp_probe_record(PROBE_TRANSFORM,start);return ok;
+}
+bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPError *error) {
+  double start=pp_probe_clock();bool ok=pp_raw_renderer_draw_source(renderer,layout,rect,longest,angle,opacity,density,error);
+  if(ok) ok=complete_measurement(renderer,error);else discard_query();
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }
 bool pp_renderer_create(PPRenderer **out, PPError *error) {

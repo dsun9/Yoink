@@ -54,6 +54,8 @@ bool pp_anchor_presenter_create(PPAnchorPresenter **out, PPRenderer *renderer,
   p->renderer = renderer;
   p->project = project;
   p->assets = pp_project_assets(project);
+  static uint64_t next_generation;
+  p->generation=++next_generation;
   p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
   pp_platform_gesture_config(&p->gestures);
   if (!pp_scene_create(&p->scene, error)) {
@@ -496,7 +498,13 @@ size_t pp_anchor_presenter_instance_count(const PPAnchorPresenter *p) {
   return p ? p->instance_count : 0;
 }
 PPPresentationMetrics pp_anchor_presenter_metrics(const PPAnchorPresenter *p) {
-  return p ? p->metrics : (PPPresentationMetrics){0};
+  if(!p)return(PPPresentationMetrics){0};
+  PPPresentationMetrics metrics=p->metrics;PPRasterStatus worker=pp_raster_worker_status(p->worker);
+  metrics.worker_requests=worker.requests;metrics.worker_completions=worker.completions;
+  metrics.worker_stale_results+=worker.stale_results;metrics.worker_source_builds=worker.source_builds;
+  metrics.worker_pending_jobs=worker.pending_jobs;metrics.worker_reserved_bytes=worker.reserved_bytes;
+  for(size_t i=0;i<p->instance_count;i++)metrics.scalable_retained_bytes+=p->instances[i].scalable_bytes;
+  return metrics;
 }
 bool pp_anchor_presenter_instance_pose(const PPAnchorPresenter *p, size_t i,
                                        PPPose *out) {
@@ -513,6 +521,8 @@ void pp_anchor_presenter_destroy(PPAnchorPresenter *p) {
     return;
   close_anchors(p);
   pp_sprites_clear(p);
+  pp_raster_worker_cancel(p->worker,p->generation,0);
+  if(!p->borrowed_worker)pp_raster_worker_destroy(p->worker);
   free(p->displays);
   pp_anchors_destroy(&p->runtime);
   if (p->owns_scene)
