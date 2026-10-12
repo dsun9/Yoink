@@ -13,6 +13,12 @@ static HWND WINAPI observed_window(POINT point) {
   (void)point;
   return top_window;
 }
+static BOOL WINAPI observed_visible(HWND window) {
+  return window==(HWND)(uintptr_t)1 || window==(HWND)(uintptr_t)2;
+}
+static HWND WINAPI observed_ancestor(HWND window,UINT flags) {
+  CHECK(flags==GA_ROOT);return window;
+}
 static HHOOK WINAPI install_hook(int id, HOOKPROC callback, HINSTANCE module, DWORD thread) {
   CHECK(id == WH_MOUSE_LL && callback && module && !thread);
   installed++;
@@ -51,11 +57,15 @@ PPPlatformEvent pp_windows_event(PPSurface *surface, UINT message, POINT point,
                            .desktop_point = {point.x, point.y}};
 }
 #define WindowFromPoint observed_window
+#define IsWindowVisible observed_visible
+#define GetAncestor observed_ancestor
 #define CallNextHookEx forward_input
 #define SetWindowsHookExW install_hook
 #define UnhookWindowsHookEx uninstall_hook
 #include "../../src/platform/windows/input.c"
 #undef WindowFromPoint
+#undef IsWindowVisible
+#undef GetAncestor
 #undef CallNextHookEx
 #undef SetWindowsHookExW
 #undef UnhookWindowsHookEx

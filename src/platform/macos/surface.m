@@ -2,6 +2,11 @@
 #include <math.h>
 #include <stdlib.h>
 PPSurface *pp_mac_surfaces;
+void pp_surface_set_rectangular(PPSurface *surface,bool enabled) {if(surface) surface->rectangular=enabled;}
+void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous) {
+    if(replacement && previous && previous->panel.visible)
+        [replacement->panel orderWindow:NSWindowBelow relativeTo:previous->panel.windowNumber];
+}
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {
     if(out) *out=NULL;
     return pp_mac_error(error,PP_ERROR_PLATFORM,"Direct OpenGL native behavior is unverified on macOS; use the compatibility surface");
@@ -114,7 +119,7 @@ bool pp_surface_present(PPSurface *s,const PPFrame *frame,PPRect b,PPError *erro
         kCGImageAlphaPremultipliedLast|kCGBitmapByteOrder32Big,provider,NULL,false,kCGRenderingIntentDefault);
     CGColorSpaceRelease(color); CGDataProviderRelease(provider);
     SDL_Surface *shape=SDL_CreateSurfaceFrom(frame->width,frame->height,SDL_PIXELFORMAT_RGBA32,frame->pixels,(int)frame->stride);
-    bool ok=image && shape && SDL_SetWindowShape(s->window,shape);
+    bool ok=image && (s->rectangular?SDL_SetWindowShape(s->window,NULL):(shape && SDL_SetWindowShape(s->window,shape)));
     SDL_DestroySurface(shape);
     if(!ok) {if(image)CGImageRelease(image);release_native(s);return pp_mac_error(error,PP_ERROR_PLATFORM,"Cannot present Cocoa alpha shape");}
     bool visible=s->panel.visible;

@@ -19,6 +19,10 @@ bool pp_scene_replace(PPScene *scene, uint64_t instance_id, const PPItem *replac
 void pp_scene_delete(PPScene *scene, uint64_t instance_id);
 void pp_scene_clear(PPScene *scene);
 bool pp_scene_set_pose(PPScene *scene, uint64_t id, PPPose pose, PPError *error);
+/* Restore a retained immutable snapshot after a rejected candidate. Borrows
+ * and retains snapshot; no source regeneration or project mutation. */
+bool pp_scene_restore(PPScene *scene,uint64_t id,PPItemSnapshot *snapshot,
+    PPPose pose,double animation_start,PPError *error);
 /* Borrowed views, invalidated by any scene mutation. IDs are never reused,
  * including after clear. Scene changes never modify the shared project. */
 const PPSceneInstance *pp_scene_get(const PPScene *scene, uint64_t id);

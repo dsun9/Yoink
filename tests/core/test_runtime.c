@@ -15,7 +15,11 @@ struct PPSurface {
   struct PPSurface *next;
   int source_width;
   uint8_t red, blue;
+  uint32_t window_id;
 };
+struct PPRenderer {PPSurface *surface;PPRendererMetrics metrics;uint64_t content_id,revision;};
+static uint32_t direct_window_serial;
+static unsigned cpu_transforms;
 static PPSurface *surfaces;
 static int source_width;
 static PPSurface *fail_surface;
@@ -56,7 +60,7 @@ void pp_surface_destroy(PPSurface *s) {
   *link = s->next;
   free(s);
 }
-void pp_surface_hide(PPSurface *s) { s->shown = false; }
+void pp_surface_hide(PPSurface *s) { s->shown = false;if(capture_owner==s)capture_owner=NULL; }
 void pp_surface_set_instance_id(PPSurface *s, uint64_t id) { s->id = id; }
 bool pp_platform_capture(PPSurface *s, PPError *error) {
   (void)error;
@@ -100,10 +104,32 @@ bool pp_renderer_create(PPRenderer **out, PPError *error) {
   *out = (PPRenderer *)1;
   return true;
 }
-void pp_renderer_destroy(PPRenderer *r) { (void)r; }
+void pp_renderer_destroy(PPRenderer *r) {if(r && r!=(PPRenderer *)1)free(r);}
+PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRenderer *)1?(PPRendererMetrics){cpu_transforms,cpu_transforms,cpu_transforms*2}:r?r->metrics:(PPRendererMetrics){0};}
+bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++direct_window_serial;return true;}
+uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
+bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive && capture_owner==s)capture_owner=NULL;return true;}
+void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
+void pp_surface_inherit_order(PPSurface *s,PPSurface *old) {(void)s;(void)old;}
+bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
+    (void)error;*out=calloc(1,sizeof(**out));CHECK(*out);
+    for(PPSurface *s=surfaces;s;s=s->next)if(s->window_id==id)(*out)->surface=s;
+    CHECK((*out)->surface);return true;
+}
+bool pp_renderer_upload_source(PPRenderer *r,const PPFrame *frame,uint64_t id,uint64_t revision,PPError *error) {
+    (void)error;if(r->content_id==id&&r->revision==revision)return true;
+    r->surface->source_width=frame->width;r->surface->red=frame->pixels[0];r->surface->blue=frame->pixels[2];
+    r->content_id=id;r->revision=revision;r->metrics.source_uploads++;return true;
+}
+bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,double opacity,double density,PPError *error) {
+    (void)layout;(void)size;(void)angle;(void)opacity;(void)density;
+    if(r->surface==fail_surface){if(error)*error=(PPError){PP_ERROR_RENDER,"Injected direct presentation failure"};return false;}
+    r->metrics.transform_draws++;return true;
+}
 bool pp_renderer_transform(PPRenderer *r, const PPFrame *source, double longest,
                            double angle, double opacity, double scale,
                            PPFrame *out, PPError *error) {
+  cpu_transforms++;
   (void)r;
   (void)opacity;
   (void)error;
@@ -455,7 +481,37 @@ static void test_external_change_cancels_owned_input(void) {
   puts("PASS external pose/content changes cancel accepted press and drag "
        "ownership; unrelated ownership survives");
 }
+static void test_png_runtime_reuse_and_generation_cleanup(void) {
+  PPApp *app=NULL;PPRuntime *r=NULL;PPError error={0};
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  FILE *file=fopen(PP_MEDIA_FIXTURES "/alpha.png","rb");CHECK(file);CHECK(!fseek(file,0,SEEK_END));long size=ftell(file);CHECK(size>0);rewind(file);
+  uint8_t *data=malloc((size_t)size);CHECK(data);CHECK(fread(data,1,(size_t)size,file)==(size_t)size);fclose(file);
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1,.id=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT)->id};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){data,(size_t)size},PP_ASSET_PNG,&item.image_asset,&error));free(data);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,.item_id=item.id,.item=&item},&error));
+  CHECK(pp_runtime_create(&r,app,&error));pointer=(PPVec2){8,8};pp_runtime_tick(r,1);
+  PPSurface *preview=NULL;for(PPSurface *s=surfaces;s;s=s->next)if(!s->id&&s->shown&&s->source_width==3)preview=s;CHECK(preview);
+  step(r,preview,PP_EVENT_BUTTON_DOWN,16,16,1.01);step(r,preview,PP_EVENT_POINTER_MOVE,300,200,1.02);step(r,preview,PP_EVENT_BUTTON_UP,300,200,1.03);pp_runtime_tick(r,1.3);
+  CHECK(pp_scene_count(pp_app_scene(app))==1);uint64_t id=pp_scene_at(pp_app_scene(app),0)->id;PPSurface *surface=sprite(id);CHECK(surface&&surface->window_id);
+  PPRendererMetrics warm=pp_runtime_renderer_metrics(r);PPSourceMetrics sources=pp_assets_source_metrics(pp_app_assets(app));
+  pp_runtime_tick(r,2);CHECK(pp_runtime_renderer_metrics(r).transform_draws==warm.transform_draws);
+  step(r,surface,PP_EVENT_BUTTON_DOWN,300,200,2.01);step(r,surface,PP_EVENT_POINTER_MOVE,400,300,2.02);step(r,surface,PP_EVENT_BUTTON_UP,400,300,2.03);pp_runtime_tick(r,2.04);
+  CHECK(sprite(id)==surface && pp_runtime_renderer_metrics(r).transform_draws==warm.transform_draws && pp_runtime_renderer_metrics(r).source_uploads==warm.source_uploads);
+  pp_runtime_event(r,&(PPPlatformEvent){.surface=surface,.instance_id=id,.kind=PP_EVENT_WHEEL,.wheel_delta=.5,.modifiers=PP_MOD_ALT,.timestamp=3});
+  pp_runtime_tick(r,3.02);pp_runtime_tick(r,3.2);
+  CHECK(pp_runtime_renderer_metrics(r).transform_draws>warm.transform_draws && pp_runtime_renderer_metrics(r).source_uploads==warm.source_uploads && pp_runtime_renderer_metrics(r).readbacks==warm.readbacks);
+  CHECK(pp_assets_source_metrics(pp_app_assets(app)).raster_builds==sources.raster_builds && pp_runtime_gpu_resources(r).retained_bytes==12);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  pointer=(PPVec2){500,500};pp_runtime_tick(r,4);
+  CHECK(!r->failed && pp_scene_count(pp_app_scene(app))==0 && pp_runtime_gpu_resources(r).retained_bytes==0);
+  pp_runtime_destroy(r);CHECK(!surfaces);pp_app_destroy(app);
+  puts("PASS PNG runtime source/texture reuse and project-generation GPU cleanup");
+}
 int main(void) {
+#if defined(_WIN32)
+  test_png_runtime_reuse_and_generation_cleanup();
+#endif
   test_runtime_ownership();
   test_failure_isolation();
   test_external_change_cancels_owned_input();

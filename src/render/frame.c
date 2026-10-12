@@ -102,12 +102,24 @@ bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
     if(!current(renderer,error)) return false;
     PPGL *gl=&renderer->gl; gl->ActiveTexture(GL_TEXTURE0);
     glPixelStorei(GL_UNPACK_ALIGNMENT,1); glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(source->stride/4));
-    if(renderer->source_width==source->width && renderer->source_height==source->height) {
+    bool replacement=renderer->content_id!=content_id || renderer->source_width!=source->width || renderer->source_height!=source->height;
+    GLuint candidate=0;
+    if(!replacement) {
         glBindTexture(GL_TEXTURE_2D,renderer->textures[0]);
         glTexSubImage2D(GL_TEXTURE_2D,0,0,0,source->width,source->height,GL_RGBA,GL_UNSIGNED_BYTE,source->pixels);
-    } else texture(renderer->textures[0],GL_RGBA8,GL_RGBA,source->width,source->height,source->pixels);
+    } else {
+        /* Keep the usable texture until a separately reserved candidate upload
+         * succeeds. The presenter accounts the overlap before entering here. */
+        glGenTextures(1,&candidate);
+        texture(candidate,GL_RGBA8,GL_RGBA,source->width,source->height,source->pixels);
+    }
     glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
-    if(glGetError()!=GL_NO_ERROR) return error_set(error,PP_ERROR_RENDER,"Cannot upload direct source texture");
+    GLenum upload_error=glGetError();
+    if(upload_error!=GL_NO_ERROR) {
+        if(candidate) glDeleteTextures(1,&candidate);
+        return error_set(error,upload_error==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot upload direct source texture");
+    }
+    if(replacement) {glDeleteTextures(1,&renderer->textures[0]);renderer->textures[0]=candidate;}
     renderer->source_width=source->width;renderer->source_height=source->height;
     renderer->content_id=content_id;renderer->revision=revision;renderer->metrics.source_uploads++;
     return true;

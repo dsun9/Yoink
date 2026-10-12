@@ -84,6 +84,12 @@ uint32_t pp_surface_window_id(const PPSurface *surface);
  * Failure hides the interceptor; renderer must be destroyed before surface. */
 bool pp_surface_place_gl(PPSurface *surface, PPRect desktop_bounds,
     bool interactive, PPError *error);
+/* Rectangle input policy is independent of visible alpha. Compatibility
+ * adapters may retain CPU pixels; direct GL windows already use this policy. */
+void pp_surface_set_rectangular(PPSurface *surface,bool enabled);
+/* Put a successfully prepared replacement into the previous surface's native
+ * order without activation, before destroying the previous surface. */
+void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous);
 /* Retained native CPU raster bytes for a validated width/height (<=8192).
  * Presenter reserves this before allocating the candidate native copies. */
 size_t pp_surface_raster_bytes(int width, int height);

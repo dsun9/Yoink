@@ -12,6 +12,7 @@ struct PPSurface {
     SDL_Window *gl_window;
     WNDPROC gl_procedure;
     bool gl_video_initialized, gl_interactive;
+    bool rectangular;
 };
 void pp_windows_record(PPSurface *surface, HWND window, UINT message, WPARAM w, LPARAM l);
 void pp_windows_forget(PPSurface *surface);

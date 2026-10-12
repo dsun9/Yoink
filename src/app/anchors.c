@@ -54,6 +54,7 @@ bool pp_anchor_presenter_create(PPAnchorPresenter **out, PPRenderer *renderer,
   p->renderer = renderer;
   p->project = project;
   p->assets = pp_project_assets(project);
+  p->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
   pp_platform_gesture_config(&p->gestures);
   if (!pp_scene_create(&p->scene, error)) {
     free(p);
@@ -177,7 +178,7 @@ static bool sync_displays(PPAnchorPresenter *p, const PPDisplay *d,
   for (size_t i = 0; i < p->instance_count; i++) {
     PPSprite *instance = p->instances + i;
     if (changed && instance->interaction.pressed) {
-      pp_surface_hide(instance->surface);
+      pp_sprite_hide(instance);
       memset(&instance->interaction, 0, sizeof(instance->interaction));
       instance->dirty = true;
     }

@@ -1,6 +1,6 @@
 # Transparent OpenGL native feasibility
 
-This is the bounded native gate for [issue #4](https://github.com/dsun9/Yoink/issues/4), part of [the rendering specification](https://github.com/dsun9/Yoink/issues/1). The direct path remains opt-in. The application still uses its existing CPU-frame presenter until the next implementation ticket adopts the direct APIs.
+This is the bounded native gate for [issue #4](https://github.com/dsun9/Yoink/issues/4), part of [the rendering specification](https://github.com/dsun9/Yoink/issues/1). The diagnostic remains opt-in. [Ticket #5](retained-png.md) adopts the validated Windows path for placed PNG sprites. Other content still uses the CPU-frame presenter until its implementation tickets.
 
 The Windows gate passed on the machine below in three consecutive final Release runs on 2026-10-11. This permits the next Windows adoption step on this host. It does not establish the 1536 DIP performance budget, visible compositor frame cadence, other GPU configurations, physical mixed-display behavior, or macOS acceptance.
 

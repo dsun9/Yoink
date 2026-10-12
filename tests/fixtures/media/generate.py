@@ -7,6 +7,8 @@ def png(w, h, pixel):
     row=pixel*w if len(pixel)==4 else pixel
     return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,6,0,0,0))+chunk(b'IDAT',zlib.compress(b''.join(b'\0'+row for _ in range(h))))+chunk(b'IEND',b'')
 (root/'alpha.png').write_bytes(png(3,1,b'\xff\x80\x40\x80'+b'\xff\xff\xff\0'*2))
+(root/'retained-blue.png').write_bytes(png(8,4,b'\0\0\xff\xff'))
+(root/'retained-empty.png').write_bytes(png(3,1,b'\0\0\0\0'))
 def gif(frames, loop=0, w=3, h=1):
     data=b'GIF89a'+struct.pack('<HHBBB',w,h,0x81,0,0)+bytes([0,0,0,255,0,0,0,255,0,0,0,255])
     if loop is not None: data+=b'!\xff\x0bNETSCAPE2.0\x03\x01'+struct.pack('<H',loop)+b'\0'

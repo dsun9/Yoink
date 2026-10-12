@@ -26,6 +26,19 @@ static PPButton button(UINT message) {
 }
 static PPSurface *target(POINT point) {
     HWND top=WindowFromPoint(point);
+    HWND root=GetAncestor(top,GA_ROOT);
+    bool rectangles=false;
+    for(PPSurface *s=surfaces;s;s=s->input_next) if(s->rectangular) {rectangles=true;break;}
+    /* Layered compatibility windows expose alpha-zero pixels to native hit
+     * testing. Walk only as far as the actual underlying top window so an
+     * enabled rectangle can consume its hole without crossing unrelated UI. */
+    for(HWND window=rectangles?GetTopWindow(NULL):NULL;window;window=GetWindow(window,GW_HWNDNEXT)) {
+        for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==window && s->rectangular && IsWindowVisible(window)) {
+            LONG x=point.x-s->origin.x,y=point.y-s->origin.y;
+            if(x>=0 && y>=0 && x<s->width && y<s->height && (!s->gl_window || s->gl_interactive)) return s;
+        }
+        if(window==root) break;
+    }
     for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==top && IsWindowVisible(s->window)) {
         LONG x=point.x-s->origin.x,y=point.y-s->origin.y;
         if(s->gl_window) return s->gl_interactive && x>=0 && y>=0 && x<s->width && y<s->height?s:NULL;
@@ -34,6 +47,11 @@ static PPSurface *target(POINT point) {
         return NULL;
     }
     return NULL;
+}
+void pp_surface_set_rectangular(PPSurface *surface,bool enabled) {if(surface) surface->rectangular=enabled;}
+void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous) {
+    if(!replacement || !previous || !replacement->window || !previous->window) return;
+    SetWindowPos(replacement->window,previous->window,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
 }
 void pp_platform_release_capture(void) {owner=NULL;accepted_press=NULL;capture_eligible=false;}
 void pp_surface_cancel_input(PPSurface *surface) {

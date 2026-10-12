@@ -20,8 +20,9 @@ Success requires all of the following:
 
 - PNG, animated GIF, static SVG, text, and emoji can be dragged from an anchor.
 - Placed sprites remain above ordinary application windows and move smoothly.
-- Only the visible sprite shape intercepts mouse input. Transparent padding,
-  holes, and gaps between letters pass clicks and scrolling to windows below.
+- The native rectangle around a visible sprite intercepts mouse input, including
+  transparent padding, holes, rotated corners, and gaps between letters. Visual
+  alpha remains unchanged. Input outside that rectangle reaches windows below.
 - Dragging between displays works with different display scales and desktop
   arrangements, including displays with negative desktop coordinates.
 - Opening a saved project works after the original imported files are moved.
@@ -129,36 +130,38 @@ Switching to a successfully loaded project clears the temporary scene and closes
 previews and drawers. A failed project load preserves the current project and
 scene. No scene restoration or scene persistence is included.
 
-## 3. Precise mouse routing
+## 3. Rectangular mouse routing
 
-The hit region follows content alpha after its current scale, rotation, and GIF
-frame selection. Fully transparent pixels do not accept input. Opacity zero
-makes the instance noninteractive. Decorative shadows are excluded from the hit
-mask. A nonzero content alpha at a visible pixel is eligible for interaction;
-implementations must preserve antialiased edges without adding rectangular hit
-padding.
+The input region is the axis-aligned native window rectangle around the current
+rotated visual bounds. Interior holes, transparent padding, and empty rotated
+corners remain interactive while the source has visible alpha and opacity is
+nonzero. Visual alpha and antialiasing remain separate from input geometry.
+An entirely transparent source frame, opacity zero, hiding, presentation failure,
+or destruction removes interception and cancels capture.
 
-For overlapping sprites, input targets the topmost sprite with visible content
-at that point. A transparent area exposes a lower sprite or an application
-window. Clicking or beginning a drag on an instance brings it above other
+For overlapping sprites, input targets the topmost visible sprite rectangle
+at that point. Clicking or beginning a drag on an instance brings it above other
 PointyPointer sprites without activating the presentation overlay as a keyboard
 window.
 
 Pass-through means the underlying application receives the original input
 normally. Receiving and ignoring events in PointyPointer is insufficient.
 Synthetic click replay is not the normal input-routing mechanism. The first
-click after arriving over a transparent region must work correctly.
+click after arriving inside or outside the rectangle must reach its owner correctly.
 
 After a left press starts a drag, maintain mouse capture through movement beyond
 the sprite, through transparent pixels, and across displays until release.
 Release capture on cancellation, loss of capture, instance destruction, or
-shutdown. Outside an active gesture, return immediately to silhouette routing.
+shutdown. Outside an active gesture, return immediately to rectangle routing.
 
-Keep alpha masks with decoded content and use inverse transforms for core hit
-queries. Avoid synchronous GPU readback for every pointer query. The native
-adapter must provide genuine input passthrough, including to other processes,
-and keep native hit behavior synchronized with presented content. A CPU hit
-query alone does not establish that the operating system routes input correctly.
+Keep coverage only where a CPU consumer requires it. Native rectangle targeting
+does not require an alpha mask or synchronous GPU readback. The native adapter
+must provide original input passthrough outside the rectangle, including to other
+processes. A core hit query alone does not establish operating-system routing.
+
+Ticket #5 implements this contract for Windows PNG sprites and represents it in
+the macOS compatibility adapter. Other content and anchor targeting remain
+staged implementation work under rendering issue #1. macOS runtime is unverified.
 
 SDL documents window-shape updates as expensive. The implementation plan must
 start by validating the native presentation and input path with transparency,
@@ -362,7 +365,7 @@ failure. Shutdown releases capture, closes windows, and releases resources.
 
 ### Core and storage checks
 
-- Transform and inverse-transform hit tests, including holes and rotated edges.
+- Canonical transformed bounds and rectangle ownership, including holes and rotated corners.
 - Gesture transitions, double-click/drag separation, and capture cancellation.
 - Easing under fractional input and varying frame times.
 - Replacement invariants and independent default selection.
@@ -377,9 +380,10 @@ Verify with real underlying application windows, rather than core tests alone:
 
 - Startup, tray Settings/Quit, and continuing to run after settings closes.
 - All eight anchors on at least two displays, including a shared display edge.
-- Transparent padding and interior holes passing the first click and wheel
-  event through; gaps between letters and alpha-changing GIF frames included.
-- Visible pixels receiving input and correct stacking across overlapping sprites.
+- Transparent padding, interior holes, rotated corners, and letter gaps receiving
+  the first click and wheel inside a visible sprite rectangle; original input
+  reaches the application outside it. Entirely transparent frames release input.
+- Correct stacking across overlapping sprite rectangles and UI windows.
 - Rotation and size changes updating both visual and hit behavior.
 - Pointer capture through cross-display dragging, without keyboard-focus theft.
 - Mixed DPI, negative monitor coordinates, disconnect/reconnect, and resolution

@@ -83,6 +83,16 @@ bool pp_scene_set_pose(PPScene *scene, uint64_t id, PPPose pose, PPError *error)
     scene->instances[at].pose = pose;
     return true;
 }
+bool pp_scene_restore(PPScene *scene,uint64_t id,PPItemSnapshot *snapshot,
+    PPPose pose,double start,PPError *error) {
+    size_t at=find(scene,id);
+    if(at==SIZE_MAX || !snapshot || !valid_pose(pose) || !isfinite(start) || start<0 ||
+        pp_item_snapshot_assets(snapshot)!=pp_item_snapshot_assets(scene->instances[at].snapshot))
+        return scene_error(error,PP_ERROR_ARGUMENT,"Invalid retained scene rollback");
+    pp_item_snapshot_retain(snapshot);pp_item_snapshot_release(scene->instances[at].snapshot);
+    scene->instances[at].snapshot=snapshot;scene->instances[at].pose=pose;scene->instances[at].animation_start=start;
+    return true;
+}
 const PPSceneInstance *pp_scene_get(const PPScene *scene, uint64_t id) {
     size_t at = find(scene, id);
     return at == SIZE_MAX ? NULL : scene->instances + at;
