@@ -40,6 +40,7 @@ bool pp_svg_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *inst
   if(!source.size||source.size>32u*1024*1024-sizeof(SvgCapture)) {
     pp_asset_release(asset);if(error)*error=(PPError){PP_ERROR_RESOURCE_LIMIT,"SVG source exceeds worker capture limit"};return false;
   }
+  if(pp_scalable_defer_if_busy(p,s,instance,display,longest)) {pp_asset_release(asset);return true;}
   SvgCapture *c=calloc(1,sizeof(*c));if(c)c->bytes=malloc(source.size);
   if(!c||!c->bytes) {destroy_capture(c);pp_asset_release(asset);if(error)*error=(PPError){PP_ERROR_MEMORY,"Cannot copy immutable SVG source"};return false;}
   memcpy(c->bytes,source.data,source.size);c->size=source.size;c->width=(int)w;c->height=(int)h;c->layout=layout;c->density=scale;
@@ -48,5 +49,5 @@ bool pp_svg_request(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *inst
   PPRasterKey key={p->generation,s->id,pp_item_snapshot_revision(instance->snapshot),++s->raster_serial,longest,display->drawable_pixels_per_dip};
   PPRasterCapture capture={c,sizeof(*c)+c->size,generate,destroy_capture};
   if(!pp_raster_worker_request(p->worker,key,capture,p->assets,(size_t)w*(size_t)h*5,error))return false;
-  s->raster_target=key;s->raster_requested=true;return true;
+  s->raster_target=key;s->raster_requested=true;s->raster_retry=false;return true;
 }

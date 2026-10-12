@@ -44,6 +44,10 @@ bool pp_raster_worker_create(PPRasterWorker **out, PPError *error);
  * cancels older work; a full queue for another instance rejects the request. */
 bool pp_raster_worker_request(PPRasterWorker *worker, PPRasterKey key,
     PPRasterCapture capture, PPAssets *assets, size_t candidate_limit, PPError *error);
+/* Owner admission check before copying an optional capture. Same-instance
+ * waiting work can be replaced; another instance's waiting job must finish. */
+bool pp_raster_worker_can_request(PPRasterWorker *worker, uint64_t generation,
+    uint64_t instance_id);
 void pp_raster_worker_cancel(PPRasterWorker *worker, uint64_t generation,
     uint64_t instance_id); /* instance zero cancels the entire generation. */
 bool pp_raster_worker_poll(PPRasterWorker *worker, uint64_t generation,
