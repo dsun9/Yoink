@@ -69,11 +69,11 @@ static int acceptance_control(const char *control) {
   else if(strcmp(control,"success")) { fprintf(stderr,"Unknown acceptance control: %s\n",control); return 2; }
   return acceptance_result(&a);
 }
+static const char *stage_names[] = {"text", "raster", "inspect", "find_font", "renderer_create", "transform", "ui_create", "upload", "ui_end_swap", "surface", "dib", "layered", "readback", "texture", "source_request", "cpu_draw_submission", "gpu_execution", "cpu_wait_gpu_completion", "native_set_size", "native_placement", "make_current", "gl_swap", "gl_finish", "query_result", "draw_state"};
 static void report(const char *scenario, double elapsed) {
-  static const char *names[] = {"text", "raster", "inspect", "find_font", "renderer_create", "transform", "ui_create", "upload", "ui_end_swap", "surface", "dib", "layered", "readback", "texture", "source_request", "cpu_draw_submission", "gpu_execution", "cpu_wait_gpu_completion"};
   printf("SCENARIO %s wall_ms=%.3f\n", scenario, elapsed);
   for (int i=0;i<PROBE_COUNT;i++) if (pp_probe_metrics[i].count)
-    printf("STAGE %s count=%u sum_ms=%.3f max_ms=%.3f\n", names[i], pp_probe_metrics[i].count, pp_probe_metrics[i].ms, pp_probe_metrics[i].max_ms);
+    printf("STAGE %s count=%u sum_ms=%.3f max_ms=%.3f\n", stage_names[i], pp_probe_metrics[i].count, pp_probe_metrics[i].ms, pp_probe_metrics[i].max_ms);
   for(unsigned i=0;i<font_count;i++) printf("FONT family=%s found=%d bytes=%zu ms=%.3f\n",font_events[i].family,font_events[i].found,font_events[i].bytes,font_events[i].ms);
   font_count=0;
   memset(pp_probe_metrics, 0, sizeof(pp_probe_metrics)); fflush(stdout);
@@ -383,7 +383,13 @@ static bool send_alt(bool pressed) {
   INPUT input={.type=INPUT_KEYBOARD}; input.ki.wVk=VK_MENU; input.ki.dwFlags=pressed?0:KEYEVENTF_KEYUP;
   return SendInput(1,&input,sizeof(input))==1;
 }
-static bool sharp_native_samples(PPApp *app,PPRenderer *renderer,Acceptance *acceptance,double deadline) {
+typedef struct NativeWheel {int delta;double sent,returned;UINT accepted;} NativeWheel;
+static DWORD WINAPI send_wheel(void *data) {
+  NativeWheel *wheel=data;INPUT input={.type=INPUT_MOUSE};input.mi.dwFlags=MOUSEEVENTF_WHEEL;
+  input.mi.mouseData=(DWORD)wheel->delta;input.mi.time=GetTickCount();input.mi.dwExtraInfo=PP_PROBE_INPUT_TAG;
+  wheel->sent=pp_probe_clock();wheel->accepted=SendInput(1,&input,sizeof(input));wheel->returned=pp_probe_clock();return 0;
+}
+static bool sharp_native_samples(PPApp *app,PPRenderer *renderer,Acceptance *acceptance,double deadline,bool production_loop) {
   PPDisplay *displays=NULL; size_t count=0; PPError error={0}; PPVec2 pointer;
   if(!pp_platform_displays(&displays,&count,&error) || !pp_platform_pointer(&pointer) || !count) {pp_displays_free(displays); return false;}
   const PPDisplay *selected=pp_display_at(displays,count,pointer); if(!selected) selected=displays;
@@ -393,14 +399,24 @@ static bool sharp_native_samples(PPApp *app,PPRenderer *renderer,Acceptance *acc
   double now=pp_probe_clock()/1000.0;
   PPSprite *sprite=pp_sprites_create(&p,PP_ANCHOR_TOP_LEFT,(PPPose){{display.bounds.x+display.bounds.w*.5,display.bounds.y+display.bounds.h*.5},1536,0,1},now,&error);
   if(!sprite) return false;
-  uint64_t id=sprite->id; bool ok=false,alt=false;
+  uint64_t id=sprite->id; bool ok=false,alt=false;HANDLE injector=NULL,wheel_thread=NULL;NativeWheel wheel={0};
   if(!pp_sprites_update(&p,now,&error)) goto done;
   const PPSceneInstance *instance=pp_scene_get(p.scene,id); const PPFrame *source; double next;
+  double warm_deadline=fmin(deadline,pp_probe_clock()+2000);
+  while(pp_raster_worker_status(p.worker).pending_jobs&&pp_probe_clock()<warm_deadline) {
+    pump();if(!pp_sprites_update(&p,pp_probe_clock()/1000.0,&error))goto done;Sleep(1);
+  }
+  if(!pp_sprites_update(&p,pp_probe_clock()/1000.0,&error))goto done;
+  if(pp_snapshot_is_scalable_text(instance->snapshot)&&!sprite->scalable.frame.pixels)goto done;
+  printf("SHARP warm_instance=%llu longest_dip=%.3f drawable_density=%.2f worker_builds=%llu preparation_ms=%.3f\n",
+    (unsigned long long)id,sprite->pose.longest_dip,display.drawable_pixels_per_dip,
+    (unsigned long long)pp_raster_worker_status(p.worker).source_builds,pp_raster_worker_status(p.worker).source_ms);
   PPVec2 logical=pp_item_snapshot_size(instance->snapshot);
-  if(!pp_item_snapshot_frame(instance->snapshot,0,1536*1.5/fmax(logical.x,logical.y),&source,&next,&error)) goto done;
+  if(sprite->scalable.frame.pixels)source=&sprite->scalable.frame;
+  else if(!pp_item_snapshot_frame(instance->snapshot,0,1536*1.5/fmax(logical.x,logical.y),&source,&next,&error)) goto done;
   double factor=1536*display.desktop_units_per_dip/fmax(source->width,source->height),best=INFINITY; POINT target={0};
   for(int y=0;y<source->height;y+=4) for(int x=0;x<source->width;x+=4) {
-    if(source->content_alpha[(size_t)y*source->width+x]<250) continue;
+    if(source->pixels[(size_t)y*source->stride+x*4+3]<250) continue;
     double dx=(x+.5-source->width*.5)*factor,dy=(y+.5-source->height*.5)*factor;
     double px=sprite->pose.center.x+dx,py=sprite->pose.center.y+dy;
     if(px<display.bounds.x+24 || py<display.bounds.y+24 || px>=display.bounds.x+display.bounds.w-24 || py>=display.bounds.y+display.bounds.h-24) continue;
@@ -408,30 +424,62 @@ static bool sharp_native_samples(PPApp *app,PPRenderer *renderer,Acceptance *acc
   }
   if(!isfinite(best) || !SetCursorPos(target.x,target.y) || !send_alt(true)) goto done;
   alt=true; pump(); Sleep(20);
+  if(production_loop)pp_probe_completion_enabled=false;
+  inject_stop=CreateEventW(NULL,TRUE,FALSE,NULL);if(!inject_stop)goto done;
+  injection_limit=5000;pp_probe_active_worker=p.worker;injector=CreateThread(NULL,0,zero_moves,NULL,0,NULL);if(!injector)goto done;
   for(unsigned sample=0;sample<ACCEPTANCE_SAMPLES;sample++) {
     if(pp_probe_clock()>deadline) {acceptance->timed_out=true; break;}
-    unsigned wheel_before=pp_probe_wheel_count; uint64_t sharp_before=p.metrics.sharp_publications;
-    INPUT input={.type=INPUT_MOUSE}; input.mi.dwFlags=MOUSEEVENTF_WHEEL;
-    input.mi.mouseData=(DWORD)((sample&1)?-1:1); input.mi.time=GetTickCount(); input.mi.dwExtraInfo=PP_PROBE_INPUT_TAG;
-    double sent=pp_probe_clock(); if(SendInput(1,&input,sizeof(input))!=1) break;
+    unsigned wheel_before=pp_probe_wheel_count,worker_input_before=pp_probe_worker_input_count; uint64_t sharp_before=p.metrics.sharp_publications;
+    wheel=(NativeWheel){.delta=(sample&1)?-1:1};double sent=pp_probe_clock(),update_max=0;
+    wheel_thread=CreateThread(NULL,0,send_wheel,&wheel,0,NULL);if(!wheel_thread)break;
     double limit=sent+500;
-    while(pp_probe_clock()<limit && p.metrics.sharp_publications==sharp_before) {
+    while(pp_probe_clock()<limit && (p.metrics.sharp_publications==sharp_before||WaitForSingleObject(wheel_thread,0)==WAIT_TIMEOUT)) {
       PPPlatformEvent event;
       while(pp_platform_poll(&event)) if(!pp_anchor_presenter_event(&p,&event,&error)) goto done;
       double frame_start=pp_probe_clock();
+      PPProbeMetric frame_before[PROBE_COUNT];memcpy(frame_before,pp_probe_metrics,sizeof(frame_before));
       if(!pp_sprites_update(&p,frame_start/1000.0,&error)) goto done;
-      if(pp_probe_clock()-frame_start>250 || pp_probe_injected_max_wait>100) {acceptance->stopped=true;goto done;}
+      double update_ms=pp_probe_clock()-frame_start;if(update_ms>update_max)update_max=update_ms;
+      if(update_ms>50) {
+        printf("SLOW sharp_sample=%u presenter_update_ms=%.3f pending_jobs=%zu sharp_publications=%llu\n",sample,update_ms,pp_raster_worker_status(p.worker).pending_jobs,(unsigned long long)(p.metrics.sharp_publications-sharp_before));
+        for(unsigned stage=0;stage<PROBE_COUNT;stage++)if(pp_probe_metrics[stage].count!=frame_before[stage].count)
+          printf("SLOW update_stage=%s count=%u elapsed_ms=%.3f\n",stage_names[stage],pp_probe_metrics[stage].count-frame_before[stage].count,pp_probe_metrics[stage].ms-frame_before[stage].ms);
+      }
+      if(update_ms>250 || pp_probe_injected_max_wait>100) {
+        printf("STOP sharp_sample=%u update_ms=%.3f update_max_ms=%.3f tagged_input_max_wait_ms=%u hook_callback_max_ms=%.3f last_hook_qpc_ms=%.3f last_hook_kind=%u last_hook_wait_ms=%u wheel_arrivals=%u worker_input_observations=%u\n",sample,update_ms,update_max,pp_probe_injected_max_wait,pp_probe_hook_max_ms,pp_probe_last_input_qpc_ms,pp_probe_last_input_kind,pp_probe_last_input_wait,pp_probe_wheel_count-wheel_before,pp_probe_worker_input_count-worker_input_before);
+        for(unsigned stage=0;stage<PROBE_COUNT;stage++)if(pp_probe_metrics[stage].count!=frame_before[stage].count)
+          printf("STOP update_stage=%s count=%u elapsed_ms=%.3f\n",stage_names[stage],pp_probe_metrics[stage].count-frame_before[stage].count,pp_probe_metrics[stage].ms-frame_before[stage].ms);
+        acceptance->stopped=true;goto done;
+      }
       if(p.metrics.sharp_publications==sharp_before) Sleep(1);
     }
+    double final_completion_ms=0;
+    if(production_loop&&p.metrics.sharp_publications==sharp_before+1) {
+      double start=pp_probe_clock();
+      if(!pp_renderer_complete(sprite->retained.renderer,&error))goto done;
+      final_completion_ms=pp_probe_clock()-start;SDL_PumpEvents();
+      if(final_completion_ms>250||pp_probe_injected_max_wait>100){acceptance->stopped=true;goto done;}
+    }
     double ms=pp_probe_clock()-sent;
+    if(WaitForSingleObject(wheel_thread,0)!=WAIT_OBJECT_0)break;
+    CloseHandle(wheel_thread);wheel_thread=NULL;if(wheel.accepted!=1)break;
     if(p.metrics.sharp_publications!=sharp_before+1 || pp_probe_wheel_count!=wheel_before+1 ||
        p.metrics.last_sharp_instance_id!=id || p.metrics.last_sharp_content_revision!=pp_item_snapshot_revision(instance->snapshot) ||
-       p.metrics.last_sharp_drawable_density!=1.5) break;
+       p.metrics.last_sharp_drawable_density!=1.5 || pp_probe_worker_input_count==worker_input_before) break;
     acceptance->sharp_observations++; if(ms>acceptance->max_sharp_ms) acceptance->max_sharp_ms=ms;
-    printf("SHARP native_input_sample=%u latest_input_to_publication_ms=%.3f content_revision=%llu drawable_density=1.5 endpoint_dip=%.3f\n",sample,ms,(unsigned long long)p.metrics.last_sharp_content_revision,p.metrics.last_sharp_longest_dip);
+    printf("SHARP native_input_sample=%u latest_input_to_publication_ms=%.3f content_revision=%llu drawable_density=1.5 endpoint_dip=%.3f worker_input_observations=%u worker_input_max_wait_ms=%u all_tagged_input_max_wait_ms=%u helper_sendinput_ms=%.3f presenter_update_max_ms=%.3f final_sharp_completion_ms=%.3f last_hook_qpc_ms=%.3f last_hook_kind=%u\n",sample,ms,(unsigned long long)p.metrics.last_sharp_content_revision,p.metrics.last_sharp_longest_dip,pp_probe_worker_input_count-worker_input_before,pp_probe_worker_input_max_wait,pp_probe_injected_max_wait,wheel.returned-wheel.sent,update_max,final_completion_ms,pp_probe_last_input_qpc_ms,pp_probe_last_input_kind);
   }
   ok=acceptance->sharp_observations==ACCEPTANCE_SAMPLES;
 done:
+  if(wheel_thread) {
+    for(int i=0;i<100&&WaitForSingleObject(wheel_thread,0)==WAIT_TIMEOUT;i++){pump();Sleep(10);}
+    if(WaitForSingleObject(wheel_thread,0)!=WAIT_OBJECT_0){acceptance->stopped=true;fflush(stdout);ExitProcess(2);}
+    printf("SHARP helper_sendinput_ms=%.3f accepted=%u\n",wheel.returned-wheel.sent,wheel.accepted);CloseHandle(wheel_thread);
+  }
+  if(injector&&!stop_injector(injector)) {acceptance->stopped=true;fflush(stdout);ExitProcess(2);}
+  else if(!injector&&inject_stop) {CloseHandle(inject_stop);inject_stop=NULL;}
+  pp_probe_active_worker=NULL;
+  if(production_loop)pp_probe_completion_enabled=true;
   if(alt) send_alt(false);
   pp_sprites_clear(&p); pp_scene_delete(p.scene,id);
   pp_raster_worker_destroy(p.worker);pp_gif_clear(&p);
@@ -445,7 +493,8 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
   double deadline=pp_probe_clock()+145000,renderer_start=pp_probe_clock();
   pp_probe_completion_enabled=true;
   if(!pp_renderer_create(&renderer,&error)) goto done;
-  if(diagnostic) printf("SCOPE diagnostic=%s-retained-only required_cases=16 overall_96_case_acceptance=not-evaluated\n",diagnostic_kind==2?"png":"gif");
+  const char *diagnostic_name=diagnostic_kind==0?"scalable":diagnostic_kind==2?"png":"gif";
+  if(diagnostic) printf("SCOPE diagnostic=%s-retained-only required_cases=16 overall_96_case_acceptance=not-evaluated\n",diagnostic_name);
   printf("PROTOCOL build=%s backend=source-dependent-text-png-gif-retained-svg-layered warmup=%u repeated_samples=%u p95=nearest-rank gate=%s rotations=0,17.25 complete_boundary=source-request-through-GPU-completion-and-native-publication compositor_visible=unobserved matrix_poses=synthetic-offscreen\n",PP_PROBE_CONFIGURATION,ACCEPTANCE_WARMUP,ACCEPTANCE_SAMPLES,diagnostic?"source-only-diagnostic":"default-emoji-1536-dip-150-percent");
   printf("GPU renderer=\"%s\" vendor=\"%s\" version=\"%s\" renderer_cold_first_use_ms=%.3f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),pp_probe_clock()-renderer_start);
   static const char *names[]={"default-emoji","bitmap-noto","png","gif","svg","mixed-text"};
@@ -534,7 +583,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
     pp_item_snapshot_release(snapshot);
   }
   if(!stop_injector(injector)) {puts("STOP injector did not terminate");a.stopped=true;} else injector=NULL;
-  if(!diagnostic && !a.stopped && !a.timed_out) sharp_native_samples(app,renderer,&a,deadline);
+  if((!diagnostic||diagnostic_kind==0) && !a.stopped && !a.timed_out) sharp_native_samples(app,renderer,&a,deadline,false);
   a.max_input_wait_ms=pp_probe_injected_max_wait;
 done:
   if(injector && !stop_injector(injector)) {fflush(stdout);ExitProcess(2);}
@@ -544,27 +593,51 @@ done:
   if(diagnostic) {
     bool complete=!a.stopped&&!a.timed_out&&a.completed_cases==16&&a.samples==16*ACCEPTANCE_SAMPLES&&
       a.gpu_observations==a.samples&&a.native_input_cases==16;
+    if(diagnostic_kind==0)complete=complete&&a.default_segoe&&a.required_timing_cases==2&&a.required_p95_ms<=16.7&&
+      a.max_input_wait_ms<=50&&a.sharp_observations==ACCEPTANCE_SAMPLES&&a.max_sharp_ms<=200;
     printf("RESULT %s_retained_matrix=%s cases=%u/16 samples=%u/%u gpu_observations=%u native_input_cases=%u regression_worst_p95_ms=%.3f input_max_ms=%.3f overall_spec_gate=not-evaluated compositor_visible=unobserved\n",
-      diagnostic_kind==2?"png":"gif",complete?"PASS":"FAIL",a.completed_cases,a.samples,16*ACCEPTANCE_SAMPLES,a.gpu_observations,a.native_input_cases,a.regression_p95_ms,a.max_input_wait_ms);
+      diagnostic_name,complete?"PASS":"FAIL",a.completed_cases,a.samples,16*ACCEPTANCE_SAMPLES,a.gpu_observations,a.native_input_cases,a.regression_p95_ms,a.max_input_wait_ms);
+    if(diagnostic_kind==0)printf("RESULT scalable_required_segoe=%d required_timing_cases=%u/2 required_p95_ms=%.3f native_sharp_samples=%u/20 sharp_max_ms=%.3f targets_complete_ms=16.7,input_ms=50,sharp_ms=200\n",a.default_segoe,a.required_timing_cases,a.required_p95_ms,a.sharp_observations,a.max_sharp_ms);
     return complete?0:1;
   }
   return acceptance_result(&a);
 }
-static int worker_probe_isolation(void) {
+static int native_sharp_acceptance(PPApp *app,bool production_loop) {
+  PPRenderer *renderer=NULL;PPError error={0};Acceptance a={.release=!strcmp(PP_PROBE_CONFIGURATION,"Release")};
+  PPFontInfo font;const PPItem *item=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT);
+  selected_font(pp_app_assets(app),item->text_style.fallback_asset,item->text_style.fallback_face,"emoji-fallback",&font);
+  a.default_segoe=!strcmp(font.family,"Segoe UI Emoji");pp_probe_completion_enabled=true;
+  printf("SHARP protocol=%s easing_gpu_completion=%s sharp_gpu_completion=actual-glFinish-after-returned-swap\n",production_loop?"production-worker-input":"synchronous-complete-path",production_loop?"shipping-normal-draws":"every-draw");
+  bool observed=pp_renderer_create(&renderer,&error)&&sharp_native_samples(app,renderer,&a,pp_probe_clock()+45000,production_loop);
+  a.max_input_wait_ms=pp_probe_injected_max_wait;pp_renderer_destroy(renderer);pp_probe_completion_enabled=false;
+  bool ok=observed&&a.release&&a.default_segoe&&a.sharp_observations==ACCEPTANCE_SAMPLES&&a.max_sharp_ms<=200&&a.max_input_wait_ms<=50&&!a.stopped&&!a.timed_out;
+  printf("RESULT %s=%s source=default-Segoe nominal_longest_dip=1536 drawable_density=1.5 samples=%u/20 sharp_max_ms=%.3f input_max_ms=%.3f warm_matrix=not-evaluated cold_context=reported-before-input overall_96_case_acceptance=not-evaluated compositor_visible=unobserved\n",
+    production_loop?"scalable_production_worker_input":"scalable_sharp_only",ok?"PASS":"FAIL",a.sharp_observations,a.max_sharp_ms,a.max_input_wait_ms);return ok?0:1;
+}
+static int worker_probe_isolation(bool default_font) {
   PPError error={0};PPAssets *assets=NULL;PPItemSnapshot *snapshot=NULL;
   CHECK(pp_assets_create(&assets,&error));size_t length=0;
   void *bytes=SDL_LoadFile(PP_PROBE_ROOT "/tests/fixtures/fonts/PointyOverhang.ttf",&length);CHECK(bytes&&length);
   PPItem item={.kind=PP_ITEM_TEXT,.text="A\xcc\x81\nAj",.opacity=1,
     .text_style={.requested_family="Pointy Overhang",.font_size_dip=96,.color={30,120,230,210}}};
-  CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));SDL_free(bytes);
+  if(default_font) {CHECK(pp_text_default_style(assets,&item.text_style,&error));item.text="\xf0\x9f\x91\x89";}
+  else CHECK(pp_asset_import(assets,(PPBytes){bytes,length},PP_ASSET_FONT,&item.text_style.primary_asset,&error));SDL_free(bytes);
   CHECK(pp_item_snapshot_create(assets,&item,&snapshot,&error));
   PPAnchorPresenter presenter={.assets=assets,.generation=1};PPSprite sprite={.id=1};
   PPSceneInstance instance={.snapshot=snapshot};PPDisplay display={.drawable_pixels_per_dip=1.5};
   PPProbeMetric before[PROBE_COUNT];memcpy(before,pp_probe_metrics,sizeof(before));
-  CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,768,&error));
-  for(int i=0;i<5000&&pp_raster_worker_status(presenter.worker).pending_jobs;i++)SDL_Delay(1);
+  MSG message;while(PeekMessageW(&message,NULL,WM_NULL,WM_NULL,PM_REMOVE)) {}
+  CHECK(pp_scalable_request(&presenter,&sprite,&instance,&display,default_font?1536:768,&error));
+  double wake_deadline=pp_probe_clock()+5000;bool owner_woken=false;
+  while(!owner_woken&&pp_probe_clock()<wake_deadline) {
+    MsgWaitForMultipleObjectsEx(0,NULL,50,QS_ALLINPUT,MWMO_INPUTAVAILABLE);
+    while(PeekMessageW(&message,NULL,0,0,PM_REMOVE))if(message.message==WM_NULL)owner_woken=true;
+  }
+  CHECK(owner_woken); /* Production tray wait must wake without SDL_WaitEvent. */
   PPRasterStatus status=pp_raster_worker_status(presenter.worker);
-  CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
+  PPRasterCompletion completion={0};CHECK(pp_raster_worker_poll(presenter.worker,1,&completion));
+  if(!completion.success)fprintf(stderr,"Worker failed: %s\n",completion.error.message);CHECK(completion.success);
+  pp_raster_completion_release(&completion);CHECK(status.completions==1&&status.source_builds==1&&!status.pending_jobs);
   CHECK(!memcmp(before,pp_probe_metrics,sizeof(before)));
   pp_raster_worker_cancel(presenter.worker,1,0);pp_raster_worker_destroy(presenter.worker);
   pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
@@ -572,7 +645,8 @@ static int worker_probe_isolation(void) {
 }
 int main(int argc,char **argv) {
   if(argc==3 && !strcmp(argv[1],"--acceptance-control")) return acceptance_control(argv[2]);
-  if(argc==2 && !strcmp(argv[1],"--worker-isolation")) return worker_probe_isolation();
+  if(argc==2 && !strcmp(argv[1],"--worker-isolation")) return worker_probe_isolation(false);
+  if(argc==2 && !strcmp(argv[1],"--worker-default")) return worker_probe_isolation(true);
   static char log_buffer[65536]; setvbuf(stdout,log_buffer,_IOFBF,sizeof(log_buffer));
   PPApp *app=NULL; PPError error={0}; double start=pp_probe_clock(); int result=0;
   CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error)); report("app_create",pp_probe_clock()-start);
@@ -588,6 +662,9 @@ int main(int argc,char **argv) {
   else if(argc>1 && !strcmp(argv[1],"--acceptance")) result=native_acceptance(app,-1);
   else if(argc>1 && !strcmp(argv[1],"--png-retained")) result=native_acceptance(app,2);
   else if(argc>1 && !strcmp(argv[1],"--gif-retained")) result=native_acceptance(app,3);
+  else if(argc>1 && !strcmp(argv[1],"--scalable-retained")) result=native_acceptance(app,0);
+  else if(argc>1 && !strcmp(argv[1],"--scalable-sharp")) result=native_sharp_acceptance(app,false);
+  else if(argc>1 && !strcmp(argv[1],"--scalable-worker-input")) result=native_sharp_acceptance(app,true);
   else if(argc>1 && !strcmp(argv[1],"--blur")) blur_profile(app);
   else result=ladder(app,argc>1 && !strcmp(argv[1],"--zoom-150") ? 1.5 : 1,argc>1 && !strcmp(argv[1],"--zoom-budget"))?0:1;
   pp_app_destroy(app); puts(result?"FAIL bounded performance probe":"PASS bounded performance probe"); return result;

@@ -38,13 +38,26 @@ The log separates these costs:
 - `native_publication` covers the native presentation API, including the layered-window bitmap copy in the current compatibility path.
 - `complete` starts before the production presenter requests its source and ends after GL completion and the native publication call return. It includes generation, upload, transformation, readback where used, and native submission. Stage times overlap and must not be added as if they were independent.
 
-Each case identifies its backend. PNG, GIF and bitmap-only Noto use `direct-retained-gl` through `pp_sprite_present`, including the sprite's retained renderer; scalable sources currently use `layered-gl-readback`. The aggregate presenter renderer counters include active and retired direct contexts, the shared immutable-frame texture owner and the compatibility renderer. GPU timer queries are allocated, resolved and deleted in the owning draw context before another sprite context becomes current. Direct and compatibility draws both explicitly complete GPU work in this diagnostic. Submission time alone cannot satisfy acceptance.
+Each case identifies its backend. PNG, GIF, bitmap-only Noto, scalable color and mixed text use `direct-retained-gl` through `pp_sprite_present`, including the sprite's retained renderer. SVG uses the compatibility route until its worker migration. Scalable cases prepare the latest owned endpoint before warm samples and hold a fixed endpoint while varying synthetic easing poses. Source-build totals include synchronized private worker deltas. Worker stage accumulators are thread-local and cannot change owner observations. The aggregate presenter renderer counters include active and retired direct contexts, the shared immutable-frame texture owner and the compatibility renderer. GPU timer queries are allocated, resolved and deleted in the owning draw context before another sprite context becomes current. Direct and compatibility draws both explicitly complete GPU work in this diagnostic. Submission time alone cannot satisfy acceptance.
 
 Native API completion is not proof of when DWM displayed the pixels, display scanout, visible compositor cadence, fullscreen behavior, or an absence of dropped compositor frames. The matrix uses offscreen native surfaces to measure production costs without covering the desktop for the whole ladder. The sharp phase uses a visible surface to verify native input routing and endpoint publication. The report explicitly marks visible compositor evidence as unobserved. Physical mixed-display and fullscreen checks remain separate. macOS build and native runtime acceptance remain unverified until executed on a Mac.
 
 For a scoped PNG diagnostic, append `-PngRetained` to the supervised `-Performance` command. This runs 16 PNG cases, checks all 320 warm samples, GPU observations and tagged native input observations, and identifies `overall_spec_gate=not-evaluated`. It skips the default-emoji sharp phase and cannot replace the unchanged 96-case acceptance command. See [retained PNG evidence](retained-png.md) for the observation and the still failing full gate.
 
 For the equivalent scoped GIF diagnostic, append `-GifRetained`. It uses independent elapsed-time selection through the retained sprite path and releases frame entries and their keeper after each case. See [retained GIF evidence](retained-gif.md) for the actual shared-context receiver checks, the retained first failed color observation and the 16-case result. The PNG and GIF diagnostic switches are mutually exclusive.
+
+`-ScalableRetained` runs the 16 default-Segoe cases and native sharp phase. It
+keeps the focused 16.7 ms complete, 50 ms arrival and 200 ms sharp targets.
+`-ScalableSharp` runs only twenty native inputs after warming the actual
+1536-DIP, 150% source and context. It still completes every draw and requires
+tagged movement while each job is pending. A separate `-ScalableWorkerInput`
+observation uses shipping normal draws during easing and completes the final
+matching sharp output after returned native swap. It checks worker input and
+the completed sharp target, but does not measure each easing draw's completed
+GPU cost. None of these switches replaces the unchanged 96-case acceptance;
+all source diagnostic switches are mutually exclusive. See
+[scalable retention evidence](scalable-retention.md) for preserved complete-path
+failures, input observations and quality checks.
 
 ## Failure and portable observations
 
@@ -56,7 +69,7 @@ For later reuse tests, `pp_assets_source_metrics` exposes successful source rast
 
 `pp_renderer_metrics` exposes semantic source uploads, transform draws, and readbacks. One source upload counts the content operation, including any associated coverage, rather than a particular number of GL calls. Compatibility and direct draw APIs both report these counters. Translation-only and static reuse checks can compare these counts without depending on texture allocation or shader implementation details.
 
-`pp_anchor_presenter_metrics` and `pp_runtime_presentation_metrics` expose native publication and sharp publication counts, plus the latest matching resize input timestamp, sprite ID, source revision, logical endpoint size, and drawable density. Observing a counter requires the caller to timestamp after explicit completion. Counters do not imply compositor visibility. Presenter counts reset with presenter lifetime. Worker publication must preserve the same latest-input/revision/density contract when asynchronous raster preparation is added.
+`pp_anchor_presenter_metrics` and `pp_runtime_presentation_metrics` expose native publication and sharp publication counts, plus the latest matching resize input timestamp, sprite ID, source revision, logical endpoint size, and drawable density. Observing a counter requires the caller to timestamp after explicit completion. Counters do not imply compositor visibility. Presenter counts reset with presenter lifetime. Worker requests, completions, successful source builds and discarded successes come from synchronized service status. Candidate reservations, pending work, preparation time and retained scalable bytes remain separately observable. Owner-rejected completions count in the presenter. Publication revalidates the latest-input/revision/density contract.
 
 ## Initial Windows observation
 
