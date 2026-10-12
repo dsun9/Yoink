@@ -774,8 +774,47 @@ static void test_bitmap_text_transform_reuses_useful_source(void) {
     CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_renderer_metrics(p).source_uploads==warm.source_uploads);
     PPVec2 canonical=pp_item_snapshot_size(pp_scene_get(scene,id)->snapshot);CHECK(canonical.x==120&&canonical.y==113);
     CHECK(pp_scene_get(scene,id)->pose.angle_deg==23.5&&pp_scene_get(scene,id)->pose.opacity==.5);
+    PPPose usable=pp_scene_get(scene,id)->pose;PPRect usable_bounds=sprite->bounds;
+    pose.longest_dip=4096;pose.angle_deg=45;displays[1].drawable_pixels_per_dip=3;
+    CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,5);
+    CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&usable,sizeof(usable))&&!memcmp(&sprite->bounds,&usable_bounds,sizeof(usable_bounds)));
+    CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_gpu_resources(p).retained_bytes==69632);
+    displays[1].drawable_pixels_per_dip=1.5;uint64_t revision=pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot);
+    CHECK(pp_scene_replace(scene,id,&item,6,&error));fail_gl_upload=true;update(p,displays,600,300,6);fail_gl_upload=false;
+    CHECK(pp_item_snapshot_revision(pp_scene_get(scene,id)->snapshot)==revision&&surface_for(id)==sprite&&sprite->shown);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==69632&&pp_assets_external_raster_bytes(assets)==137437);
+    for(int i=0;i<16;i++) {
+        CHECK(pp_scene_replace(scene,id,&item,7+i,&error));update(p,displays,600,300,7+i);
+        CHECK(surface_for(id)==sprite&&sprite->source_width==136&&pp_anchor_presenter_gpu_resources(p).retained_bytes==69632);
+        CHECK(pp_assets_external_raster_bytes(assets)==274869); /* Project's shared original and one live replacement. */
+    }
+    CHECK(pp_anchor_presenter_gpu_resources(p).peak_bytes==139264);
+    pose=pp_scene_get(scene,id)->pose;event(p,sprite,PP_EVENT_BUTTON_DOWN,pose.center.x,pose.center.y,24);CHECK(capture_owner==sprite);
+    pose.opacity=0;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,25);CHECK(!sprite->shown&&!capture_owner);
+    pose.opacity=1;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,26);
+    event(p,sprite,PP_EVENT_BUTTON_DOWN,pose.center.x,pose.center.y,26.1);CHECK(capture_owner==sprite);
+    failed_gl_surface=sprite;pose.angle_deg+=10;CHECK(pp_scene_set_pose(scene,id,pose,&error));update(p,displays,600,300,27);failed_gl_surface=NULL;
+    CHECK(!pp_scene_get(scene,id)&&!surface_for(id)&&!capture_owner&&pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bitmap text useful source survives large fractional easing, static/translation, rotation, density and grabbed-point changes without raster/upload/readback work");
+}
+static void test_bitmap_candidate_context_preserves_usable_source(void) {
+    PPError error={0};PPAssets *assets=NULL;CHECK(pp_assets_create(&assets,&error));PPProject *project=test_arrow_project(assets);PPAnchorPresenter *p=NULL;
+    CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));PPDisplay displays[]={{1,{-1920,0,1920,1080},1.5,1.5},{2,{0,0,1920,1080},1,1}};
+    PPSprite *created=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{400,300},96,0,1},1,&error);CHECK(created);uint64_t id=created->id;
+    update(p,displays,400,300,1);PPSurface *usable=surface_for(id);CHECK(usable&&usable->shown&&!usable->window_id);
+    uint64_t revision=pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot);
+    FILE *file=fopen(PP_MEDIA_FIXTURES "/../../../resources/fonts/NotoColorEmoji.ttf","rb");CHECK(file);CHECK(!fseek(file,0,SEEK_END));long length=ftell(file);rewind(file);
+    uint8_t *bytes=malloc((size_t)length);CHECK(bytes&&fread(bytes,1,(size_t)length,file)==(size_t)length);fclose(file);
+    PPItem bitmap={.kind=PP_ITEM_TEXT,.text="\xf0\x9f\x91\x89",.opacity=1,.text_style={.requested_family="Noto Color Emoji",.font_size_dip=96,.color={0,0,0,255}}};
+    CHECK(pp_asset_import(assets,(PPBytes){bytes,(size_t)length},PP_ASSET_FONT,&bitmap.text_style.fallback_asset,&error));free(bytes);
+    CHECK(pp_scene_replace(p->scene,id,&bitmap,2,&error));fail_gl_context=true;update(p,displays,400,300,2);fail_gl_context=false;
+    CHECK(pp_scene_get(p->scene,id)&&surface_for(id)==usable&&usable->shown);
+    CHECK(pp_item_snapshot_revision(pp_scene_get(p->scene,id)->snapshot)==revision&&pp_scene_get(p->scene,id)->animation_start==1);
+    CHECK(pp_anchor_presenter_gpu_resources(p).retained_bytes==0);
+    CHECK(pp_scene_replace(p->scene,id,&bitmap,3,&error));update(p,displays,400,300,3);CHECK(surface_for(id)->window_id&&surface_for(id)->source_width==136);
+    pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
+    puts("PASS failed bitmap candidate context preserves independent usable source/clock and releases candidate ownership before successful retry");
 }
 int main(void) {
     test_settled_worker_matches_fresh_text();
@@ -795,6 +834,7 @@ int main(void) {
     test_canonical_source_mapping();
 #if defined(_WIN32)
     test_bitmap_text_transform_reuses_useful_source();
+    test_bitmap_candidate_context_preserves_usable_source();
     test_png_translation_reuses_presentation();
     test_png_appearance_geometry_and_rollback();
     test_png_gpu_limit_and_overlap();
