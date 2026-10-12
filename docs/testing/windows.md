@@ -1,5 +1,16 @@
 # Windows acceptance
 
+## Retained preview integration
+
+[Ticket #10 preview checks](preview-retention.md) record shared source/cache/
+clock ownership, actual Settings/drawer alpha/rollback/context checks and direct
+anchor/native flow coverage. Native bounds include transparent padding/holes;
+only original input outside the rectangle passes through. The six-test retained
+consumer run and separate two-test anchor/flow run passed with exact supervisor
+foreground/cursor/input restoration. Earlier 22 white first-use observations
+remain unresolved history; the passing clean baseline does not establish a
+remedy. Full warm/input/sharp timing and compositor cadence remain ticket #11.
+
 ## Default emoji font checks for issue 2
 
 `default_fonts` controls only installed-font acquisition at the production

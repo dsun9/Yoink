@@ -1104,7 +1104,7 @@ static void test_svg_cpu_adapter_keeps_canonical_aspect(void) {
     PPVec2 canonical=pp_item_snapshot_size(snapshot);CHECK(canonical.x==96&&fabs(canonical.y-53.333333333333333)<1e-12);
     PPAnchorPresenter p={.assets=assets,.renderer=(PPRenderer *)1};PPSurface *surface=NULL;CHECK(pp_surface_create(&surface,&error));
     PPDisplay display={.drawable_pixels_per_dip=1,.desktop_units_per_dip=1};size_t retained=0;double next;
-    CHECK(pp_present_content(&p,surface,snapshot,(PPPose){{400,300},337,17.25,.63},&display,0,&next,&retained,&error));
+    CHECK(pp_capture_present_content(&p,surface,snapshot,(PPPose){{400,300},337,17.25,.63},&display,0,&next,&retained,&error));
     /* Worked viewport extent: ceil(337*cos + (337*5/9)*sin),
      * ceil(337*sin + (337*5/9)*cos). Rounded source337x188 would be378x280. */
     CHECK(surface->bounds.w==378&&surface->bounds.h==279&&retained==421848);

@@ -105,11 +105,14 @@ static void test_text_sharing_and_raster_budget(void) {
     CHECK(pp_item_snapshot_frame(snapshot,0,2,&frame,&next,&error));
     size_t new_bytes=frame->stride*(size_t)frame->height+(size_t)frame->width*frame->height;
     CHECK(new_bytes>old_bytes);
-    CHECK(pp_assets_external_raster_bytes(assets)==original_bytes-old_bytes+new_bytes);
+    /* Explicit scaled export is disposable compatibility data. The immutable
+     * canonical pixels remain owned by every live snapshot retainer. */
+    CHECK(pp_assets_external_raster_bytes(assets)==original_bytes+new_bytes);
+    CHECK(pp_item_snapshot_frame(snapshot,0,1,&frame,&next,&error));CHECK(frame->pixels==old_pixels);
     pp_project_destroy(project);
-    CHECK(pp_assets_external_raster_bytes(assets)==new_bytes);
+    CHECK(pp_assets_external_raster_bytes(assets)==old_bytes+new_bytes);
     for(int i=0;i<31;i++) pp_scene_delete(scene,ids[i]);
-    CHECK(pp_assets_external_raster_bytes(assets)==new_bytes);
+    CHECK(pp_assets_external_raster_bytes(assets)==old_bytes+new_bytes);
     CHECK(pp_item_snapshot_frame(pp_scene_get(scene,ids[31])->snapshot,0,2,&frame,&next,&error));
     pp_scene_clear(scene);CHECK(pp_assets_external_raster_bytes(assets)==0);
     pp_scene_destroy(scene);pp_assets_destroy(assets);

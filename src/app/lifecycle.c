@@ -89,7 +89,7 @@ int pp_app_run(int argc, char **argv) {
     if(!pp_lifecycle_iteration(&life,&error)) goto done;
     double now=seconds();
     if(smoke && now>=end) {
-      printf("PASS smoke: tray/runtime, default Noto resource, eight anchors, no settings; %s\n",SDL_GetBasePath());
+      printf("PASS smoke: tray/runtime, installed Segoe emoji or identified bundled Noto fallback, eight anchors, no settings; %s\n",SDL_GetBasePath());
       break;
     }
   }

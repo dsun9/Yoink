@@ -203,6 +203,7 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
 }
 bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
   if (!pp_drawer_valid(d) || d->dismissed) {
+    release_thumbnails(d);
     d->dismissed = true;
     return true;
   }

@@ -4,6 +4,7 @@
 #include "../../src/ui/backend.h"
 #include "../../src/ui/drawer_internal.h"
 #include "../../src/ui/settings_internal.h"
+#include "../../src/app/content_sources.h"
 #include "../test.h"
 #include "pointy/runtime.h"
 #include "receiver_shared.h"
@@ -17,6 +18,69 @@ static void check_hidden(PPDrawer *drawer) {
       SDL_GetPointerProperty(SDL_GetWindowProperties(drawer->backend->window),
                              SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
   CHECK(window && !IsWindowVisible(window) && GetForegroundWindow() != window);
+}
+static uint64_t hidden_image(PPApp *app,const char *path,PPAssetKind kind,PPError *error) {
+  size_t bytes=0;void *data=SDL_LoadFile(path,&bytes);CHECK(data);
+  PPItem item={.kind=PP_ITEM_IMAGE,.image_longest_dip=96,.opacity=1};
+  CHECK(pp_asset_import(pp_app_assets(app),(PPBytes){data,bytes},kind,&item.image_asset,error));SDL_free(data);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_ADD_ITEM,.anchor=PP_ANCHOR_TOP_LEFT,.item=&item},error));
+  return pp_app_ui(app)->selected_item;
+}
+static PPDrawerThumbnail *thumbnail_id(PPDrawer *drawer,uint64_t id) {
+  for(size_t i=0;i<8;i++)if(drawer->thumbnails[i].snapshot&&pp_item_snapshot_item(drawer->thumbnails[i].snapshot)->id==id)return drawer->thumbnails+i;
+  return NULL;
+}
+static void hidden_retained_ownership(void) {
+  PPError error={0};PPApp *app=NULL;PPDrawer *drawer=NULL;uint64_t instance=0;
+  CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
+  uint64_t blue=hidden_image(app,PP_MEDIA_FIXTURES "/retained-blue.png",PP_ASSET_PNG,&error);
+  uint64_t gif=hidden_image(app,PP_MEDIA_FIXTURES "/finite.gif",PP_ASSET_GIF,&error);
+  CHECK(pp_scene_spawn(pp_app_scene(app),pp_app_project(app),PP_ANCHOR_TOP_LEFT,(PPVec2){400,300},1,&instance,&error));
+  CHECK(pp_scene_set_pose(pp_app_scene(app),instance,(PPPose){{400,300},337,17.25,.63},&error));
+  CHECK(pp_drawer_open(&drawer,app,instance,&error));drawer->render_hidden=true;
+  PPDisplay display={1,{0,0,800,600},1,1};pp_drawer_layout(drawer,&display,1);
+  CHECK(pp_drawer_draw(drawer,1,&error));CHECK(thumbnail_id(drawer,blue)&&thumbnail_id(drawer,gif));
+  for(int i=0;i<100;i++){SDL_Delay(1);CHECK(pp_drawer_draw(drawer,1,&error));}
+  PPDrawerThumbnail *first=thumbnail_id(drawer,gif);PPRenderer *gif_renderer=first->retained.renderer;
+  unsigned gif_texture=first->retained.texture;uint64_t gif_revision=first->retained.source.source_revision;
+  PPRendererMetrics before=pp_renderer_metrics(gif_renderer);CHECK(before.readbacks==0);
+  /* Drawer intentionally samples frame zero, even long after opening. */
+  CHECK(pp_drawer_draw(drawer,100,&error));first=thumbnail_id(drawer,gif);
+  CHECK(first->retained.texture==gif_texture&&first->retained.source.source_revision==gif_revision);
+  CHECK(pp_renderer_metrics(gif_renderer).transform_draws==before.transform_draws&&pp_renderer_metrics(gif_renderer).source_uploads==before.source_uploads);
+  char control[64];snprintf(control,sizeof(control),"drawer-item-%llu",(unsigned long long)gif);pp_ui_focus(drawer->backend,control);
+  uint64_t focus=drawer->backend->focus_id;
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_REORDER_ITEM,.anchor=PP_ANCHOR_TOP_LEFT,.item_id=gif,.index=0},&error));
+  CHECK(pp_drawer_draw(drawer,101,&error));first=thumbnail_id(drawer,gif);
+  CHECK(first&&first->retained.renderer==gif_renderer&&first->retained.texture==gif_texture&&drawer->backend->focus_id==focus);
+  CHECK(pp_renderer_metrics(gif_renderer).source_uploads==before.source_uploads&&pp_renderer_metrics(gif_renderer).transform_draws==before.transform_draws);
+  PPContentSources *sources=pp_app_content_sources(app,&error);size_t charged=pp_content_gpu_resources(sources).retained_bytes;
+  PPDrawerThumbnail *removed=thumbnail_id(drawer,blue);CHECK(removed);
+  size_t removed_bytes=removed->retained.source_bytes+removed->retained.target_bytes;
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_REMOVE_ITEM,.anchor=PP_ANCHOR_TOP_LEFT,.item_id=blue},&error));
+  CHECK(pp_drawer_draw(drawer,102,&error));CHECK(!thumbnail_id(drawer,blue));
+  CHECK(pp_content_gpu_resources(sources).retained_bytes==charged-removed_bytes);
+  for(size_t i=2;i<8;i++)CHECK(!drawer->thumbnails[i].snapshot&&!drawer->thumbnails[i].retained.consumer&&!drawer->textures[i]);
+  PPPose pose=pp_scene_get(pp_app_scene(app),instance)->pose;PPItemSnapshot *prepared=pp_project_snapshot(pp_app_project(app),gif);
+  PPVec2 size=pp_item_snapshot_size(prepared);CHECK(pp_drawer_select(drawer,gif,7,&error));
+  const PPSceneInstance *selected=pp_scene_get(pp_app_scene(app),instance);
+  CHECK(selected->snapshot==prepared&&selected->animation_start==7&&!memcmp(&selected->pose,&pose,sizeof(pose)));
+  CHECK(size.x==96&&size.y==32);pp_item_snapshot_release(prepared);
+  pp_item_snapshot_retain(selected->snapshot);PPItemSnapshot *independent=selected->snapshot;
+  pp_drawer_close(drawer);CHECK(!pp_content_gpu_resources(sources).retained_bytes);
+  PPContentConsumer *consumer=NULL;CHECK(pp_content_consumer_create(sources,&consumer,&error));PPContentFrame retained={0};double next;
+  CHECK(pp_content_frame(consumer,independent,96,1,0,&retained,&next,&error));CHECK(retained.frame&&retained.visual_alpha);pp_content_accept(consumer);
+  uint8_t original[12];CHECK(retained.frame->width==3&&retained.frame->height==1);memcpy(original,retained.frame->pixels,12);
+  CHECK(pp_drawer_open(&drawer,app,instance,&error));drawer->render_hidden=true;pp_drawer_layout(drawer,&display,1);CHECK(pp_drawer_draw(drawer,8,&error));
+  CHECK(pp_content_gpu_resources(sources).retained_bytes>0);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  CHECK(pp_drawer_draw(drawer,9,&error));CHECK(drawer->dismissed);
+  for(size_t i=0;i<8;i++)CHECK(!drawer->thumbnails[i].retained.consumer&&!drawer->textures[i]);
+  CHECK(!pp_content_gpu_resources(sources).retained_bytes);
+  CHECK(pp_content_frame(consumer,independent,96,1,0,&retained,&next,&error));CHECK(!memcmp(original,retained.frame->pixels,12));
+  pp_drawer_close(drawer);pp_content_consumer_destroy(consumer);pp_item_snapshot_release(independent);pp_app_destroy(app);
+  puts("PASS retained drawer frame-zero GIF/reorder/focus/source reuse/removed-unused slots/exact GPU release/prepared replacement pose-clock/project epoch cancels only obsolete consumers");
 }
 static void hidden_drawer(void) {
   PPApp *app = NULL;
@@ -490,11 +554,23 @@ static PPSurface *native_sprite(uint64_t id) {
 }
 static POINT opaque_point(uint64_t id) {
   PPSurface *s = native_sprite(id);
-  for (int y = 2; y < s->height - 2; y++)
-    for (int x = 2; x < s->width - 2; x++)
-      if (s->bits[((size_t)y * s->width + x) * 4 + 3] > 240 &&
-          s->bits[((size_t)(y + 1) * s->width + x + 1) * 4 + 3] > 240)
-        return (POINT){s->origin.x + x, s->origin.y + y};
+  const PPSceneInstance *instance=pp_scene_get(pp_app_scene(flow_app),id);
+  PPSprite *sprite=pp_sprites_find(flow->presenter,id);CHECK(instance&&sprite);
+  const PPTextResult *current=pp_content_current(sprite->content,NULL,NULL);
+  const PPFrame *source=current?&current->frame:NULL;double next;
+  if(!source)CHECK(pp_item_snapshot_frame(instance->snapshot,fmax(0,now()-instance->animation_start),1,&source,&next,NULL));
+  PPVec2 layout=sprite->retained.layout;PPRect rect=sprite->retained.source_rect;
+  if(!rect.w&&!rect.h)rect=(PPRect){0,0,layout.x,layout.y};
+  const PPDisplay *display=pp_display_at(flow->presenter->displays,flow->presenter->display_count,instance->pose.center);CHECK(display);
+  double factor=instance->pose.longest_dip/fmax(layout.x,layout.y)*display->desktop_units_per_dip;
+  double radians=instance->pose.angle_deg*3.14159265358979323846/180,c=cos(radians),sn=sin(radians);
+  for(int y=1;y<source->height-1;y++)for(int x=1;x<source->width-1;x++)
+    if(source->pixels[(size_t)y*source->stride+x*4+3]>240) {
+      double dx=(rect.x+(x+.5)*rect.w/source->width-layout.x*.5)*factor;
+      double dy=(rect.y+(y+.5)*rect.h/source->height-layout.y*.5)*factor;
+      POINT point={(LONG)lround(instance->pose.center.x+c*dx-sn*dy),(LONG)lround(instance->pose.center.y+sn*dx+c*dy)};
+      if(point.x>s->origin.x+1&&point.y>s->origin.y+1&&point.x<s->origin.x+s->width-2&&point.y<s->origin.y+s->height-2)return point;
+    }
   CHECK(false);
   return (POINT){0};
 }
@@ -648,21 +724,30 @@ static void test_desktop_flow(void) {
   uint64_t hand = pull(320, 260);
   trace_hole_target("after-hand-pull");
   PPSurface *hand_surface = native_sprite(hand);
+  PPSprite *hand_sprite=pp_sprites_find(flow->presenter,hand);
+  const PPSceneInstance *hand_instance=pp_scene_get(pp_app_scene(flow_app),hand);
+  const PPTextResult *prepared=pp_content_current(hand_sprite->content,NULL,NULL);
+  const PPFrame *source=prepared?&prepared->frame:NULL;double next;
+  if(!source)CHECK(pp_item_snapshot_frame(hand_instance->snapshot,0,1,&source,&next,&error));
+  PPFrame hand_frame={0};PPRect source_rect=hand_sprite->retained.source_rect;
+  if(!source_rect.w&&!source_rect.h)source_rect=(PPRect){0,0,hand_sprite->retained.layout.x,hand_sprite->retained.layout.y};
+  CHECK(pp_renderer_transform_color_source(flow->renderer,source,hand_sprite->retained.layout,source_rect,96,0,1,1,&hand_frame,&error));
+  CHECK(IsWindowVisible(hand_surface->window));
   size_t yellow = 0;
-  for (int y = 0; y < hand_surface->height; y++)
-    for (int x = 0; x < hand_surface->width; x++) {
-      uint8_t *p =
-          hand_surface->bits + ((size_t)y * hand_surface->width + x) * 4;
-      if (p[2] > 170 && p[1] > 95 && p[0] < 90 && p[3] > 200)
+  for (int y = 0; y < hand_frame.height; y++)
+    for (int x = 0; x < hand_frame.width; x++) {
+      uint8_t *p = hand_frame.pixels+(size_t)y*hand_frame.stride+x*4;
+      if (p[0] > 170 && p[1] > 95 && p[2] < 90 && p[3] > 200)
         yellow++;
     }
   CHECK(yellow > 25 && GetForegroundWindow() == (HWND)receiver->window);
   SDL_Surface *hand_proof = SDL_CreateSurfaceFrom(
-      hand_surface->width, hand_surface->height, SDL_PIXELFORMAT_BGRA32,
-      hand_surface->bits, hand_surface->width * 4);
+      hand_frame.width,hand_frame.height,SDL_PIXELFORMAT_RGBA32,
+      hand_frame.pixels,(int)hand_frame.stride);
   CHECK(hand_proof);
   CHECK(SDL_SaveBMP(hand_proof, PP_FLOW_OUTPUT "/sprite-native-hand.bmp"));
   SDL_DestroySurface(hand_proof);
+  pp_frame_destroy(&hand_frame); /* Explicit diagnostic export only. */
   uint64_t ring = add_image(
       "<svg width='100' height='100'><path fill='blue' fill-rule='evenodd' "
       "d='M0 0H100V100H0Z M30 30V70H70V30Z'/></svg>");
@@ -682,25 +767,10 @@ static void test_desktop_flow(void) {
             ->kind == PP_ITEM_TEXT);
   LONG clicks = receiver->clicks, wheels = receiver->wheels;
   trace_hole_target("before-hole-input");
-  CHECK(WindowFromPoint((POINT){500,380})==(HWND)receiver->window);
+  CHECK(WindowFromPoint((POINT){500,380})==native_sprite(a)->window);
   click(500, 380);
-  LONG clicks_after_hole=receiver->clicks;
   mouse(MOUSEEVENTF_WHEEL, WHEEL_DELTA);
-  if(receiver->clicks != clicks+1 || receiver->wheels != wheels+1) {
-    POINT actual; GetCursorPos(&actual); RECT client,screen;
-    GetClientRect((HWND)receiver->window,&client); GetWindowRect((HWND)receiver->window,&screen);
-    HWND hit=WindowFromPoint(actual); wchar_t hit_class[128]={0}; GetClassNameW(hit,hit_class,128);
-    PPSurface *surface=native_sprite(a);
-    int px=500-surface->origin.x,py=380-surface->origin.y;
-    int alpha=px>=0 && py>=0 && px<surface->width && py<surface->height ? surface->bits[((size_t)py*surface->width+px)*4+3] : -1;
-    DWORD_PTR response=0;
-    LRESULT responsive=SendMessageTimeoutW((HWND)receiver->window,WM_NULL,0,0,SMTO_ABORTIFHUNG,1000,&response);
-    printf("FAIL passthrough expected-clicks=%ld actual-clicks=%ld expected-wheels=%ld actual-wheels=%ld cursor=%ld,%ld hit=%p class=%ls receiver=%p foreground=%p receiver-rect=%ld,%ld,%ld,%ld client=%ld,%ld ring-alpha=%d owner=%p\n",
-      clicks+1,receiver->clicks,wheels+1,receiver->wheels,actual.x,actual.y,(void *)hit,hit_class,(void *)receiver->window,(void *)GetForegroundWindow(),screen.left,screen.top,screen.right,screen.bottom,client.right,client.bottom,alpha,(void *)pp_windows_input_owner());
-    printf("Receiver acknowledgement=%s clicks-immediately-after-hole=%ld\n",responsive?"responsive":"FAILED",clicks_after_hole);
-    fflush(stdout);
-  }
-  CHECK(receiver->clicks == clicks + 1 && receiver->wheels == wheels + 1);
+  CHECK(receiver->clicks == clicks && receiver->wheels == wheels);
   POINT point = opaque_point(a);
   move(point.x, point.y);
   mouse(MOUSEEVENTF_LEFTDOWN, 0);
@@ -769,7 +839,7 @@ static void test_desktop_flow(void) {
   CHECK(pp_project_revision(pp_app_project(flow_app)) == revision &&
         !memcmp(&before, &pp_scene_get(pp_app_scene(flow_app), a)->pose,
                 sizeof(before)));
-  puts("PASS real hand, repeated default pulls, transparent click/wheel, "
+  puts("PASS visible native hand with explicit color export, repeated default pulls, rectangular transparent click/wheel, "
        "cross-window capture, eased wheel/Alt wheel, stationary double-click, "
        "drawer selection/Escape/outside and presentation focus");
   /* Replace the lower sprite with an actual GIF; advancing its frame must
@@ -950,6 +1020,7 @@ static void desktop_main(const char *receiver_path) {
 }
 int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--hidden")) {
+    hidden_retained_ownership();
     hidden_drawer();
     hidden_long_list();
     return 0;

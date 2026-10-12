@@ -309,7 +309,7 @@ static bool native_profile(PPApp *app) {
   const double sizes[]={96,384,768,1536}; bool stopped=false;
   for(int size=0;size<4 && !stopped;size++) for(int frame=0;frame<3;frame++) {
     pump(); memset(pp_probe_metrics,0,sizeof(pp_probe_metrics)); double start=pp_probe_clock();
-    CHECK(pp_present_content(&presenter,surface,snapshot,(PPPose){{-19000+frame*2,-19000},sizes[size]+frame*.1,0,1},&display,0,&next,&retained,&error));
+    CHECK(pp_capture_present_content(&presenter,surface,snapshot,(PPPose){{-19000+frame*2,-19000},sizes[size]+frame*.1,0,1},&display,0,&next,&retained,&error));
     samples[count].ms=pp_probe_clock()-start;samples[count].dip=sizes[size]+frame*.1;
     memcpy(samples[count].metrics,pp_probe_metrics,sizeof(pp_probe_metrics));count++;
     pump();
@@ -535,7 +535,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
         sprite.pose=pose;instance.pose=pose;
         if(scalable)pp_scene_set_pose(p.scene,sprite.id,pose,NULL);
         bool ok=direct?pp_sprite_present(&p,&sprite,&instance,&display,kind==3?fmax(0,frame)*.04:0,&next,&error):
-          pp_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
+          pp_capture_present_content(&p,surface,snapshot,pose,&display,kind==3?fmax(0,frame)*.04:0,&next,&retained,&error);
         double elapsed=pp_probe_clock()-start; pump();
         if(!ok) {printf("INCOMPLETE presentation error=\"%s\"\n",error.message);break;}
         if(frame==-1) printf("COLD first_presentation_ms=%.3f source_request_ms=%.3f transform_ms=%.3f native_publication_ms=%.3f\n",elapsed,pp_probe_metrics[PROBE_SOURCE_REQUEST].ms,pp_probe_metrics[PROBE_TRANSFORM].ms,pp_probe_metrics[PROBE_SURFACE].ms);

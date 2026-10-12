@@ -136,7 +136,9 @@ PPSprite *pp_sprites_create_snapshot(PPAnchorPresenter *p,PPItemSnapshot *snapsh
     PPAnchor anchor,PPPose pose,double now,PPError *error);
 bool pp_present(PPAnchorPresenter *p, PPSurface *surface, const PPFrame *source,
                 PPPose pose, const PPDisplay *display, size_t *retained, PPError *error);
-bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
+/* Explicit legacy comparison/capture adapter; no normal production callers.
+ * Native compatibility consumers use shared PPSourcePresentation instead. */
+bool pp_capture_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,
                         size_t *bytes, PPError *error);

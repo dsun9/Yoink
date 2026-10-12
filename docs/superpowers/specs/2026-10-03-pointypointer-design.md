@@ -68,9 +68,11 @@ mandatory dwell delay. Leaving the region and preview without dragging fades
 the preview away. Moving from the activation region onto the preview keeps it
 available. A disabled anchor or an empty list has no activation target.
 
-The small activation region deliberately accepts input to start a pull. Outside
-that region, only the preview's visible silhouette accepts input. Its shadow
-and transparent surroundings pass input through.
+The small activation region deliberately accepts input to start a pull. The
+visible preview's native rectangle also accepts input, including transparent
+padding and interiors. Input outside both regions reaches its original target.
+Hidden, disabled, zero-opacity and entirely transparent previews cancel only
+their own accepted input and stop interception.
 
 ### 2.3 Creating and manipulating instances
 
@@ -159,9 +161,9 @@ does not require an alpha mask or synchronous GPU readback. The native adapter
 must provide original input passthrough outside the rectangle, including to other
 processes. A core hit query alone does not establish operating-system routing.
 
-Ticket #5 implements this contract for Windows PNG sprites and represents it in
-the macOS compatibility adapter. Other content and anchor targeting remain
-staged implementation work under rendering issue #1. macOS runtime is unverified.
+Windows sprites and anchor previews implement this contract for PNG, GIF,
+bitmap text, scalable/mixed text and SVG. Cocoa represents the same bounds
+contract through its compatibility adapter. Native macOS runtime is unverified.
 
 SDL documents window-shape updates as expensive. The implementation plan must
 start by validating the native presentation and input path with transparency,
@@ -197,9 +199,10 @@ not surfaces the application can promise to cover.
 | Component | Owns and exposes | Dependencies |
 | --- | --- | --- |
 | Core model | Projects, eight anchor lists, immutable item snapshots, temporary instances, validation | C standard library and small utility modules |
-| Interaction controller | Hover, press/drag/click state, capture intent, wheel targets, drawer selection, CPU hit queries | Core model, display coordinates, asset masks |
+| Interaction controller | Hover, press/drag/click state, scoped capture, wheel targets, drawer selection, rectangular hit queries | Core model, display coordinates, owned source alpha for anchor grabs |
 | Display manager | Display bounds and scaling, anchor positions, coordinate conversion, disconnect recovery | SDL display events and platform coordinate adapter |
-| Asset manager | Image/GIF decoding, SVG rasterization, text shaping, color emoji, masks, shared resource lifetimes | Selected media/font libraries |
+| Asset manager | Immutable source bytes, image/GIF decoding, canonical text/bitmap layout, source alpha and raster accounting | Selected media/font libraries |
+| Shared content owner | Consumer lifetimes, artwork/target cache, bounded worker admission and sole completion dispatch | App-owned assets; private immutable worker captures |
 | Renderer | OpenGL resources and presentation of content, previews, drawer, settings | SDL3, OpenGL, asset manager |
 | Settings UI | Project actions, eight-position selection, item lists, item editor, diagnostics | Nuklear backend adapted from BongoCat, core APIs |
 | Project store | Versioned package load/save, resource deduplication, validation, atomic replacement | Archive and JSON libraries, platform file operations |
@@ -278,6 +281,14 @@ embedded permitted font remains portable. Other unresolved text needs a covering
 font before it can be saved. The missing-Segoe Noto choice has its own diagnostic,
 separate from an unavailable requested Aptos family. See ADR-0001 and
 [the implementation specification](https://github.com/dsun9/Yoink/issues/1).
+
+Previews and sprites share the retained source policies described in
+[rendering ownership](../../architecture/rendering-content.md). Each consumer
+has its own target and elapsed clock. Content identity includes artwork/style/
+font bytes; project name, reorder, item ID and pose do not invalidate sources.
+Settings commits restart its preview clock only when artwork changes; drawer
+GIF thumbnails sample frame zero. Selection changes clear previous-item pixels,
+while failed same-item replacements preserve a usable accepted preview.
 
 Original asset files are retained inside the project. Decoded frames, GPU
 textures, and raster caches are disposable runtime data. Hash-based storage
@@ -398,9 +409,10 @@ Verify with real underlying application windows, rather than core tests alone:
 ### macOS verification status
 
 Provide the macOS adapter and CMake configuration from the outset. Run shared
-core tests wherever possible. Windows testing cannot establish macOS runtime
-correctness; explicitly record macOS build and runtime checks as unverified
-until executed on a Mac. Include Cocoa input passthrough, non-activation, menu
+core tests wherever possible. Hosted Mac build/headless checks and native
+Mac runtime checks are separate. Windows testing cannot establish macOS runtime
+correctness; native runtime remains unverified until executed on a Mac.
+Include Cocoa rectangular input/passthrough, non-activation, menu
 bar tray behavior, Retina scaling, and fullscreen/Spaces in that verification.
 
 ## 9. Scope and implementation handoff

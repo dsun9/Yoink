@@ -6,6 +6,7 @@
 #include "../../src/app/content_sources.h"
 #include "../test.h"
 #include <string.h>
+#include <math.h>
 static void cleanup(void);
 #undef CHECK
 #define CHECK(expr) do {if(!(expr)){fprintf(stderr,"%s:%d: CHECK(%s) failed\n",__FILE__,__LINE__,#expr);cleanup();exit(1);}}while(0)
@@ -175,6 +176,23 @@ int main(void) {
   CHECK(!settings->editor.retained.consumer&&!settings->editor.preview_texture);
   CHECK(pp_app_ui(app)->geometry.w == 1040 &&
         pp_app_ui(app)->geometry.h == 1800);
+  pp_settings_revert(settings);
+  PPItemSnapshot *independent=settings->editor.preview;pp_item_snapshot_retain(independent);
+  PPContentConsumer *consumer=NULL;CHECK(pp_content_consumer_create(sources,&consumer,&error));
+  PPContentFrame retained={0};double next;PPVec2 layout=pp_item_snapshot_size(independent);
+  CHECK(pp_content_frame(consumer,independent,fmax(layout.x,layout.y),1,0,&retained,&next,&error));CHECK(retained.frame);pp_content_accept(consumer);
+  uint64_t identity=retained.content_id;int source_width=retained.frame->width,source_height=retained.frame->height;
+  size_t bytes=retained.frame->stride*retained.frame->height;uint8_t *pixels=malloc(bytes);CHECK(pixels);memcpy(pixels,retained.frame->pixels,bytes);
+  uint64_t generation=pp_app_generation(app);
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_NEW},&error));
+  CHECK(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_RESOLVE_TRANSITION,.choice=PP_UNSAVED_DISCARD},&error));
+  pp_settings_draw(settings);CHECK(!settings->failed&&pp_app_generation(app)!=generation);
+  CHECK(settings->generation==pp_app_generation(app)&&settings->editor.generation==pp_app_generation(app));
+  CHECK(!settings->editor.retained.consumer&&!settings->editor.preview_texture);
+  CHECK(pp_content_frame(consumer,independent,fmax(layout.x,layout.y),1,0,&retained,&next,&error));
+  CHECK(retained.content_id==identity&&retained.frame->width==source_width&&retained.frame->height==source_height&&!memcmp(pixels,retained.frame->pixels,bytes));
+  free(pixels);pp_content_consumer_destroy(consumer);pp_item_snapshot_release(independent);
+  puts("PASS hidden Settings project epoch cancels obsolete preview work and keeps an independent source consumer's owned pixels");
   puts("PASS Settings artwork clock changes only on content commit, rename/opacity reuse sources, closure releases its consumer; hidden density 1->2->1: real font/preview rasters "
        "refresh, old texture released; drafts, selection, focus, window and "
        "geometry preserved");

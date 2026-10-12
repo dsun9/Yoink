@@ -68,7 +68,7 @@ bool pp_present_source(PPAnchorPresenter *p,PPSurface *surface,PPSourcePresentat
   PPRect rect=source.source_rect;if(!rect.w&&!rect.h)rect=(PPRect){0,0,source.layout.x,source.layout.y};
   return present_source(p,surface,source.frame,source.layout,rect,pose,display,retained,error);
 }
-bool pp_present_content(PPAnchorPresenter *p, PPSurface *surface,
+bool pp_capture_present_content(PPAnchorPresenter *p, PPSurface *surface,
                         PPItemSnapshot *snapshot, PPPose pose,
                         const PPDisplay *display, double elapsed, double *next,
                         size_t *bytes, PPError *error) {

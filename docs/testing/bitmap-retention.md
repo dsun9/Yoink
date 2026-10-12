@@ -1,5 +1,11 @@
 # Bitmap-only text retention
 
+Ticket #10 uses this useful-strike/canonical mapping policy for anchors,
+Settings and drawer as well as sprites, with cached source-alpha visibility and
+shared CPU accounting. The selected installed Segoe or identified Noto fallback
+bytes remain the same across consumers. See [preview checks](preview-retention.md)
+and [source ownership](../architecture/rendering-content.md).
+
 The bitmap sprite path classifies the glyphs that SDL_ttf actually draws after
 shaping and fallback. It inspects each selected glyph's FreeType artwork before
 rasterization. A whole item uses this path only when every visible operation is

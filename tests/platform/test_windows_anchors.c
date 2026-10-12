@@ -60,8 +60,9 @@ static void mouse(DWORD flags) {if(flags&MOUSEEVENTF_LEFTDOWN) left_held=true;IN
 static void click(int x,int y) {move(x,y);mouse(MOUSEEVENTF_LEFTDOWN);mouse(MOUSEEVENTF_LEFTUP);}
 static BOOL CALLBACK find_sprite(HWND window,LPARAM context) {
     DWORD process;GetWindowThreadProcessId(window,&process);if(process!=GetCurrentProcessId()) return TRUE;
-    char name[80]={0};GetClassNameA(window,name,sizeof(name));if(strcmp(name,"PointyPointer.Surface")) return TRUE;
-    PPSurface *s=(PPSurface *)GetWindowLongPtrW(window,GWLP_USERDATA);
+    PPSurface *s=(PPSurface *)GetPropW(window,L"PointyPointer.DirectSurface");
+    if(!s){char name[80]={0};GetClassNameA(window,name,sizeof(name));if(strcmp(name,"PointyPointer.Surface")) return TRUE;
+      s=(PPSurface *)GetWindowLongPtrW(window,GWLP_USERDATA);}
     if(s&&s->instance_id==1) {*(PPSurface **)context=s;return FALSE;}return TRUE;
 }
 static void check_seam_sprite(double pointer_x,double grab_x,int expected_width) {
@@ -110,9 +111,9 @@ static void test_native_anchors(void) {
     PPError geometry_error={0};displays[0].bounds.x=200;displays[0].bounds.w=3000;
     CHECK(pp_anchor_presenter_update(presenter,displays,count,(PPVec2){208,8},GetTickCount64()/1000.0,&geometry_error));
     CHECK(WindowFromPoint((POINT){px,py})==(HWND)receiver->window);
-    HWND shifted=WindowFromPoint((POINT){200+px,py});char shifted_class[80]={0};GetClassNameA(shifted,shifted_class,sizeof(shifted_class));CHECK(!strcmp(shifted_class,"PointyPointer.Surface"));
+    HWND shifted=WindowFromPoint((POINT){200+px,py});CHECK(GetPropW(shifted,L"PointyPointer.DirectSurface"));
     displays[0]=actual;CHECK(pp_anchor_presenter_update(presenter,displays,count,(PPVec2){8,8},GetTickCount64()/1000.0,&geometry_error));
-    clicks=receiver->clicks;click(transparent_x,transparent_y);CHECK(receiver->clicks==clicks+1);CHECK(pp_anchor_presenter_instance_count(presenter)==0);
+    clicks=receiver->clicks;click(transparent_x,transparent_y);CHECK(receiver->clicks==clicks);CHECK(pp_anchor_presenter_instance_count(presenter)==0);CHECK(!pp_windows_input_owner());
     click(8,8);CHECK(pp_anchor_presenter_instance_count(presenter)==0); /* Below system threshold. */
     move(px,py);mouse(MOUSEEVENTF_LEFTDOWN);move(200,150);CHECK(pp_anchor_presenter_instance_count(presenter)==1);
     PPPose before;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&before));CHECK(before.longest_dip==96);
@@ -129,7 +130,7 @@ static void test_native_anchors(void) {
     displays[0]=(PPDisplay){actual.id+1,{400,100,400,400},1,1};pump(20);
     CHECK(pp_anchor_presenter_instance_pose(presenter,0,&after));CHECK(after.center.x>=448&&after.center.x<=752&&after.center.y>=148&&after.center.y<=452);
     CHECK(pp_windows_input_owner()==NULL);mouse(MOUSEEVENTF_LEFTUP);CHECK(GetForegroundWindow()==(HWND)receiver->window);
-    puts("PASS native outside-target and transparent-preview first clicks, target/preview transition, threshold cancellation, simulated scale/disconnect during native drag.");
+    puts("PASS native outside-target first click and rectangular transparent-preview input, target/preview transition, threshold cancellation, simulated scale/disconnect during native drag.");
     test_native_presentation_at_simulated_mixed_scale_seam();
 }
 static int diagnose_without_input(void) {
