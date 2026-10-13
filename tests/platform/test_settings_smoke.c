@@ -1597,6 +1597,135 @@ static void hidden_responsive_pages(void) {
   pp_app_destroy(app); app = NULL;
   puts("PASS both pages at ordinary/minimum/narrow logical sizes and 100/150/200% controlled scale; long Unicode/list/error fields remain reachable.");
 }
+static void hidden_corrected_draft_selection(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t original = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+  uint64_t other = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800)); hidden_settle();
+  pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_settle();
+  CHECK(pp_settings_invalid(settings));
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  char row[48]; snprintf(row, sizeof(row), "item-%llu", (unsigned long long)other);
+  hidden_text("120"); hidden_click(row); pp_settings_draw(settings);
+  CHECK(!pp_settings_invalid(settings));
+  CHECK(pp_project_item(pp_app_project(app), original)->text_style.font_size_dip == 120);
+  CHECK(pp_app_ui(app)->selected_item == other);
+  CHECK(pp_project_anchor(pp_app_project(app), anchor)->default_id == original);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS correcting an invalid item draft and selecting another row in the same batch commits the original item before selection.");
+}
+static void hidden_corrected_draft_mutations(void) {
+  const char *actions[] = {"anchor-1", "anchor-enabled", "default", "delete",
+                           "add-text", "add-image", "import-font", "replace-image", "drag"};
+  for (int action = 0; action < 9; action++) {
+    CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+    PPAnchor anchor = pp_app_ui(app)->anchor;
+    if (action == 7)
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_IMAGE,
+          .anchor = anchor, .path = PP_MEDIA_FIXTURES "/alpha.png"}, &error));
+    uint64_t original = pp_app_ui(app)->selected_item;
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+    uint64_t other = pp_app_ui(app)->selected_item;
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+    const PPAnchorList *list = pp_project_anchor(pp_app_project(app), anchor);
+    size_t count = list->count;
+    uint64_t default_item = list->default_id;
+    bool enabled = list->enabled;
+    create_settings(1, true);
+    CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800)); hidden_settle();
+    char other_row[48], original_row[48], id[48];
+    snprintf(other_row, sizeof(other_row), "item-%llu", (unsigned long long)other);
+    snprintf(original_row, sizeof(original_row), "item-%llu", (unsigned long long)original);
+    if (action == 2 || action == 3) hidden_hover(other_row);
+    pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("0"); hidden_settle();
+    CHECK(pp_settings_invalid(settings));
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    controlled_dialog = true;
+    hidden_text("120");
+    if (action == 2 || action == 3) {
+      snprintf(id, sizeof(id), "item-%s-%llu", action == 2 ? "default" : "delete",
+               (unsigned long long)other);
+      hidden_click(id);
+    } else if (action == 8)
+      hidden_drop_batch(original_row, other_row, true);
+    else hidden_click(actions[action]);
+    pp_settings_draw(settings);
+    CHECK(!pp_settings_invalid(settings));
+    const PPItem *edited = pp_project_item(pp_app_project(app), original);
+    CHECK((action == 7 ? edited->image_longest_dip : edited->text_style.font_size_dip) == 120);
+    list = pp_project_anchor(pp_app_project(app), anchor);
+    CHECK(pp_app_ui(app)->anchor == (action == 0 ? PP_ANCHOR_TOP_CENTER : anchor));
+    if (action != 0 && action != 4) CHECK(pp_app_ui(app)->selected_item == original);
+    CHECK(list->default_id == (action == 2 ? other : default_item));
+    CHECK(list->enabled == (action == 1 ? !enabled : enabled));
+    CHECK(list->count == count + (action == 4 ? 1 : 0));
+    CHECK(settings->remove_confirmation == (action == 3));
+    if (action == 3) { hidden_key(PP_KEY_ESCAPE, 0); hidden_settle(); }
+    if (action >= 5 && action <= 7) {
+      CHECK(settings->dialog_pending && settings->dialog_anchor == anchor);
+      CHECK(settings->dialog_item == (action == 5 ? 0 : original));
+      finish_controlled_dialog(NULL); hidden_settle();
+      CHECK(!settings->dialog_pending && pp_app_ui(app)->selected_item == original);
+    } else CHECK(!settings->dialog_pending);
+    if (action == 8) CHECK(list->item_ids[1] == original);
+    controlled_dialog = false;
+    pp_settings_destroy(settings); settings = NULL;
+    pp_app_destroy(app); app = NULL;
+  }
+  puts("PASS corrected drafts precede picker/switch/default/targeted Delete/Add/import/replace/drag intents, retaining binding/default identity and chooser cancellation.");
+}
+static void hidden_corrected_draft_save(void) {
+  for (int page = 0; page < 2; page++) {
+    snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/review-corrected-%d-%lu.pointy",
+             page, GetCurrentProcessId());
+    CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SAVE_AS, .path = package}, &error));
+    create_settings(1, true);
+    if (page) { hidden_click("tab-interaction"); hidden_settle(); }
+    const char *field = page ? "activation" : "item-size";
+    uint64_t item = pp_app_ui(app)->selected_item;
+    pp_ui_focus(settings->backend, field); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("0"); hidden_settle();
+    CHECK(pp_settings_invalid(settings));
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+        .name = "Edited while invalid"}, &error));
+    hidden_click("save"); pp_settings_draw(settings);
+    CHECK(pp_settings_invalid(settings) && pp_app_dirty(app));
+    pp_ui_focus(settings->backend, field); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("0"); hidden_click("save"); pp_settings_draw(settings);
+    CHECK(pp_settings_invalid(settings) && pp_app_dirty(app));
+    PPProject *saved = NULL;
+    CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+    CHECK(strcmp(pp_project_name(saved), "Edited while invalid"));
+    pp_project_destroy(saved);
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text(page ? "42" : "120"); hidden_click("save");
+    /* The correction and toolbar click belong to one complete input batch. */
+    pp_settings_draw(settings);
+    CHECK(!pp_settings_invalid(settings) && !settings->dialog_pending);
+    CHECK(!pp_app_dirty(app));
+    saved = NULL;
+    CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+    if (page) CHECK(pp_project_settings(saved)->activation_dip == 42);
+    else CHECK(pp_project_item(saved, item)->text_style.font_size_dip == 120);
+    pp_project_destroy(saved);
+    pp_settings_destroy(settings); settings = NULL;
+    pp_app_destroy(app); app = NULL;
+    CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  }
+  puts("PASS invalid and still-invalid batches block Save; correcting an invalid Items or Interaction draft and clicking Save in the same batch saves the correction.");
+}
 static void hidden_batched_interaction_save(void) {
   snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/ticket21-interaction-%lu-%llu.pointy",
            GetCurrentProcessId(), GetTickCount64());
@@ -2472,6 +2601,9 @@ static void hidden_editor_suite(void) {
   hidden_editor_responsive();
 }
 static void render_only(void) {
+  hidden_corrected_draft_save();
+  hidden_corrected_draft_selection();
+  hidden_corrected_draft_mutations();
   hidden_reorder_invalid_targets();
   hidden_reorder_captures();
   hidden_reorder_drafts_and_roundtrip();
@@ -2812,7 +2944,7 @@ int main(int argc, char **argv) {
   CHECK(argc == 2 &&
         (desktop_run || manual_font || !strcmp(argv[1], "--render-only") ||
          !strcmp(argv[1], "--items-only") || !strcmp(argv[1], "--editor-only") ||
-         !strcmp(argv[1], "--reorder-only")));
+         !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -2820,6 +2952,18 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--validation-only")) {
+    hidden_corrected_draft_save();
+    hidden_corrected_draft_selection();
+    hidden_corrected_draft_mutations();
+    hidden_batched_project_actions();
+    hidden_batched_interaction_save();
+    hidden_batched_list_mutations();
+    hidden_batched_imports();
+    hidden_page_errors();
+    hidden_navigation_guards();
+    hidden_project_composition_guard();
+  }
   else if (!strcmp(argv[1], "--reorder-only")) {
     hidden_keyboard_reorder();
     hidden_pointer_reorder();

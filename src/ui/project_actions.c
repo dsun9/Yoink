@@ -215,7 +215,7 @@ void pp_project_actions(PPSettings *settings) {
                 pp_app_dirty(settings->app) ? "Unsaved changes"
                 : *pp_app_path(settings->app) ? "Project saved"
                                              : "Not saved to a file; no unsaved edits");
-  bool actions_enabled = enabled && !pp_settings_invalid(settings);
+  bool actions_enabled = pp_settings_action_enabled(settings);
   if (wrapped) {
     float actions[] = {44, 44, 44, 44};
     nk_layout_row(ctx, NK_STATIC, 36, 4, actions);

@@ -64,7 +64,7 @@ struct PPSettings {
   uint64_t remove_item, remove_generation;
   PPProjectAction pending_action;
   PPCommand pending_command; /* Only value-only selection/list commands. */
-  bool drawing_fields, rendering;
+  bool drawing_fields, rendering, field_input_pending;
   PPSettingsPage page, requested_page;
   bool page_pending, interaction_changed, revert_pending;
   float items_height;
@@ -93,6 +93,7 @@ void pp_item_editor_sync(PPSettings *settings);
 void pp_item_editor_release_preview(PPSettings *settings);
 bool pp_ui_number(const char *text, double low, double high, double *out);
 bool pp_settings_invalid(const PPSettings *settings);
+bool pp_settings_action_enabled(const PPSettings *settings);
 void pp_settings_revert(PPSettings *settings);
 bool pp_settings_create_scaled(PPSettings **out, PPApp *app, float scale,
                                PPError *error);

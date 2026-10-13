@@ -73,6 +73,18 @@ void pp_ui_poll_reset(uint32_t window_id);
 void pp_ui_modal(PPUIBackend *ui, bool modal);
 void pp_ui_heading(PPUIBackend *ui, const char *text);
 void pp_ui_secondary(PPUIBackend *ui, const char *text);
+typedef enum PPUILabelWhitespace {
+  PP_UI_LABEL_COLLAPSE_WHITESPACE,
+  PP_UI_LABEL_PRESERVE_WHITESPACE
+} PPUILabelWhitespace;
+/* Derive a control-font label without changing the item's full Unicode text.
+ * Menus retain ownership of their empty-text and image fallback labels. */
+void pp_ui_label_text(const struct nk_font *font, const char *text,
+                      PPUILabelWhitespace whitespace, char *label, size_t capacity);
+/* Fit in place using the drawing font's measured width, retaining whole UTF-8
+ * codepoints and reserving the actual ellipsis width when it fits. */
+size_t pp_ui_fit_label(const struct nk_user_font *font, char *label,
+                       size_t capacity, float width);
 bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
                   bool enabled);
 void pp_ui_draw_icon(struct nk_command_buffer *canvas, struct nk_rect bounds,

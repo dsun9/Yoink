@@ -346,8 +346,7 @@ void pp_item_editor(PPSettings *settings) {
     nk_label_wrap(&ui->context, font);
     struct nk_rect import_bounds = nk_widget_bounds(&ui->context);
     if (pp_ui_button(ui, "import-font", "Import font",
-                     !settings->dialog_pending &&
-                         !pp_settings_invalid(settings)))
+                     pp_settings_action_enabled(settings)))
       pp_settings_dialog(settings, PP_DIALOG_IMPORT_FONT, false);
     pp_ui_tooltip(ui, import_bounds, "import-font",
                   "Import a permitted TTF, OTF, TTC or OTC font");
@@ -396,8 +395,7 @@ void pp_item_editor(PPSettings *settings) {
   } else {
     nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
     if (pp_ui_button(ui, "replace-image", "Replace image (PNG / GIF / SVG)",
-                     !settings->dialog_pending &&
-                         !pp_settings_invalid(settings)))
+                     pp_settings_action_enabled(settings)))
       pp_settings_dialog(settings, PP_DIALOG_IMPORT_IMAGE, false);
   }
   pp_ui_heading(ui, "Appearance");
