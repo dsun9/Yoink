@@ -30,6 +30,209 @@ static PPDrawerThumbnail *thumbnail_id(PPDrawer *drawer,uint64_t id) {
   for(size_t i=0;i<8;i++)if(drawer->thumbnails[i].snapshot&&pp_item_snapshot_item(drawer->thumbnails[i].snapshot)->id==id)return drawer->thumbnails+i;
   return NULL;
 }
+static void hidden_click(PPDrawer *drawer, PPVec2 point, double now) {
+  PPError error = {0};
+  point.x *= drawer->backend->window_scale;
+  point.y *= drawer->backend->window_scale;
+  uint32_t window = pp_ui_backend_window_id(drawer->backend);
+  pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_POINTER_MOVE,
+      .window_id=window, .window_point=point});
+  pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_BUTTON_DOWN,
+      .window_id=window, .window_point=point, .button=PP_BUTTON_LEFT});
+  CHECK(pp_drawer_draw(drawer, now, &error));
+  pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_BUTTON_UP,
+      .window_id=window, .window_point=point, .button=PP_BUTTON_LEFT});
+  CHECK(pp_drawer_draw(drawer, now, &error));
+}
+static void hidden_key(PPDrawer *drawer, PPKey key) {
+  PPError error = {0};
+  uint32_t window = pp_ui_backend_window_id(drawer->backend);
+  pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_KEY_DOWN,
+      .window_id=window, .key=key});
+  CHECK(pp_drawer_draw(drawer, 2, &error));
+  pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_KEY_UP,
+      .window_id=window, .key=key});
+  CHECK(pp_drawer_draw(drawer, 2, &error));
+  CHECK(pp_drawer_draw(drawer, 2, &error));
+}
+static void hidden_whole_row(void) {
+  PPApp *app = NULL;
+  PPError error = {0};
+  uint64_t instance = 0, other = 0;
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory=""}, &error));
+  CHECK(pp_scene_spawn(pp_app_scene(app), pp_app_project(app),
+      PP_ANCHOR_BOTTOM_RIGHT, (PPVec2){400,300}, 1, &instance, &error));
+  CHECK(pp_scene_spawn(pp_app_scene(app), pp_app_project(app),
+      PP_ANCHOR_BOTTOM_RIGHT, (PPVec2){200,300}, 1, &other, &error));
+  uint64_t item = pp_project_anchor(pp_app_project(app),
+      PP_ANCHOR_BOTTOM_RIGHT)->default_id;
+  const float scales[] = {1, 1.5f, 2};
+  for (size_t scale = 0; scale < 3; scale++) {
+    for (int target = 0; target < 3; target++) {
+      PPDrawer *drawer = NULL;
+      CHECK(pp_drawer_open(&drawer, app, instance, &error));
+      drawer->render_hidden = true;
+      PPDisplay display = {1, {0,0,1600,1200}, scales[scale], scales[scale]};
+      pp_drawer_layout(drawer, &display, 1);
+      CHECK(pp_drawer_draw(drawer, 2, &error));
+      char control[64];
+      snprintf(control, sizeof(control), "drawer-item-%llu", (unsigned long long)item);
+      PPRect row, close;
+      CHECK(pp_ui_control_rect(drawer->backend, control, &row));
+      CHECK(pp_ui_control_rect(drawer->backend, "drawer-close", &close));
+      CHECK(close.y + close.h < row.y);
+      PPPose before = pp_scene_get(pp_app_scene(app), instance)->pose;
+      double other_start = pp_scene_get(pp_app_scene(app), other)->animation_start;
+      uint64_t revision = pp_project_revision(pp_app_project(app));
+      double old_start = pp_scene_get(pp_app_scene(app), instance)->animation_start;
+      PPVec2 point = target == 2 ? (PPVec2){close.x+close.w/2,close.y+close.h/2}
+          : (PPVec2){target == 0 ? 48 : row.x+row.w-28, row.y+row.h/2};
+      hidden_click(drawer, point, 3 + target);
+      CHECK(drawer->dismissed && drawer->restore_focus);
+      CHECK(pp_scene_get(pp_app_scene(app), instance)->animation_start ==
+          (target == 2 ? old_start : 3 + target));
+      CHECK(!memcmp(&before, &pp_scene_get(pp_app_scene(app), instance)->pose, sizeof(before)));
+      CHECK(pp_scene_get(pp_app_scene(app), other)->animation_start == other_start);
+      CHECK(pp_project_revision(pp_app_project(app)) == revision && !pp_app_dirty(app));
+      CHECK(pp_project_anchor(pp_app_project(app), PP_ANCHOR_BOTTOM_RIGHT)->default_id == item);
+      check_hidden(drawer);
+      pp_drawer_close(drawer);
+    }
+  }
+  pp_app_destroy(app);
+  puts("PASS hidden thumbnail/label whole-row hits and header Close at 100%,150%,200%; only selected instance clock changes, pose/default/revision/dirty remain");
+}
+static void hidden_removed_choice(void) {
+  PPApp *app = NULL;
+  PPError error = {0};
+  uint64_t instance = 0;
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory=""}, &error));
+  uint64_t removed = hidden_image(app, PP_MEDIA_FIXTURES "/retained-blue.png", PP_ASSET_PNG, &error);
+  CHECK(pp_scene_spawn(pp_app_scene(app), pp_app_project(app),
+      PP_ANCHOR_TOP_LEFT, (PPVec2){400,300}, 1, &instance, &error));
+  PPItemSnapshot *before = pp_scene_get(pp_app_scene(app), instance)->snapshot;
+  double clock = pp_scene_get(pp_app_scene(app), instance)->animation_start;
+  PPDrawer *drawer = NULL;
+  CHECK(pp_drawer_open(&drawer, app, instance, &error));
+  drawer->render_hidden = true;
+  PPDisplay display = {1,{0,0,800,600},1,1};
+  pp_drawer_layout(drawer, &display, 1);
+  CHECK(pp_drawer_draw(drawer, 2, &error));
+  char control[64];
+  snprintf(control, sizeof(control), "drawer-item-%llu", (unsigned long long)removed);
+  pp_ui_focus(drawer->backend, control);
+  CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_REMOVE_ITEM,
+      .anchor=PP_ANCHOR_TOP_LEFT, .item_id=removed}, &error));
+  hidden_key(drawer, PP_KEY_ENTER);
+  CHECK(!drawer->dismissed && strstr(drawer->diagnostic, "removed"));
+  CHECK(pp_scene_get(pp_app_scene(app), instance)->snapshot == before &&
+      pp_scene_get(pp_app_scene(app), instance)->animation_start == clock);
+  pp_drawer_layout(drawer, &display, 1);
+  drawer->backend->capture_path = PP_FLOW_OUTPUT "/drawer-removed-choice.bmp";
+  CHECK(pp_drawer_draw(drawer, 3, &error));
+  PPRect close;
+  CHECK(pp_ui_control_rect(drawer->backend, "drawer-close", &close));
+  hidden_click(drawer, (PPVec2){close.x+close.w/2,close.y+close.h/2}, 4);
+  CHECK(drawer->dismissed);
+  pp_drawer_close(drawer);
+  pp_app_destroy(app);
+  puts("PASS removed focused choice plus queued Enter keeps existing sprite and shows actionable feedback with Close");
+}
+static void hidden_capture(PPDrawer *drawer, const char *state, size_t scale) {
+  PPError error = {0};
+  char path[256];
+  snprintf(path, sizeof(path), PP_FLOW_OUTPUT "/drawer-%s-%zu.bmp", state, scale);
+  for (int frame = 0; frame < 12; frame++) {
+    SDL_Delay(1);
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+  }
+  drawer->backend->capture_path = path;
+  CHECK(pp_drawer_draw(drawer, 2, &error));
+  check_hidden(drawer);
+}
+static void hidden_visual_states(void) {
+  PPApp *app = NULL;
+  PPError error = {0};
+  uint64_t instance = 0;
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory=""}, &error));
+  uint64_t image = hidden_image(app, PP_MEDIA_FIXTURES "/retained-blue.png", PP_ASSET_PNG, &error);
+  PPItem text = *pp_project_target(pp_app_project(app), PP_ANCHOR_BOTTOM_RIGHT);
+  text.id = 0;
+  text.text = "Next slide: \xF0\x9F\x91\x89 move forward through this very long presentation label";
+  CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_ADD_ITEM,
+      .anchor=PP_ANCHOR_TOP_LEFT,.item=&text}, &error));
+  uint64_t long_text = pp_app_ui(app)->selected_item;
+  CHECK(pp_scene_spawn(pp_app_scene(app), pp_app_project(app),
+      PP_ANCHOR_TOP_LEFT, (PPVec2){700,500}, 1, &instance, &error));
+  const float scales[] = {1,1.5f,2};
+  for (size_t scale = 0; scale < 3; scale++) {
+    PPDrawer *drawer = NULL;
+    CHECK(pp_drawer_open(&drawer, app, instance, &error));
+    drawer->render_hidden = true;
+    PPDisplay display = {1,{0,0,1600,1200},scales[scale],scales[scale]};
+    pp_drawer_layout(drawer, &display, 1);
+    CHECK(drawer->bounds.w/scales[scale] == 340 && drawer->bounds.h/scales[scale] < 300);
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    char control[64];
+    snprintf(control, sizeof(control), "drawer-item-%llu", (unsigned long long)long_text);
+    pp_ui_focus(drawer->backend, control);
+    hidden_capture(drawer, "mixed-focus", scale);
+    const PPAnchorList *visible_list = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+    char first_control[64];
+    snprintf(first_control, sizeof(first_control), "drawer-item-%llu",
+        (unsigned long long)visible_list->item_ids[0]);
+    PPRect first_row, header_close;
+    CHECK(pp_ui_control_rect(drawer->backend, first_control, &first_row));
+    CHECK(pp_ui_control_rect(drawer->backend, "drawer-close", &header_close));
+    CHECK(first_row.y >= header_close.y + header_close.h + 8);
+    CHECK(!strcmp(pp_project_item(pp_app_project(app), long_text)->text, text.text));
+    PPRect row;
+    CHECK(pp_ui_control_rect(drawer->backend, control, &row));
+    CHECK(row.y > 48 && row.y + row.h < drawer->backend->height - 8);
+    const PPUIControl *label = NULL;
+    for (size_t i = 0; i < drawer->backend->control_count; i++)
+      if (drawer->backend->controls[i].id == drawer->backend->focus_id)
+        label = drawer->backend->controls + i;
+    CHECK(label && strstr(label->label,"Next slide:") && strstr(label->label,"U+1F449"));
+    pp_drawer_event(drawer, &(PPPlatformEvent){.kind=PP_EVENT_POINTER_MOVE,
+        .window_id=pp_ui_backend_window_id(drawer->backend),
+        .window_point={(row.x+row.w-20)*scales[scale],(row.y+row.h/2)*scales[scale]}});
+    hidden_capture(drawer, "mixed-hover", scale);
+    snprintf(drawer->diagnostic, sizeof(drawer->diagnostic),
+        "This item was removed. Choose another item.");
+    pp_drawer_layout(drawer, &display, 1);
+    hidden_capture(drawer, "mixed-error", scale);
+    PPRect close;
+    CHECK(pp_ui_control_rect(drawer->backend,"drawer-close",&close));
+    CHECK(close.y+close.h < row.y && drawer->bounds.h/scales[scale] <= 360);
+    pp_drawer_close(drawer);
+  }
+  const PPAnchorList *list = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+  while (list->count) {
+    CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_REMOVE_ITEM,
+        .anchor=PP_ANCHOR_TOP_LEFT,.item_id=list->item_ids[0]}, &error));
+    list = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+  }
+  CHECK(!pp_project_item(pp_app_project(app), image));
+  PPItemSnapshot *retained = pp_scene_get(pp_app_scene(app), instance)->snapshot;
+  for (size_t scale = 0; scale < 3; scale++) {
+    PPDrawer *drawer = NULL;
+    CHECK(pp_drawer_open(&drawer, app, instance, &error));
+    drawer->render_hidden = true;
+    PPDisplay display = {1,{0,0,1600,1200},scales[scale],scales[scale]};
+    pp_drawer_layout(drawer, &display, 1);
+    CHECK(drawer->bounds.h/scales[scale] <= 140);
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    hidden_capture(drawer, "empty", scale);
+    hidden_key(drawer, PP_KEY_TAB);
+    CHECK(pp_ui_focused(drawer->backend,"drawer-close"));
+    hidden_key(drawer, PP_KEY_ENTER);
+    CHECK(drawer->dismissed && pp_scene_get(pp_app_scene(app), instance)->snapshot == retained);
+    pp_drawer_close(drawer);
+  }
+  pp_app_destroy(app);
+  puts("PASS compact mixed text/emoji/image, abbreviated useful Unicode labels, focus/hover/error and empty captures at 100%,150%,200%; empty keyboard Close retains sprite");
+}
 static void hidden_retained_ownership(void) {
   PPError error={0};PPApp *app=NULL;PPDrawer *drawer=NULL;uint64_t instance=0;
   CHECK(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
@@ -96,6 +299,9 @@ static void hidden_drawer(void) {
   drawer->render_hidden = true;
   PPDisplay display = {1, {0, 0, 800, 600}, 1, 1};
   pp_drawer_layout(drawer, &display, 1);
+  /* A one-choice drawer fits its header and row instead of reserving the
+   * maximum-height list, instructions and an empty diagnostic. */
+  CHECK(drawer->bounds.h <= 180);
   CHECK(drawer->bounds.x >= 0 && drawer->bounds.y >= 0 &&
         drawer->bounds.x + drawer->bounds.w <= 800 &&
         drawer->bounds.y + drawer->bounds.h <= 600);
@@ -166,6 +372,8 @@ static void hidden_drawer(void) {
                        &error));
   CHECK(pp_drawer_draw(drawer, 3, &error));
   CHECK(pp_drawer_count(drawer) == 0);
+  pp_drawer_layout(drawer, &display, 1);
+  CHECK(drawer->bounds.h <= 140);
   drawer->backend->capture_path = PP_FLOW_OUTPUT "/drawer-empty.bmp";
   CHECK(pp_drawer_draw(drawer, 3, &error));
   pp_drawer_event(
@@ -233,16 +441,26 @@ static void hidden_long_list(void) {
           drawer->bounds.x + drawer->bounds.w <= 0);
     CHECK(pp_drawer_draw(drawer, 2, &error));
     char control[64], path[256];
+    const PPAnchorList *list = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
     snprintf(control, sizeof(control), "drawer-item-%llu",
-             (unsigned long long)last);
+             (unsigned long long)list->item_ids[0]);
     pp_ui_focus(drawer->backend, control);
+    for (size_t row_index = 1; row_index < list->count; row_index++) {
+      hidden_key(drawer, PP_KEY_DOWN);
+      snprintf(control, sizeof(control), "drawer-item-%llu",
+               (unsigned long long)list->item_ids[row_index]);
+      CHECK(pp_ui_focused(drawer->backend, control));
+      PPRect traversed;
+      CHECK(pp_ui_control_rect(drawer->backend, control, &traversed));
+      CHECK(traversed.y > 48 && traversed.y + traversed.h < drawer->backend->height - 8);
+    }
     CHECK(pp_drawer_draw(drawer, 2, &error));
     CHECK(pp_drawer_draw(drawer, 2, &error));
     PPRect row, close;
     CHECK(pp_ui_control_rect(drawer->backend, control, &row));
     CHECK(pp_ui_control_rect(drawer->backend, "drawer-close", &close));
-    CHECK(row.y > 60 && row.y + row.h < close.y &&
-          close.y + close.h <= drawer->backend->height);
+    CHECK(close.y >= 0 && close.y + close.h < row.y &&
+          row.y + row.h <= drawer->backend->height);
     snprintf(path, sizeof(path), PP_FLOW_OUTPUT "/drawer-long-%zu.bmp", i);
     drawer->backend->capture_path = path;
     CHECK(pp_drawer_draw(drawer, 2, &error));
@@ -252,6 +470,34 @@ static void hidden_long_list(void) {
     pp_drawer_layout(drawer, &display, 1);
     CHECK(pp_drawer_draw(drawer, 2, &error));
     CHECK(drawer->backend->scale == 1 && drawer->backend->width == 340);
+    CHECK(pp_ui_focused(drawer->backend, control));
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    CHECK(pp_ui_control_rect(drawer->backend, control, &row));
+    CHECK(row.y > 48 && row.y + row.h < drawer->backend->height - 8);
+    CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_REORDER_ITEM,
+        .anchor=PP_ANCHOR_TOP_LEFT,.item_id=last,.index=0}, &error));
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    CHECK(pp_ui_focused(drawer->backend, control));
+    CHECK(pp_ui_control_rect(drawer->backend, control, &row));
+    CHECK(row.y > 48 && row.y < 90);
+    hidden_key(drawer, PP_KEY_END);
+    list = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+    snprintf(control, sizeof(control), "drawer-item-%llu",
+        (unsigned long long)list->item_ids[list->count-1]);
+    CHECK(pp_ui_focused(drawer->backend, control));
+    hidden_key(drawer, PP_KEY_UP);
+    snprintf(control, sizeof(control), "drawer-item-%llu",
+        (unsigned long long)list->item_ids[list->count-2]);
+    CHECK(pp_ui_focused(drawer->backend, control));
+    hidden_key(drawer, PP_KEY_HOME);
+    snprintf(control, sizeof(control), "drawer-item-%llu", (unsigned long long)last);
+    CHECK(pp_ui_focused(drawer->backend, control));
+    /* Restore the next scale's traversal to its original list order. */
+    CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_REORDER_ITEM,
+        .anchor=PP_ANCHOR_TOP_LEFT,.item_id=last,.index=list->count-1}, &error));
     pp_drawer_close(drawer);
   }
   pp_app_destroy(app);
@@ -618,6 +864,16 @@ static void ui_click(PPUIBackend *ui, const char *id) {
   CHECK(ClientToScreen(window, &point));
   click(point.x, point.y);
 }
+static void ui_click_row_part(PPUIBackend *ui, const char *id, bool thumbnail) {
+  PPRect row;
+  CHECK(pp_ui_control_rect(ui, id, &row));
+  HWND window = SDL_GetPointerProperty(SDL_GetWindowProperties(ui->window),
+      SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
+  POINT point = {(int)((row.x + (thumbnail ? 24 : row.w - 28)) * ui->window_scale),
+      (int)((row.y + row.h / 2) * ui->window_scale)};
+  CHECK(ClientToScreen(window, &point));
+  click(point.x, point.y);
+}
 static uint64_t add_image(const char *svg) {
   PPError error = {0};
   PPItem item = {.kind = PP_ITEM_IMAGE, .image_longest_dip = 96, .opacity = 1};
@@ -808,6 +1064,11 @@ static void test_desktop_flow(void) {
   key(VK_ESCAPE, false);
   check_dismissed("Escape");
   open_drawer(a);
+  double unchanged_clock = pp_scene_get(pp_app_scene(flow_app), a)->animation_start;
+  ui_click(flow->drawer->backend, "drawer-close");
+  check_dismissed("header Close");
+  CHECK(pp_scene_get(pp_app_scene(flow_app), a)->animation_start == unchanged_clock);
+  open_drawer(a);
   POINT outside = outside_receiver_point();
   HWND drawer_window = SDL_GetPointerProperty(
       SDL_GetWindowProperties(flow->drawer->backend->window),
@@ -834,8 +1095,16 @@ static void test_desktop_flow(void) {
   char control[64];
   snprintf(control, sizeof(control), "drawer-item-%llu",
            (unsigned long long)ring);
-  ui_click(flow->drawer->backend, control);
-  check_dismissed("selection");
+  double other_clock = pp_scene_get(pp_app_scene(flow_app), b)->animation_start;
+  ui_click_row_part(flow->drawer->backend, control, true);
+  check_dismissed("thumbnail selection");
+  CHECK(pp_item_snapshot_item(pp_scene_get(pp_app_scene(flow_app), a)->snapshot)->id == ring);
+  CHECK(pp_scene_get(pp_app_scene(flow_app), b)->animation_start == other_clock);
+  open_drawer(a);
+  ui_click_row_part(flow->drawer->backend, control, false);
+  check_dismissed("label selection");
+  CHECK(pp_item_snapshot_item(pp_scene_get(pp_app_scene(flow_app), a)->snapshot)->id == ring);
+  CHECK(pp_scene_get(pp_app_scene(flow_app), b)->animation_start == other_clock);
   CHECK(pp_project_revision(pp_app_project(flow_app)) == revision &&
         !memcmp(&before, &pp_scene_get(pp_app_scene(flow_app), a)->pose,
                 sizeof(before)));
@@ -1022,6 +1291,9 @@ int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--hidden")) {
     hidden_retained_ownership();
     hidden_drawer();
+    hidden_whole_row();
+    hidden_removed_choice();
+    hidden_visual_states();
     hidden_long_list();
     return 0;
   }
