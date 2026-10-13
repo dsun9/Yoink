@@ -354,4 +354,3 @@ Use the root glossary for item, anchor list, default item and replacement drawer
 Preserve the bounded sprite-grab-area decision and its existing acceptance gates.
 The redesign-specific requirements supersede the old menu layout and theme
 description for this work; older validation records remain historical evidence.
-
