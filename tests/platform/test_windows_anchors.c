@@ -103,7 +103,7 @@ static void test_native_anchors(void) {
     int transparent_x=(int)round(25*actual.desktop_units_per_dip),transparent_y=(int)round(80*actual.desktop_units_per_dip);
     move(250,220);pump(150);LONG clicks=receiver->clicks;trace_point("before initial click",transparent_x,transparent_y);click(transparent_x,transparent_y);trace_point("after initial click",transparent_x,transparent_y);CHECK(receiver->clicks==clicks+1);
     move(8,8);const PPAnchorRuntime *r=pp_anchor_presenter_reveals(presenter);CHECK(r->entries[0].revealed);
-    /* Target-to-visible-preview transition and a transparent preview pixel. */
+    /* Target-to-visible-preview transition, then grab the visible arrow shaft. */
     int px=(int)round(50*actual.desktop_units_per_dip),py=(int)round(48*actual.desktop_units_per_dip);
     move(px,py);CHECK(r->entries[0].revealed&&!r->entries[0].leaving);pump(150);CHECK(r->entries[0].revealed);
     /* Same monitor ID and scale, new origin/resolution. Keep reveal opacity
@@ -113,7 +113,7 @@ static void test_native_anchors(void) {
     CHECK(WindowFromPoint((POINT){px,py})==(HWND)receiver->window);
     HWND shifted=WindowFromPoint((POINT){200+px,py});CHECK(GetPropW(shifted,L"PointyPointer.DirectSurface"));
     displays[0]=actual;CHECK(pp_anchor_presenter_update(presenter,displays,count,(PPVec2){8,8},GetTickCount64()/1000.0,&geometry_error));
-    clicks=receiver->clicks;click(transparent_x,transparent_y);CHECK(receiver->clicks==clicks);CHECK(pp_anchor_presenter_instance_count(presenter)==0);CHECK(!pp_windows_input_owner());
+    clicks=receiver->clicks;click(transparent_x,transparent_y);CHECK(receiver->clicks==clicks+1);CHECK(pp_anchor_presenter_instance_count(presenter)==0);CHECK(!pp_windows_input_owner());
     click(8,8);CHECK(pp_anchor_presenter_instance_count(presenter)==0); /* Below system threshold. */
     move(px,py);mouse(MOUSEEVENTF_LEFTDOWN);move(200,150);CHECK(pp_anchor_presenter_instance_count(presenter)==1);
     PPPose before;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&before));CHECK(before.longest_dip==96);
@@ -130,7 +130,7 @@ static void test_native_anchors(void) {
     displays[0]=(PPDisplay){actual.id+1,{400,100,400,400},1,1};pump(20);
     CHECK(pp_anchor_presenter_instance_pose(presenter,0,&after));CHECK(after.center.x>=448&&after.center.x<=752&&after.center.y>=148&&after.center.y<=452);
     CHECK(pp_windows_input_owner()==NULL);mouse(MOUSEEVENTF_LEFTUP);CHECK(GetForegroundWindow()==(HWND)receiver->window);
-    puts("PASS native outside-target first click and rectangular transparent-preview input, target/preview transition, threshold cancellation, simulated scale/disconnect during native drag.");
+    puts("PASS native outside-target first click and transparent-preview pass-through, visible preview drag, target/preview transition, threshold cancellation, simulated scale/disconnect during native drag.");
     test_native_presentation_at_simulated_mixed_scale_seam();
 }
 static int diagnose_without_input(void) {

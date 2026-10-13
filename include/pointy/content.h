@@ -12,6 +12,7 @@ typedef struct PPContentFrame {
   bool visual_alpha;
   PPRect source_rect;
   PPSharedTexture *shared_texture; /* Filled only by a compatible native GL adapter. */
+  const PPGrabArea *grab; /* Immutable source shape; GIF is an animation union. */
 } PPContentFrame;
 /* Owner-thread source service. Assets outlive the service and its consumers.
  * Each consumer has its own lifetime, target and clock. Equal immutable

@@ -2,6 +2,7 @@
 #include "../core/geometry_internal.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 static bool fail(PPError *error,int code,const char *message) {
   if(error) *error=(PPError){code};
@@ -54,6 +55,8 @@ void pp_retained_release(PPAnchorPresenter *p,PPRetainedPresentation *r) {
   add_metrics(&p->retired_renderer_metrics,pp_renderer_metrics(r->renderer));
   bool released=pp_renderer_destroy_retained(r->renderer);pp_item_snapshot_release(r->snapshot);
   pp_gif_release(p,r->gif_entry);
+  pp_grab_release(r->grab);
+  pp_assets_release_grab(p->assets,r->grab_count*sizeof(*r->grab_rects));free(r->grab_rects);
   size_t bytes=r->gpu_bytes+r->output_bytes;
   if(released)pp_presenter_gpu_release(p,bytes);else p->retired_gpu_bytes+=bytes;
   memset(r,0,sizeof(*r));
@@ -106,7 +109,31 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   const PPFrame *frame=source.frame;
   if(changed && (!frame || frame->width<=0 || frame->height<=0 || frame->width>8192 || frame->height>8192))
     return fail(error,PP_ERROR_ARGUMENT,"Changed retained source requires a validated frame");
+  PPGrabArea *grab=r->grab;PPGrabRegion region={0};bool shape=false;
+  PPGrabRect *grab_rects=r->grab_rects;size_t grab_count=r->grab_count;bool region_changed=false;
+#if defined(_WIN32)
+  if(source.grab && source.grab!=r->grab)grab=pp_grab_retain((PPGrabArea *)source.grab);
+  else if(!source.grab&&(changed||!grab)) {
+    if(!pp_grab_create_cached(p->assets,frame,1,&grab,error))return false;
+  }
+  bool interactive=pose.opacity>0 && !pp_grab_empty(grab);
+  shape=interactive&&(grab!=r->grab||!r->valid||!r->visible||pose.longest_dip!=r->drawn.longest_dip||
+    pose.angle_deg!=r->drawn.angle_deg||source.layout.x!=r->layout.x||source.layout.y!=r->layout.y||
+    memcmp(&source.source_rect,&r->source_rect,sizeof(source.source_rect))||
+    display->desktop_units_per_dip!=r->grab_density||rectangle.w!=r->bounds.w||rectangle.h!=r->bounds.h);
+  if(shape&&!pp_grab_project(grab,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
+      display->desktop_units_per_dip,(int)llround(rectangle.w),(int)llround(rectangle.h),&region,error))goto grab_rejected;
+  region_changed=shape&&(region.count!=r->grab_count||(region.count&&memcmp(region.rects,r->grab_rects,region.count*sizeof(*r->grab_rects))));
+  if(region_changed) {
+    grab_count=region.count;size_t bytes=grab_count*sizeof(*grab_rects);
+    if(!pp_assets_reserve_grab(p->assets,bytes,error))goto grab_rejected;
+    grab_rects=bytes?malloc(bytes):NULL;
+    if(bytes&&!grab_rects){pp_assets_release_grab(p->assets,bytes);grab_rects=r->grab_rects;grab_count=r->grab_count;fail(error,PP_ERROR_MEMORY,"Cannot cache native grab region");goto grab_rejected;}
+    if(bytes)memcpy(grab_rects,region.rects,bytes);
+  }
+#else
   bool interactive=pose.opacity>0 && (changed?source.visual_alpha:r->visual_alpha);
+#endif
   bool redraw=changed || !r->valid || !r->visible || pose.longest_dip!=r->drawn.longest_dip ||
     pose.angle_deg!=r->drawn.angle_deg || pose.opacity!=r->drawn.opacity ||
     display->drawable_pixels_per_dip!=r->density || source.layout.x!=r->layout.x || source.layout.y!=r->layout.y ||
@@ -115,16 +142,16 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   bool place=!r->visible || memcmp(&rectangle,&r->bounds,sizeof(rectangle)) || !interactive;
   int output_w,output_h;
   if(!pp_geometry_source_extent(source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
-      display->drawable_pixels_per_dip,&output_w,&output_h))return false;
+      display->drawable_pixels_per_dip,&output_w,&output_h))goto grab_rejected;
   bool overlap=changed && !source.shared_texture;
   size_t source_candidate=overlap?(size_t)frame->width*frame->height*4:0;
   size_t candidate=interactive&&redraw?pp_renderer_output_candidate_bytes(r->renderer,output_w,output_h):0;
   /* Reserve both candidates while the accepted source/output are still owned.
    * A budget rejection must precede source binding and validity changes so the
    * sprite updater can restore its accepted snapshot, pose and clock. */
-  if(source_candidate&&!pp_presenter_gpu_reserve(p,source_candidate,error))return false;
+  if(source_candidate&&!pp_presenter_gpu_reserve(p,source_candidate,error))goto grab_rejected;
   if(candidate&&!pp_presenter_gpu_reserve(p,candidate,error)) {
-    pp_presenter_gpu_release(p,source_candidate);return false;
+    pp_presenter_gpu_release(p,source_candidate);goto grab_rejected;
   }
   if(changed || (interactive && redraw)) {
     bool ok=r->renderer || (pp_presenter_texture_owner(p,error) && pp_renderer_create_shared_window(&r->renderer,pp_surface_window_id(surface),p->texture_owner,error));
@@ -135,7 +162,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
       /* A protective allocation rejection leaves the transactional old texture
        * usable. A broken context/presentation cannot keep intercepting input. */
       if(error && error->code==PP_ERROR_RENDER) goto native_failure;
-      return false;
+      goto grab_rejected;
     }
     /* Candidate output now belongs to the renderer, even if native placement
      * later fails. Keep its charge until publication or verified deletion. */
@@ -151,17 +178,24 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   bool refresh=interactive&&!redraw&&place&&newly_exposed(p,r->bounds,rectangle);
   if(!interactive)pp_retained_hide(p,surface,r);
   if(place && !pp_surface_place_gl(surface,rectangle,interactive,error)) goto native_failure;
+  if(region_changed&&!pp_surface_set_grab_region(surface,&region,error))goto native_failure;
   if(interactive && redraw && !pp_renderer_draw_source(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
       pose.opacity,display->drawable_pixels_per_dip,error)) goto native_failure;
   if(refresh&&!pp_renderer_refresh(r->renderer,error))goto native_failure;
   size_t output_bytes=pp_renderer_output_bytes(r->renderer);
   pp_presenter_gpu_release(p,r->output_bytes-output_bytes);r->output_bytes=output_bytes;
   if(place || (redraw && interactive)) p->metrics.native_publications++;
+  if(grab!=r->grab){pp_grab_release(r->grab);r->grab=grab;}
+  if(region_changed){pp_assets_release_grab(p->assets,r->grab_count*sizeof(*r->grab_rects));free(r->grab_rects);r->grab_rects=grab_rects;r->grab_count=grab_count;}
+  if(shape)r->grab_axis=region.axis;r->grab_density=display->desktop_units_per_dip;
   r->drawn=pose;r->layout=source.layout;r->source_rect=source.source_rect;r->bounds=rectangle;
   r->density=display->drawable_pixels_per_dip;r->visible=interactive;r->valid=true;
   return true;
 native_failure:
-  pp_retained_hide(p,surface,r);p->failed_surface=surface;return false;
+  pp_retained_hide(p,surface,r);p->failed_surface=surface;
+grab_rejected:
+  if(grab_rects!=r->grab_rects){pp_assets_release_grab(p->assets,grab_count*sizeof(*grab_rects));free(grab_rects);}
+  if(grab!=r->grab)pp_grab_release(grab);return false;
 }
 bool pp_sprite_present(PPAnchorPresenter *p,PPSprite *s,const PPSceneInstance *instance,
     const PPDisplay *display,double elapsed,double *next,PPError *error) {

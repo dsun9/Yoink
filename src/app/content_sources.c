@@ -329,7 +329,12 @@ bool pp_content_frame(PPContentConsumer *c,PPItemSnapshot *snapshot,double longe
       PPFrameSelection selected;if(!pp_item_snapshot_select_frame(snapshot,elapsed,1,&selected,error))return false;
       ContentEntry *e=native_frame(c,snapshot,selected,error);if(!e)return false;
       *out=(PPContentFrame){.frame=selected.frame,.content_id=identity,.source_revision=selected.revision,
-        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=e->visual_alpha};*next=selected.next_change;return true;
+        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=e->visual_alpha};
+#if defined(_WIN32)
+      PPAsset *shape_asset=pp_asset_retain(c->sources->assets,item->image_asset);
+      out->grab=pp_asset_grab_area(shape_asset,error);pp_asset_release(shape_asset);if(!out->grab)return false;
+#endif
+      *next=selected.next_change;return true;
     }
   }
   if(bitmap&&c->desired)pp_content_cancel(c);

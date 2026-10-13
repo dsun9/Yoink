@@ -19,6 +19,11 @@ typedef struct PPRetainedPresentation {
   bool visible, valid, visual_alpha;
   struct PPGifEntry *gif_entry;
   PPRect source_rect;
+  PPGrabArea *grab;
+  PPGrabRect *grab_rects;
+  size_t grab_count;
+  unsigned grab_axis;
+  double grab_density;
 } PPRetainedPresentation;
 typedef struct AnchorSurface {
   PPSurface *target, *preview;

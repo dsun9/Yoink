@@ -37,6 +37,11 @@ bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed
     *out=NULL;PPFrameSelection selected;
     if(!pp_item_snapshot_select_frame(snapshot,elapsed,1,&selected,error))return false;
     const PPItem *item=pp_item_snapshot_item(snapshot);struct PPGifEntry *entry=p->gif_entries;
+    const PPGrabArea *grab=NULL;
+#if defined(_WIN32)
+    PPAsset *asset=pp_asset_retain(p->assets,item->image_asset);grab=pp_asset_grab_area(asset,error);pp_asset_release(asset);
+    if(!grab)return false;
+#endif
     while(entry && (entry->revision!=selected.revision || memcmp(&entry->asset,&item->image_asset,sizeof(entry->asset))))entry=entry->next;
     if(!entry) {
         size_t bytes=(size_t)selected.frame->width*selected.frame->height*4;
@@ -48,6 +53,6 @@ bool pp_gif_acquire(PPAnchorPresenter *p,PPItemSnapshot *snapshot,double elapsed
     }
     entry->refs++;*out=entry;*next=selected.next_change;
     *source=(PPSourcePresentation){.frame=selected.frame,.content_id=pp_item_snapshot_content_id(snapshot),.source_revision=selected.revision,
-        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=entry->visual_alpha,.shared_texture=entry->texture};
+        .layout=pp_item_snapshot_size(snapshot),.visual_alpha=entry->visual_alpha,.shared_texture=entry->texture,.grab=grab};
     return true;
 }

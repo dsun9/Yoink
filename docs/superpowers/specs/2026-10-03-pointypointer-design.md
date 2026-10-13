@@ -20,9 +20,9 @@ Success requires all of the following:
 
 - PNG, animated GIF, static SVG, text, and emoji can be dragged from an anchor.
 - Placed sprites remain above ordinary application windows and move smoothly.
-- The native rectangle around a visible sprite intercepts mouse input, including
-  transparent padding, holes, rotated corners, and gaps between letters. Visual
-  alpha remains unchanged. Input outside that rectangle reaches windows below.
+- Windows sprite grab areas approximate the silhouette with bounded precision,
+  preserving visible artwork and passing input through sufficiently large holes,
+  padding and rotated corners. Animation input uses a stable union of frames.
 - Dragging between displays works with different display scales and desktop
   arrangements, including displays with negative desktop coordinates.
 - Opening a saved project works after the original imported files are moved.
@@ -68,11 +68,13 @@ mandatory dwell delay. Leaving the region and preview without dragging fades
 the preview away. Moving from the activation region onto the preview keeps it
 available. A disabled anchor or an empty list has no activation target.
 
-The small activation region deliberately accepts input to start a pull. The
-visible preview's native rectangle also accepts input, including transparent
-padding and interiors. Input outside both regions reaches its original target.
-Hidden, disabled, zero-opacity and entirely transparent previews cancel only
-their own accepted input and stop interception.
+The small activation region deliberately accepts input to start a pull. On
+Windows, the preview uses the same approximate grab area as a placed sprite;
+input outside that area and the activation target reaches its original target.
+Hidden, disabled, zero-opacity and wholly empty-source previews cancel only
+their own accepted input and stop interception. A GIF preview with a nonempty
+animation union stays interactive through blank frames. Cocoa keeps its
+rectangular preview behavior pending a native follow-up.
 
 ### 2.3 Creating and manipulating instances
 
@@ -132,38 +134,61 @@ Switching to a successfully loaded project clears the temporary scene and closes
 previews and drawers. A failed project load preserves the current project and
 scene. No scene restoration or scene persistence is included.
 
-## 3. Rectangular mouse routing
+## 3. Approximate sprite mouse routing
 
-The input region is the axis-aligned native window rectangle around the current
-rotated visual bounds. Interior holes, transparent padding, and empty rotated
-corners remain interactive while the source has visible alpha and opacity is
-nonzero. Visual alpha and antialiasing remain separate from input geometry.
-An entirely transparent source frame, opacity zero, hiding, presentation failure,
-or destruction removes interception and cancels capture.
+Windows placed sprites and anchor previews use conservative source-space region
+quadtrees with fixed maximum depth 7. Occupied leaves contain any nonzero source
+alpha; uniform blocks merge. Native projection includes linear-filter support
+and rounding margins, preserves visible artwork, and passes original input
+through sufficiently large transparent holes, padding and rotated corners.
+Small gaps and space near visible edges can remain interactive. Source-space
+precision is fixed, so this tolerance grows with displayed sprite size.
 
-For overlapping sprites, input targets the topmost visible sprite rectangle
-at that point. Clicking or beginning a drag on an instance brings it above other
+The final native region has at most 1024 sorted, nonoverlapping rectangles after
+rotation. Output coverage uses 64 cells per axis, conservatively coarsening to
+32 when necessary. Input rotation uses 0.05-degree steps with an angular envelope
+that contains the continuous visual pose. Unchanged final regions reuse the
+native publication without entering GDI. The source trees and cached native
+rectangle arrays share a separate 8 MiB cache budget including accepted/candidate
+overlap. Region geometry
+and accepted source ownership publish together; a protective memory rejection
+preserves the previous usable presentation.
+
+GIF input uses one union of all full composited frames, with disposal already
+resolved. The union remains interactive during wholly transparent frames and
+after finite playback stops. An animation with no visible alpha in any frame has
+an empty input region. Opacity zero, explicit hiding, presentation failure and
+destruction remove interception and cancel capture.
+
+For overlapping sprites, input targets the topmost native grab area at that
+point. Clicking or beginning a drag on an instance brings it above other
 PointyPointer sprites without activating the presentation overlay as a keyboard
 window.
 
 Pass-through means the underlying application receives the original input
 normally. Receiving and ignoring events in PointyPointer is insufficient.
 Synthetic click replay is not the normal input-routing mechanism. The first
-click after arriving inside or outside the rectangle must reach its owner correctly.
+click after arriving inside or outside the grab area must reach its owner correctly.
 
 After a left press starts a drag, maintain mouse capture through movement beyond
 the sprite, through transparent pixels, and across displays until release.
 Release capture on cancellation, loss of capture, instance destruction, or
-shutdown. Outside an active gesture, return immediately to rectangle routing.
+shutdown. A blank animation frame does not end the accepted drag. Outside an
+active gesture, return immediately to native grab-area routing. The same grab
+area governs double-click, right-click deletion and wheel gestures.
 
-Keep coverage only where a CPU consumer requires it. Native rectangle targeting
-does not require an alpha mask or synchronous GPU readback. The native adapter
-must provide original input passthrough outside the rectangle, including to other
+Prepare and cache the source quadtree outside input callbacks, without GPU
+readback. Translation reuses the window-local region; animation frame selection
+reuses its union. Pose geometry, density, canonical mapping and accepted artwork
+changes can reproject the shape. The native adapter must provide original input
+passthrough outside the grab area, including to other
 processes. A core hit query alone does not establish operating-system routing.
 
-Windows sprites and anchor previews implement this contract for PNG, GIF,
-bitmap text, scalable/mixed text and SVG. Cocoa represents the same bounds
-contract through its compatibility adapter. Native macOS runtime is unverified.
+This Windows contract covers PNG, GIF, bitmap text, scalable/mixed text and SVG.
+Cocoa retains its rectangular compatibility adapter and current empty-frame
+hiding/cancellation behavior until a separately validated follow-up. Native
+macOS runtime is unverified. See the accepted [issue #18 design](2026-10-12-approximate-grab-area.md)
+for the behavior choices and validation evidence.
 
 SDL documents window-shape updates as expensive. The implementation plan must
 start by validating the native presentation and input path with transparency,
@@ -199,7 +224,7 @@ not surfaces the application can promise to cover.
 | Component | Owns and exposes | Dependencies |
 | --- | --- | --- |
 | Core model | Projects, eight anchor lists, immutable item snapshots, temporary instances, validation | C standard library and small utility modules |
-| Interaction controller | Hover, press/drag/click state, scoped capture, wheel targets, drawer selection, rectangular hit queries | Core model, display coordinates, owned source alpha for anchor grabs |
+| Interaction controller | Hover, press/drag/click state, scoped capture, wheel targets, drawer selection, sprite grab-area queries | Core model, display coordinates, cached source grab areas |
 | Display manager | Display bounds and scaling, anchor positions, coordinate conversion, disconnect recovery | SDL display events and platform coordinate adapter |
 | Asset manager | Immutable source bytes, image/GIF decoding, canonical text/bitmap layout, source alpha and raster accounting | Selected media/font libraries |
 | Shared content owner | Consumer lifetimes, artwork/target cache, bounded worker admission and sole completion dispatch | App-owned assets; private immutable worker captures |
@@ -376,7 +401,8 @@ failure. Shutdown releases capture, closes windows, and releases resources.
 
 ### Core and storage checks
 
-- Canonical transformed bounds and rectangle ownership, including holes and rotated corners.
+- Canonical transformed bounds, conservative quadtree coverage, transparent
+  holes/corners, animation unions, complexity limits and candidate rejection.
 - Gesture transitions, double-click/drag separation, and capture cancellation.
 - Easing under fractional input and varying frame times.
 - Replacement invariants and independent default selection.
@@ -391,10 +417,11 @@ Verify with real underlying application windows, rather than core tests alone:
 
 - Startup, tray Settings/Quit, and continuing to run after settings closes.
 - All eight anchors on at least two displays, including a shared display edge.
-- Transparent padding, interior holes, rotated corners, and letter gaps receiving
-  the first click and wheel inside a visible sprite rectangle; original input
-  reaches the application outside it. Entirely transparent frames release input.
-- Correct stacking across overlapping sprite rectangles and UI windows.
+- Original first-click/wheel pass-through at sufficiently large padding, holes,
+  rotated corners and letter gaps; consistent mouse gestures in the grab area.
+  GIF unions retain interception/capture through blank frames; wholly empty
+  sources remove input.
+- Correct stacking across overlapping sprite grab areas and UI windows.
 - Rotation and size changes updating both visual and hit behavior.
 - Pointer capture through cross-display dragging, without keyboard-focus theft.
 - Mixed DPI, negative monitor coordinates, disconnect/reconnect, and resolution

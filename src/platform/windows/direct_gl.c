@@ -54,6 +54,29 @@ bool pp_surface_create_gl(PPSurface **out,PPError *error) {
 uint32_t pp_surface_window_id(const PPSurface *surface) {
     return surface && surface->gl_window?SDL_GetWindowID(surface->gl_window):0;
 }
+bool pp_surface_set_grab_region(PPSurface *surface,const PPGrabRegion *region,PPError *error) {
+    if(!surface||!surface->window||!IsWindow(surface->window))return fail(surface,error,PP_ERROR_PLATFORM,"Missing grab region window");
+    if(!region) {
+        if(!SetWindowRgn(surface->window,NULL,TRUE))return fail(surface,error,PP_ERROR_PLATFORM,"Cannot clear grab region");
+        return true;
+    }
+    if(region->count>PP_GRAB_RECT_LIMIT)return fail(surface,error,PP_ERROR_ARGUMENT,"Grab region exceeds native cap");
+    struct {RGNDATAHEADER header;RECT rects[PP_GRAB_RECT_LIMIT];} data={0};
+    data.header.dwSize=sizeof(RGNDATAHEADER);data.header.iType=RDH_RECTANGLES;
+    data.header.nCount=(DWORD)region->count;data.header.nRgnSize=(DWORD)(region->count*sizeof(RECT));
+    for(size_t i=0;i<region->count;i++) {
+        PPGrabRect r=region->rects[i];data.rects[i]=(RECT){r.left,r.top,r.right,r.bottom};
+        if(!i)data.header.rcBound=data.rects[i];
+        else {if(r.left<data.header.rcBound.left)data.header.rcBound.left=r.left;if(r.top<data.header.rcBound.top)data.header.rcBound.top=r.top;
+            if(r.right>data.header.rcBound.right)data.header.rcBound.right=r.right;if(r.bottom>data.header.rcBound.bottom)data.header.rcBound.bottom=r.bottom;}
+    }
+    HRGN candidate=region->count?ExtCreateRegion(NULL,sizeof(RGNDATAHEADER)+data.header.nRgnSize,(RGNDATA *)&data):CreateRectRgn(0,0,0,0);
+    if(!candidate)return fail(surface,error,PP_ERROR_PLATFORM,"Cannot allocate native grab region");
+    /* The presenter publishes its GL frame immediately after the region. A
+     * separate native paint invalidation needlessly discards compositor backing. */
+    if(!SetWindowRgn(surface->window,candidate,FALSE)){DeleteObject(candidate);return fail(surface,error,PP_ERROR_PLATFORM,"Cannot publish native grab region");}
+    surface->rectangular=false;return true;
+}
 bool pp_surface_place_gl(PPSurface *surface,PPRect bounds,bool interactive,PPError *error) {
     if(!surface || !surface->gl_window || !IsWindow(surface->window) ||
         !isfinite(bounds.x) || !isfinite(bounds.y) || bounds.x<-2147483647.0 || bounds.x>2147483647.0 ||

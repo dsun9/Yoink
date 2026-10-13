@@ -121,6 +121,7 @@ PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRendere
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++direct_window_serial;return true;}
 uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
 bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive && capture_owner==s)capture_owner=NULL;return true;}
+bool pp_surface_set_grab_region(PPSurface *s,const PPGrabRegion *r,PPError *error) {(void)s;(void)r;(void)error;return true;}
 void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
 void pp_surface_inherit_order(PPSurface *s,PPSurface *old) {(void)s;(void)old;}
 bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
