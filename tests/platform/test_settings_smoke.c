@@ -591,8 +591,10 @@ static void hidden_key(PPKey key, unsigned modifiers) {
 static void hidden_click(const char *id) {
   PPRect bounds;
   if (!pp_ui_control_rect(settings->backend, id, &bounds))
-    fprintf(stderr, "Missing hidden control %s, page=%d failed=%d invalid=%d controls=%zu\n",
-            id, settings->page, settings->failed, pp_settings_invalid(settings), settings->backend->control_count);
+    fprintf(stderr, "Missing hidden control %s, page=%d failed=%d invalid=%d controls=%zu popup=%llu modal=%d transition=%d remove=%d\n",
+            id, settings->page, settings->failed, pp_settings_invalid(settings), settings->backend->control_count,
+            (unsigned long long)settings->backend->popup_id, settings->backend->modal,
+            pp_app_ui(app)->transition_pending, settings->remove_confirmation);
   CHECK(pp_ui_control_rect(settings->backend, id, &bounds));
   PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE,
                            .window_id = pp_settings_window_id(settings),
@@ -604,6 +606,16 @@ static void hidden_click(const char *id) {
   pp_settings_event(settings, &event);
   event.kind = PP_EVENT_BUTTON_UP;
   pp_settings_event(settings, &event);
+}
+static void hidden_hover(const char *id) {
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, id, &bounds));
+  PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE,
+      .window_id = pp_settings_window_id(settings),
+      .window_point = {(bounds.x + bounds.w / 2) * settings->backend->window_scale,
+                       (bounds.y + bounds.h / 2) * settings->backend->window_scale}};
+  pp_settings_event(settings, &event);
+  pp_settings_draw(settings);
 }
 static void hidden_project_action(bool button, bool save) {
   if (button)
@@ -626,6 +638,250 @@ static void hidden_settle(void) {
     pp_settings_draw(settings);
     CHECK(!settings->failed);
   }
+}
+static void hidden_position_picker(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  hidden_settle();
+  const char *names[] = {"Top left", "Top center", "Top right", "Center left",
+                         "Center right", "Bottom left", "Bottom center", "Bottom right"};
+  PPRect positions[8];
+  for (int anchor = 0; anchor < 8; anchor++) {
+    char id[32];
+    snprintf(id, sizeof(id), "anchor-%d", anchor);
+    CHECK(pp_ui_control_rect(settings->backend, id, &positions[anchor]));
+    pp_ui_focus(settings->backend, id); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, names[anchor]));
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    CHECK(pp_app_ui(app)->anchor == anchor);
+    const PPAnchorList *list = pp_project_anchor(pp_app_project(app), (PPAnchor)anchor);
+    uint64_t selected = pp_app_ui(app)->selected_item, default_id = list->default_id;
+    bool enabled = list->enabled;
+    hidden_click("anchor-enabled"); hidden_settle();
+    list = pp_project_anchor(pp_app_project(app), (PPAnchor)anchor);
+    CHECK(list->enabled == !enabled && list->default_id == default_id &&
+          pp_app_ui(app)->selected_item == selected);
+    hidden_click("anchor-enabled"); hidden_settle();
+    CHECK(pp_project_anchor(pp_app_project(app), (PPAnchor)anchor)->enabled == enabled);
+    PPPlatformEvent hover = {.kind = PP_EVENT_POINTER_MOVE,
+        .window_id = pp_settings_window_id(settings),
+        .window_point = {(positions[anchor].x + positions[anchor].w / 2) * settings->backend->window_scale,
+                         (positions[anchor].y + positions[anchor].h / 2) * settings->backend->window_scale}};
+    pp_settings_event(settings, &hover); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, names[anchor]));
+  }
+  CHECK(positions[0].y == positions[1].y && positions[1].y == positions[2].y);
+  CHECK(positions[3].y == positions[4].y && positions[5].y == positions[6].y && positions[6].y == positions[7].y);
+  CHECK(positions[0].x == positions[3].x && positions[3].x == positions[5].x);
+  CHECK(positions[2].x == positions[4].x && positions[4].x == positions[7].x);
+  CHECK(positions[0].w == positions[1].w && positions[1].w == positions[2].w);
+  CHECK(positions[0].x + positions[0].w < positions[1].x && positions[1].x + positions[1].w < positions[2].x);
+  CHECK(positions[0].y + positions[0].h < positions[3].y && positions[3].y + positions[3].h < positions[5].y);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS spatial picker focus/hover help, regular grid and per-anchor enabled switch.");
+}
+static void hidden_targeted_row_actions(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t original = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+  uint64_t other = pp_app_ui(app)->selected_item;
+  PPItem edited = *pp_project_item(pp_app_project(app), other);
+  edited.text = "Second item";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM, .item_id = other, .item = &edited}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+  create_settings(1, true); hidden_settle();
+  char row[48], make_default[48], remove[48];
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)other);
+  snprintf(make_default, sizeof(make_default), "item-default-%llu", (unsigned long long)other);
+  snprintf(remove, sizeof(remove), "item-delete-%llu", (unsigned long long)other);
+  PPRect before, after, unused;
+  CHECK(pp_ui_control_rect(settings->backend, row, &before));
+  CHECK(!pp_ui_control_rect(settings->backend, "make-default", &unused));
+  CHECK(!pp_ui_control_rect(settings->backend, "remove-item", &unused));
+  pp_ui_focus(settings->backend, row); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, make_default, &unused));
+  CHECK(pp_ui_control_rect(settings->backend, remove, &unused));
+  CHECK(pp_ui_control_rect(settings->backend, row, &after));
+  CHECK(!memcmp(&before, &after, sizeof(before)));
+  hidden_hover("tab-items"); hidden_settle();
+  CHECK(!pp_ui_control_rect(settings->backend, make_default, &unused));
+  hidden_hover(row); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, make_default, &unused));
+  hidden_hover(make_default); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, remove, &unused));
+  CHECK(pp_app_ui(app)->selected_item == original);
+  hidden_click(make_default); hidden_settle();
+  CHECK(pp_app_ui(app)->selected_item == original &&
+        pp_project_anchor(pp_app_project(app), anchor)->default_id == other);
+  hidden_click(row); hidden_settle();
+  CHECK(pp_app_ui(app)->selected_item == other &&
+        pp_project_anchor(pp_app_project(app), anchor)->default_id == other);
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+  hidden_settle();
+  pp_ui_focus(settings->backend, remove); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->remove_confirmation && pp_app_ui(app)->selected_item == original);
+  hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
+  CHECK(!settings->remove_confirmation && pp_project_item(pp_app_project(app), other));
+  pp_ui_focus(settings->backend, remove); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->remove_confirmation && pp_app_ui(app)->selected_item == original);
+  PPItemSnapshot *placed = pp_project_snapshot(pp_app_project(app), other);
+  CHECK(placed);
+  uint64_t sprite;
+  CHECK(pp_scene_spawn_snapshot(pp_app_scene(app), placed, anchor, (PPVec2){500, 400}, 17, &sprite, &error));
+  hidden_click("remove-confirm"); hidden_settle();
+  CHECK(!settings->remove_confirmation && !pp_project_item(pp_app_project(app), other) &&
+        pp_project_item(pp_app_project(app), original) && pp_app_ui(app)->selected_item == original);
+  CHECK(!strcmp(pp_item_snapshot_item(placed)->text, "Second item"));
+  CHECK(!strcmp(pp_item_snapshot_item(pp_scene_get(pp_app_scene(app), sprite)->snapshot)->text, "Second item"));
+  pp_item_snapshot_release(placed);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS row default/delete target stable identity without selecting it; selection, cancel and retained snapshots stay independent.");
+}
+static bool captured_colored_artwork(const char *name, PPRect row) {
+  char path[MAX_PATH];
+  snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", name);
+  SDL_Surface *surface = SDL_LoadBMP(path);
+  CHECK(surface);
+  bool colored = false;
+  for (double y = row.y + 5; y < row.y + row.h - 5; y++) {
+    for (double x = row.x + 5; x < row.x + 37; x++) {
+      Uint8 r, g, b, a;
+      CHECK(SDL_ReadSurfacePixel(surface, (int)(x * surface->w / settings->backend->width),
+          (int)(y * surface->h / settings->backend->height), &r, &g, &b, &a));
+      colored = colored || (r > g + 40 && r > b + 40) || (g > b + 40 && r > b + 40);
+    }
+  }
+  SDL_DestroySurface(surface);
+  return colored;
+}
+static void hidden_actual_row_thumbnails(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t text = pp_app_ui(app)->selected_item;
+  PPItem edited = *pp_project_item(pp_app_project(app), text);
+  edited.text = "Launch \xF0\x9F\x9A\x80";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM, .item_id = text, .item = &edited}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_IMAGE, .anchor = anchor,
+      .path = PP_MEDIA_FIXTURES "/alpha.png"}, &error));
+  uint64_t image = pp_app_ui(app)->selected_item;
+  create_settings(1, true); pump(200);
+  char row[48]; PPRect bounds;
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)image);
+  CHECK(pp_ui_control_rect(settings->backend, row, &bounds));
+  pp_ui_focus(settings->backend, "tab-items"); hidden_settle();
+  capture("ticket24-actual-thumbnails");
+  CHECK(captured_colored_artwork("ticket24-actual-thumbnails", bounds));
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)text);
+  hidden_click(row); hidden_settle();
+  CHECK(!strcmp(settings->editor.text, "Launch \xF0\x9F\x9A\x80"));
+  CHECK(!strcmp(pp_project_item(pp_app_project(app), text)->text, "Launch \xF0\x9F\x9A\x80"));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS actual image artwork in item row and full Unicode retained in editor/project.");
+}
+static void hidden_row_roundtrip(void) {
+  snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/ticket24-rows-%lu.pointy", GetCurrentProcessId());
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t original = pp_app_ui(app)->selected_item;
+  create_settings(1, true);
+  controlled_dialog = true;
+  const char *media[] = {PP_MEDIA_FIXTURES "/alpha.png", PP_MEDIA_FIXTURES "/changing-alpha.gif", PP_MEDIA_FIXTURES "/menu-triangle.svg"};
+  uint64_t imported[3];
+  for (int i = 0; i < 3; i++) {
+    pp_ui_focus(settings->backend, "add-image"); hidden_settle();
+    hidden_click("add-image"); pp_settings_draw(settings);
+    CHECK(settings->dialog_pending);
+    finish_controlled_dialog(media[i]); hidden_settle();
+    imported[i] = pp_app_ui(app)->selected_item;
+    CHECK(imported[i] != original && pp_project_item(pp_app_project(app), imported[i])->kind == PP_ITEM_IMAGE);
+  }
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+  char action[48];
+  snprintf(action, sizeof(action), "item-default-%llu", (unsigned long long)imported[1]);
+  pp_ui_focus(settings->backend, action); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_project_anchor(pp_app_project(app), anchor)->default_id == imported[1] && pp_app_ui(app)->selected_item == original);
+  pp_ui_focus(settings->backend, "anchor-enabled"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  pp_ui_focus(settings->backend, "save-as"); hidden_settle();
+  hidden_click("save-as"); pp_settings_draw(settings);
+  CHECK(settings->dialog_pending);
+  finish_controlled_dialog(package); hidden_settle();
+  CHECK(!pp_app_dirty(app));
+  hidden_click("open"); pp_settings_draw(settings);
+  CHECK(settings->dialog_pending);
+  finish_controlled_dialog(package); hidden_settle();
+  const PPAnchorList *list = pp_project_anchor(pp_app_project(app), anchor);
+  CHECK(!list->enabled && list->count == 4 && list->default_id == imported[1]);
+  CHECK(list->item_ids[0] == original && list->item_ids[1] == imported[0] &&
+        list->item_ids[2] == imported[1] && list->item_ids[3] == imported[2]);
+  controlled_dialog = false;
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  puts("PASS row default/enabled/media results survive Settings save/open with PNG/GIF/SVG support.");
+}
+static void hidden_item_row_captures(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t first = pp_app_ui(app)->selected_item;
+  PPItem edited = *pp_project_item(pp_app_project(app), first);
+  edited.text = "Preparation notes with a long label that must keep the actions in place";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM, .item_id = first, .item = &edited}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+  uint64_t emoji = pp_app_ui(app)->selected_item;
+  edited = *pp_project_item(pp_app_project(app), emoji); edited.text = "\xF0\x9F\x91\x89 \xF0\x9F\x91\xA9\xE2\x80\x8D\xF0\x9F\x92\xBB";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM, .item_id = emoji, .item = &edited}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_IMAGE, .anchor = anchor, .path = PP_MEDIA_FIXTURES "/alpha.png"}, &error));
+  for (int i = 0; i < 10; i++) CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+  uint64_t last = pp_app_ui(app)->selected_item;
+  const float scales[] = {1, 1.5f, 2};
+  const int widths[] = {1040, 640, 700}, heights[] = {780, 480, 600};
+  const char *sizes[] = {"ordinary", "minimum", "narrow"};
+  for (int density = 0; density < 3; density++) {
+    create_settings(scales[density], true);
+    for (int size = 0; size < 3; size++) {
+      CHECK(SDL_SetWindowSize(settings->backend->window, (int)(widths[size] * settings->backend->window_scale),
+                              (int)(heights[size] * settings->backend->window_scale)));
+      pump(30); hidden_settle();
+      char id[48], name[128];
+      hidden_hover("tab-items");
+      pp_ui_focus(settings->backend, "anchor-0"); hidden_settle();
+      snprintf(name, sizeof(name), "ticket24-picker-%s-%d", sizes[size], (int)(scales[density] * 100)); capture(name);
+      snprintf(id, sizeof(id), "item-%llu", (unsigned long long)first);
+      pp_ui_focus(settings->backend, id); hidden_settle();
+      snprintf(name, sizeof(name), "ticket24-rows-focus-%s-%d", sizes[size], (int)(scales[density] * 100)); capture(name);
+      hidden_hover(id); hidden_settle();
+      snprintf(name, sizeof(name), "ticket24-rows-hover-%s-%d", sizes[size], (int)(scales[density] * 100)); capture(name);
+      snprintf(id, sizeof(id), "item-delete-%llu", (unsigned long long)last);
+      pp_ui_focus(settings->backend, id); hidden_settle();
+      PPRect action;
+      CHECK(pp_ui_control_rect(settings->backend, id, &action));
+      CHECK(action.y >= 90 && action.y + action.h <= settings->backend->height - 100);
+      snprintf(name, sizeof(name), "ticket24-rows-long-focus-%s-%d", sizes[size], (int)(scales[density] * 100)); capture(name);
+      pp_ui_focus(settings->backend, "anchor-1"); hidden_settle();
+      hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+      CHECK(pp_app_ui(app)->anchor == PP_ANCHOR_TOP_CENTER);
+      const PPAnchorList *empty = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_CENTER);
+      if (empty->count) CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_REMOVE_ITEM,
+          .anchor = PP_ANCHOR_TOP_CENTER, .item_id = empty->item_ids[0]}, &error));
+      pp_ui_focus(settings->backend, "add-text"); hidden_settle();
+      snprintf(name, sizeof(name), "ticket24-rows-empty-%s-%d", sizes[size], (int)(scales[density] * 100)); capture(name);
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ANCHOR, .anchor = anchor}, &error)); hidden_settle();
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS long/empty and text/emoji/image rows with hover/focus at ordinary/minimum/narrow sizes and 100/150/200% controlled scale.");
 }
 static void hidden_retained_editor_actions(void) {
   PPAppOptions options = {"", false};
@@ -666,6 +922,13 @@ static void hidden_retained_editor_actions(void) {
       pump(30);
       hidden_key(PP_KEY_A, PP_MOD_CONTROL);
       pp_settings_draw(settings);
+      char remove_id[48];
+      snprintf(remove_id, sizeof(remove_id), "item-delete-%llu", (unsigned long long)original_item);
+      if (action == 5) {
+        char row_id[48];
+        snprintf(row_id, sizeof(row_id), "item-%llu", (unsigned long long)original_item);
+        hidden_hover(row_id);
+      }
       size_t item_count = pp_project_anchor(pp_app_project(app), original_anchor)->count;
       hidden_text(invalid ? "0" : "After");
       if (action == 0) {
@@ -681,7 +944,7 @@ static void hidden_retained_editor_actions(void) {
         snprintf(id, sizeof(id), "item-%llu", (unsigned long long)other_item);
         hidden_click(id);
       } else
-        hidden_click(action == 4 ? "add-text" : "remove-item");
+        hidden_click(action == 4 ? "add-text" : remove_id);
       pp_settings_draw(settings);
       CHECK(!settings->failed && !settings->dialog_pending);
       const PPItem *edited = pp_project_item(pp_app_project(app), original_item);
@@ -1144,8 +1407,14 @@ static void hidden_batched_list_mutations(void) {
       pp_ui_focus(settings->backend, "item-size"); pump(30);
       hidden_settle();
       hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+      char default_id[48];
+      snprintf(default_id, sizeof(default_id), "item-default-%llu", (unsigned long long)original);
+      if (action) {
+        char row_id[48]; snprintf(row_id, sizeof(row_id), "item-%llu", (unsigned long long)original);
+        hidden_hover(row_id);
+      }
       hidden_text(invalid ? "0" : "120");
-      hidden_click(action ? "make-default" : "move-down"); pp_settings_draw(settings);
+      hidden_click(action ? default_id : "move-down"); pp_settings_draw(settings);
       const PPAnchorList *list = pp_project_anchor(pp_app_project(app), anchor);
       CHECK(list->item_ids[0] == (!action && !invalid ? other : original));
       CHECK(list->default_id == (action && !invalid ? original : other));
@@ -1190,12 +1459,12 @@ static void hidden_navigation_guards(void) {
   CHECK(settings->backend->popup_id);
   hidden_click("tab-interaction"); pp_settings_draw(settings);
   CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
-  hidden_key(PP_KEY_ESCAPE, 0); pump(30);
+  hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
   hidden_click("new"); pp_settings_draw(settings);
   CHECK(pp_app_ui(app)->transition_pending);
   hidden_key(PP_KEY_TAB, 0); pp_settings_draw(settings);
   CHECK(!pp_ui_focused(settings->backend, "tab-interaction"));
-  hidden_key(PP_KEY_ESCAPE, 0); pump(30);
+  hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
   CHECK(!pp_app_ui(app)->transition_pending);
   hidden_click("tab-interaction"); pp_settings_draw(settings);
   CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
@@ -1560,6 +1829,11 @@ static void hidden_toolbar_state_captures(void) {
   puts("PASS toolbar action focus/hover/disabled/error states on both pages at ordinary/minimum/narrow sizes and 100/150/200% controlled scale.");
 }
 static void render_only(void) {
+  hidden_position_picker();
+  hidden_targeted_row_actions();
+  hidden_actual_row_thumbnails();
+  hidden_row_roundtrip();
+  hidden_item_row_captures();
   hidden_compact_toolbar();
   hidden_project_composition_guard();
   hidden_toolbar_name_roundtrip();
@@ -1762,6 +2036,23 @@ static void desktop_smoke(void) {
   click_control("add-image");
   choose_file(PP_MEDIA_FIXTURES "/alpha.png");
   CHECK(pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->count == 2);
+  uint64_t imported_image = pp_app_ui(app)->selected_item;
+  uint64_t text_item = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->item_ids[0];
+  char row_id[48], default_id[48], delete_id[48];
+  snprintf(row_id, sizeof(row_id), "item-%llu", (unsigned long long)text_item);
+  click_control(row_id);
+  CHECK(pp_app_ui(app)->selected_item == text_item &&
+        pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->default_id == text_item);
+  snprintf(default_id, sizeof(default_id), "item-default-%llu", (unsigned long long)imported_image);
+  click_control(default_id);
+  CHECK(pp_app_ui(app)->selected_item == text_item &&
+        pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->default_id == imported_image);
+  snprintf(delete_id, sizeof(delete_id), "item-delete-%llu", (unsigned long long)imported_image);
+  click_control(delete_id);
+  CHECK(settings->remove_confirmation && pp_app_ui(app)->selected_item == text_item);
+  key(VK_ESCAPE);
+  wait_restored_focus(delete_id);
+  CHECK(!settings->remove_confirmation && pp_project_item(pp_app_project(app), imported_image));
   click_control("save-as");
   choose_file(package);
   CHECK(!pp_app_dirty(app) && !strcmp(pp_app_path(app), package));
@@ -1769,6 +2060,7 @@ static void desktop_smoke(void) {
   click_control("open");
   choose_file(package);
   CHECK(pp_app_generation(app) == generation + 1 && !pp_app_dirty(app));
+  CHECK(pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->default_id == imported_image);
   capture("task8-settings-100");
   replace_field("project-name", L"Unsaved presentation");
   focus_diagnostic = true;
@@ -1867,7 +2159,7 @@ int main(int argc, char **argv) {
       dialog_diagnostic || caption_diagnostic ||
       (argc == 2 && !strcmp(argv[1], "--desktop"));
   CHECK(argc == 2 &&
-        (desktop_run || manual_font || !strcmp(argv[1], "--render-only")));
+        (desktop_run || manual_font || !strcmp(argv[1], "--render-only") || !strcmp(argv[1], "--items-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -1875,6 +2167,15 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--items-only")) {
+    hidden_position_picker();
+    hidden_targeted_row_actions();
+    hidden_actual_row_thumbnails();
+    hidden_row_roundtrip();
+    hidden_item_row_captures();
+    hidden_batched_list_mutations();
+    hidden_navigation_guards();
+  }
   else
     render_only();
   if (caption_diagnostic)

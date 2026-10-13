@@ -110,9 +110,9 @@ design now includes these requirements:
   Revert fields action discards invalid drafts and reloads the current project
   values. It does not undo committed project edits.
 
-The shared theme, toolbar and page navigation below describe the current
-implementation. Position, list, editor and replacement-row changes have their
-own follow-up tickets. The visual reference is `Ref/BongoCat/src/ui/theme/` and
+The shared theme, toolbar, page navigation, position picker and item rows below
+describe the current implementation. Reorder, editor and replacement-row
+changes have their own follow-up tickets. The visual reference is `Ref/BongoCat/src/ui/theme/` and
 its preferences widgets.
 
 ## Overview
@@ -222,6 +222,26 @@ rows are 36 logical units; section headings keep the system semibold font and
 utility text uses 14 units. Empty shared errors reserve no row, and errors use
 the separate danger token. Density scales the existing native font atlas,
 hit targets and drawing together.
+
+The position picker uses equal cells around a noninteractive monitor. Full
+position names appear on hover and keyboard focus; the selected name remains
+below the grid. Its Enabled switch changes that anchor list alone. Item rows
+are 44 logical units high, with a 32-unit actual-content thumbnail, a derived
+label and reserved Default/Delete button space. Text labels collapse whitespace
+and identify unsupported control-atlas glyphs by codepoint; the editor and
+thumbnail retain the original Unicode. Image labels use their stable item ID
+and never add a persisted naming field. Long labels shorten with an ellipsis
+and expose their derived label on hover/focus.
+
+The filled star identifies the default continuously. Row selection changes
+the item being edited; Default and Delete retain that row's stable identity
+without selecting it. The confirmation keeps the intended anchor/item/project
+generation through validation and cancellation. Add text and Add image remain
+below the bounded list. Move up/down remain until the reorder follow-up.
+Rows remain in keyboard traversal when their group starts below the outer
+viewport, and focus reveals them through both scroll owners. Their thumbnails
+reuse retained, context-local preview consumers, sample GIF frame zero and
+release unused textures after the queued frame completes.
 
 No field change commits during IME composition. Edits affect future pulls; the
 preview reflects valid current edits. Save means a successful package write.

@@ -8,6 +8,101 @@
 static const char *anchor_names[PP_ANCHOR_COUNT] = {
     "Top left",     "Top center",  "Top right",     "Center left",
     "Center right", "Bottom left", "Bottom center", "Bottom right"};
+static void release_row_thumbnails(PPSettings *settings, bool all) {
+  for (size_t i = 0; i < 8; i++) {
+    if (all || !settings->row_thumbnail_used[i]) {
+      pp_ui_preview_release(&settings->row_thumbnails[i]);
+      settings->row_thumbnail_ids[i] = 0;
+    }
+  }
+}
+static void row_label(PPUIBackend *ui, const PPItem *item, char *label, size_t capacity) {
+  if (item->kind == PP_ITEM_IMAGE) {
+    snprintf(label, capacity, "Image %llu", (unsigned long long)item->id);
+    return;
+  }
+  size_t length = 0;
+  label[0] = 0;
+  for (const char *p = item->text; p && *p && length + 12 < capacity;) {
+    nk_rune rune;
+    int used = nk_utf_decode(p, &rune, (int)strlen(p));
+    if (used <= 0) break;
+    const struct nk_font_glyph *glyph = nk_font_find_glyph(ui->body_font, rune);
+    if (rune <= ' ') {
+      if (length && label[length - 1] != ' ') label[length++] = ' ';
+    } else if (glyph && glyph->codepoint == rune) {
+      memcpy(label + length, p, (size_t)used);
+      length += (size_t)used;
+    } else {
+      length += (size_t)snprintf(label + length, capacity - length, "U+%04X", (unsigned)rune);
+    }
+    p += used;
+  }
+  while (length && label[length - 1] == ' ') length--;
+  label[length] = 0;
+  if (!length) snprintf(label, capacity, "Text %llu", (unsigned long long)item->id);
+}
+static void row_thumbnail(PPSettings *settings, const PPItem *item, struct nk_rect bounds) {
+  PPUIBackend *ui = settings->backend;
+  struct nk_rect clip = ui->context.current->layout->clip;
+  if (bounds.y + bounds.h <= clip.y || bounds.y >= clip.y + clip.h ||
+      bounds.x + bounds.w <= clip.x || bounds.x >= clip.x + clip.w)
+    return;
+  size_t slot = 8;
+  for (size_t i = 0; i < 8; i++)
+    if (settings->row_thumbnail_ids[i] == item->id) { slot = i; break; }
+  if (slot == 8) {
+    for (size_t i = 0; i < 8; i++)
+      if (!settings->row_thumbnail_ids[i]) { slot = i; break; }
+  }
+  if (slot == 8) {
+    for (size_t i = 0; i < 8; i++)
+      if (!settings->row_thumbnail_used[i]) { slot = i; break; }
+  }
+  if (slot == 8) return;
+  /* A slot referenced by this frame is never recycled. Unused consumers are
+   * released only after the queued Nuklear frame finishes. */
+  settings->row_thumbnail_used[slot] = true;
+  settings->row_thumbnail_ids[slot] = item->id;
+  PPUIContentPreview *preview = &settings->row_thumbnails[slot];
+  PPItemSnapshot *snapshot = pp_project_snapshot(pp_app_project(settings->app), item->id);
+  PPError error = {0}; double next;
+  if (!pp_ui_preview_update(ui, settings->app, preview, snapshot, 32, 0, 1,
+                            ui->scale, 0, &next, &error))
+    snprintf(settings->status, sizeof(settings->status), "Thumbnail: %.490s", error.message);
+  pp_item_snapshot_release(snapshot);
+  if (preview->texture && preview->width && preview->height) {
+    float factor = fminf(bounds.w / preview->width, bounds.h / preview->height);
+    float width = preview->width * factor, height = preview->height * factor;
+    nk_draw_image(nk_window_get_canvas(&ui->context),
+        nk_rect(bounds.x + (bounds.w - width) / 2, bounds.y + (bounds.h - height) / 2, width, height),
+        &(struct nk_image){.handle = nk_handle_id((int)preview->texture)}, nk_rgba(255, 255, 255, 255));
+  }
+}
+static void row_content(PPSettings *settings, const PPItem *item, const char *label,
+                        struct nk_rect bounds, bool selected) {
+  PPUIBackend *ui = settings->backend;
+  row_thumbnail(settings, item, nk_rect(bounds.x + 5, bounds.y + 6, 32, 32));
+  struct nk_user_font *font = &ui->utility_font->handle;
+  struct nk_rect text = nk_rect(bounds.x + 44, bounds.y + (bounds.h - font->height) / 2,
+                                fmaxf(0, bounds.w - 50), font->height);
+  char display[128];
+  snprintf(display, sizeof(display), "%s", label);
+  int length = (int)strlen(label);
+  bool truncated = font->width(font->userdata, font->height, label, length) > text.w;
+  float suffix_width = truncated ? font->width(font->userdata, font->height, "...", 3) : 0;
+  while (length && font->width(font->userdata, font->height, label, length) + suffix_width > text.w) {
+    length--;
+    while (length && ((unsigned char)label[length] & 0xc0) == 0x80) length--;
+  }
+  if (truncated && text.w >= suffix_width) {
+    memcpy(display + length, "...", 4);
+    length += 3;
+  }
+  nk_draw_text(nk_window_get_canvas(&ui->context), text, display, length, font,
+               selected ? pp_ui_theme.selection : pp_ui_theme.field,
+               selected ? pp_ui_theme.accent_hover : pp_ui_theme.ink);
+}
 bool pp_settings_invalid(const PPSettings *settings) {
   return settings->backend->composing || settings->name_error[0] ||
          settings->interaction_error[0] || settings->editor.content_error[0] ||
@@ -90,6 +185,8 @@ void pp_settings_close(PPSettings *settings) {
   pp_ui_shaped_suspend(settings->backend);
   if (!settings->rendering)
     pp_item_editor_release_preview(settings);
+  if (!settings->rendering)
+    release_row_thumbnails(settings, true);
 }
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (!settings || !event ||
@@ -135,23 +232,14 @@ static void anchor_selector(PPSettings *settings) {
       if (anchor < 0) {
         struct nk_rect rect;
         nk_widget(&rect, ctx);
-        nk_stroke_rect(nk_window_get_canvas(ctx), rect, 4, 2,
-                       pp_ui_theme.muted);
-        struct nk_user_font *font = &ui->utility_font->handle;
-        float label_width =
-            font->width(font->userdata, font->height, "Display", 7);
-        struct nk_rect label = nk_rect(rect.x + (rect.w - label_width) / 2,
-                                       rect.y + (rect.h - font->height) / 2,
-                                       label_width, font->height);
-        nk_draw_text(nk_window_get_canvas(ctx), label, "Display", 7, font,
-                     pp_ui_theme.canvas, pp_ui_theme.muted);
+        pp_ui_draw_icon(nk_window_get_canvas(ctx), rect, PP_UI_ICON_MONITOR,
+                         pp_ui_theme.muted);
       } else {
         char id[32];
         snprintf(id, sizeof(id), "anchor-%d", anchor);
-        const char *short_names[] = {"Top L", "Top",      "Top R",  "Left",
-                                     "Right", "Bottom L", "Bottom", "Bottom R"};
-        if (pp_ui_select(ui, id, short_names[anchor], selected == anchor,
-                         enabled))
+        if (pp_ui_icon_button(ui, id, (PPUIIcon)(PP_UI_ICON_NORTHWEST + anchor),
+                              anchor_names[anchor], anchor_names[anchor],
+                              enabled, selected == anchor))
           pp_settings_command(settings,
                               (PPCommand){.kind = PP_COMMAND_SELECT_ANCHOR,
                                           .anchor = (PPAnchor)anchor});
@@ -164,13 +252,11 @@ static void anchor_selector(PPSettings *settings) {
   nk_layout_row_dynamic(ctx, 28, 1);
   nk_label(ctx, anchor_names[selected], NK_TEXT_LEFT);
   nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-  if (pp_ui_button(ui, "anchor-enabled",
-                   list->enabled ? "Enabled  /  click to disable"
-                                 : "Disabled  /  click to enable",
-                   enabled))
+  bool list_enabled = list->enabled;
+  if (pp_ui_switch(ui, "anchor-enabled", "Enabled", &list_enabled, enabled))
     pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SET_ENABLED,
                                               .anchor = selected,
-                                              .enabled = !list->enabled});
+                                              .enabled = list_enabled});
 }
 static void ordered_items(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
@@ -211,7 +297,18 @@ static void ordered_items(PPSettings *settings) {
   nk_layout_row_dynamic(ctx, 180, 1);
   struct nk_rect list_viewport = nk_widget_bounds(ctx);
   size_t first_control = ui->control_count;
-  if (nk_group_begin(ctx, "anchor-items", NK_WINDOW_BORDER)) {
+  struct nk_rect parent_clip = ctx->current->layout->clip;
+  bool offscreen = list_viewport.y >= parent_clip.y + parent_clip.h ||
+                   list_viewport.y + list_viewport.h <= parent_clip.y;
+  nk_flags group_flags = NK_WINDOW_BORDER |
+                         (ctx->current->layout->flags & (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT));
+  /* Nuklear skips fully clipped groups, which would remove every row from the
+   * keyboard registry. MOVABLE bypasses that early return, and ROM prevents
+   * movement during begin. Restore the intended flags before drawing widgets;
+   * the group retains its actual clipped viewport and pointer eligibility. */
+  if (nk_group_begin(ctx, "anchor-items", group_flags |
+                            (offscreen ? NK_WINDOW_MOVABLE | NK_WINDOW_ROM : 0))) {
+    ctx->current->layout->flags = group_flags;
     if (!list->count) {
       nk_layout_row_dynamic(ctx, 48, 1);
       nk_label_wrap(ctx, "No items. Add text or import an image below.");
@@ -219,17 +316,54 @@ static void ordered_items(PPSettings *settings) {
     for (size_t i = 0; i < list->count; i++) {
       const PPItem *item =
           pp_project_item(pp_app_project(settings->app), list->item_ids[i]);
-      char label[128], id[48];
-      snprintf(label, sizeof(label), "%zu. %s%s", i + 1,
-               item->kind == PP_ITEM_TEXT ? "Text / emoji" : "Image",
-               item->id == list->default_id ? "  [Default]" : "");
+      char label[128], id[48], default_id[48], delete_id[48];
+      row_label(ui, item, label, sizeof(label));
       snprintf(id, sizeof(id), "item-%llu", (unsigned long long)item->id);
-      nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-      if (pp_ui_select(ui, id, label, item->id == state->selected_item,
+      snprintf(default_id, sizeof(default_id), "item-default-%llu", (unsigned long long)item->id);
+      snprintf(delete_id, sizeof(delete_id), "item-delete-%llu", (unsigned long long)item->id);
+      float width = nk_window_get_content_region(ctx).w;
+      float widths[] = {fmaxf(40, width - 56 - 2 * ctx->style.window.spacing.x), 28, 28};
+      nk_layout_row(ctx, NK_STATIC, 44, 3, widths);
+      struct nk_rect row = nk_widget_bounds(ctx);
+      struct nk_rect content = row;
+      row.w = width;
+      bool actions = (nk_input_is_mouse_hovering_rect(&ctx->input, row) &&
+                      nk_input_is_mouse_hovering_rect(&ctx->input, ctx->current->layout->clip)) ||
+                     (ui->keyboard_focus && (pp_ui_focused(ui, id) ||
+                      pp_ui_focused(ui, default_id) || pp_ui_focused(ui, delete_id)));
+      if (pp_ui_select(ui, id, "", item->id == state->selected_item,
                        enabled))
         pp_settings_command(
             settings,
             (PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = item->id});
+      if (ui->control_count)
+        snprintf(ui->controls[ui->control_count - 1].label, sizeof(ui->controls[0].label), "%s", label);
+      row_content(settings, item, label, content, item->id == state->selected_item);
+      if (content.y >= ctx->current->layout->clip.y &&
+          content.y + content.h <= ctx->current->layout->clip.y + ctx->current->layout->clip.h)
+        pp_ui_tooltip(ui, content, id, label);
+      if (actions) {
+        if (pp_ui_icon_button(ui, default_id, item->id == list->default_id ? PP_UI_ICON_STAR : PP_UI_ICON_STAR_OUTLINE,
+                              "Default", "Default for future pulls", enabled, false))
+          pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SET_DEFAULT,
+                                .anchor = state->anchor, .item_id = item->id});
+        if (pp_ui_icon_button(ui, delete_id, PP_UI_ICON_DELETE, "Delete", "Delete this item", enabled, false))
+          pp_project_request_remove(settings, state->anchor, item->id);
+        /* Focus reveal settles on the following frame. Do not anchor action
+         * help to an offscreen row while either scroll owner is moving it. */
+        if (ui->keyboard_focus && (pp_ui_focused(ui, default_id) || pp_ui_focused(ui, delete_id)) &&
+            (row.y < ctx->current->layout->clip.y ||
+             row.y + row.h > ctx->current->layout->clip.y + ctx->current->layout->clip.h)) {
+          ui->tooltip_text[0] = 0;
+          ui->tooltip_focus = false;
+        }
+      } else {
+        struct nk_rect bounds;
+        nk_widget(&bounds, ctx);
+        if (item->id == list->default_id)
+          pp_ui_draw_icon(nk_window_get_canvas(ctx), bounds, PP_UI_ICON_STAR, pp_ui_theme.accent);
+        nk_widget(&bounds, ctx);
+      }
     }
     nk_group_end(ctx);
   }
@@ -244,7 +378,7 @@ static void ordered_items(PPSettings *settings) {
                                               .anchor = state->anchor});
     return; /* Project accessors above are borrowed through mutation only. */
   }
-  if (pp_ui_button(ui, "add-image", "Import image", enabled))
+  if (pp_ui_button(ui, "add-image", "Add image", enabled))
     pp_settings_dialog(settings, PP_DIALOG_IMPORT_IMAGE, true);
   nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
   if (pp_ui_button(ui, "move-up", "Move up",
@@ -265,17 +399,6 @@ static void ordered_items(PPSettings *settings) {
                                               .index = selected_index + 1});
     return;
   }
-  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-  if (pp_ui_button(ui, "make-default", "Make default for this position",
-                   enabled && selected_index < list->count &&
-                       state->selected_item != list->default_id))
-    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SET_DEFAULT,
-                                              .anchor = state->anchor,
-                                              .item_id = state->selected_item});
-  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-  if (pp_ui_button(ui, "remove-item", "Remove selected item",
-                   enabled && selected_index < list->count))
-    pp_project_request_action(settings, PP_PROJECT_ACTION_REMOVE);
   nk_layout_row_dynamic(ctx, 40, 1);
   nk_label_wrap(ctx, "Selecting an item leaves the default unchanged. Make "
                      "default chooses what future pulls create.");
@@ -435,6 +558,7 @@ void pp_settings_draw(PPSettings *settings) {
   if (settings->failed)
     return;
   if (settings->generation != pp_app_generation(settings->app)) {
+    release_row_thumbnails(settings, true);
     pp_item_editor_release_preview(settings);
     settings->generation = pp_app_generation(settings->app);
     pp_settings_revert(settings);
@@ -442,6 +566,7 @@ void pp_settings_draw(PPSettings *settings) {
   if (!pp_app_ui(settings->app)->settings_open) {
     pp_ui_shaped_suspend(settings->backend);
     pp_item_editor_release_preview(settings);
+    release_row_thumbnails(settings, true);
     pp_ui_show(settings->backend, false);
     return;
   }
@@ -451,6 +576,7 @@ void pp_settings_draw(PPSettings *settings) {
   if (!pp_ui_begin(ui, &error))
     goto failed;
   settings->rendering = true;
+  memset(settings->row_thumbnail_used, 0, sizeof(settings->row_thumbnail_used));
   if (ui->scale != previous_scale)
     settings->editor.preview_dirty = true;
   bool modal = pp_app_ui(settings->app)->transition_pending ||
@@ -566,6 +692,7 @@ void pp_settings_draw(PPSettings *settings) {
   if (!pp_ui_end(ui, &error))
     goto failed;
   settings->rendering = false;
+  release_row_thumbnails(settings, !pp_app_ui(settings->app)->settings_open);
   if (settings->revert_pending) {
     settings->revert_pending = false;
     /* Reset may delete the text field's textures. The queued frame has
@@ -592,6 +719,7 @@ void pp_settings_draw(PPSettings *settings) {
   return;
 failed:
   settings->rendering = false;
+  release_row_thumbnails(settings, true);
   pp_item_editor_release_preview(settings);
   settings->failed = true;
   if (!settings->render_failure[0])
@@ -607,6 +735,7 @@ void pp_settings_destroy(PPSettings *settings) {
   pp_platform_cancel_file_dialogs(settings);
   pp_platform_settings_window(0);
   pp_item_editor_destroy(settings);
+  release_row_thumbnails(settings, true);
   pp_ui_backend_destroy(settings->backend);
   free(settings);
 }

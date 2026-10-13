@@ -49,16 +49,22 @@ struct PPSettings {
   PPDialogKind dialog_kind;
   PPAnchor dialog_anchor;
   uint64_t dialog_item, dialog_generation;
+  PPAnchor remove_anchor;
+  uint64_t remove_item, remove_generation;
   PPProjectAction pending_action;
   PPCommand pending_command; /* Only value-only selection/list commands. */
   bool drawing_fields, rendering;
   PPSettingsPage page, requested_page;
   bool page_pending, interaction_changed, revert_pending;
   float items_height;
+  PPUIContentPreview row_thumbnails[8];
+  uint64_t row_thumbnail_ids[8];
+  bool row_thumbnail_used[8];
 };
 bool pp_settings_command(PPSettings *settings, PPCommand command);
 void pp_project_actions(PPSettings *settings);
 void pp_project_request_action(PPSettings *settings, PPProjectAction action);
+void pp_project_request_remove(PPSettings *settings, PPAnchor anchor, uint64_t item);
 void pp_project_apply_action(PPSettings *settings);
 void pp_settings_close(PPSettings *settings);
 void pp_project_confirmation(PPSettings *settings);
