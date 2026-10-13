@@ -114,9 +114,15 @@ static void configure(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft) {
 static bool contains(struct nk_rect r, double x, double y) {
   return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }
+void pp_ui_shaped_suspend(PPUIBackend *ui) {
+  if (ui->shaped) {
+    ui->shaped->enabled = false;
+    ui->shaped->dragging = false;
+  }
+}
 bool pp_ui_shaped_event(PPUIBackend *ui, const PPPlatformEvent *event) {
   PPUIShapedEdit *e = ui->shaped;
-  if (!e)
+  if (!e || !e->enabled)
     return false;
   bool focused = pp_ui_focused(ui, "item-text");
   bool cancel =

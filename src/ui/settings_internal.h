@@ -29,6 +29,10 @@ typedef enum PPProjectAction {
   PP_PROJECT_ACTION_DIALOG,
   PP_PROJECT_ACTION_COMMAND
 } PPProjectAction;
+typedef enum PPSettingsPage {
+  PP_SETTINGS_ITEMS,
+  PP_SETTINGS_INTERACTION
+} PPSettingsPage;
 struct PPSettings {
   PPApp *app; /* Borrowed, must outlive settings. */
   PPUIBackend *backend;
@@ -47,7 +51,10 @@ struct PPSettings {
   uint64_t dialog_item, dialog_generation;
   PPProjectAction pending_action;
   PPCommand pending_command; /* Only value-only selection/list commands. */
-  bool drawing_fields;
+  bool drawing_fields, rendering;
+  PPSettingsPage page, requested_page;
+  bool page_pending, interaction_changed, revert_pending;
+  float items_height;
 };
 bool pp_settings_command(PPSettings *settings, PPCommand command);
 void pp_project_actions(PPSettings *settings);
@@ -58,6 +65,7 @@ void pp_project_confirmation(PPSettings *settings);
 void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
                         bool add_image);
 void pp_item_editor(PPSettings *settings);
+void pp_item_editor_validate(PPSettings *settings);
 void pp_item_editor_destroy(PPSettings *settings);
 void pp_item_editor_sync(PPSettings *settings);
 void pp_item_editor_release_preview(PPSettings *settings);

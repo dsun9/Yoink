@@ -4,14 +4,18 @@
 #include <string.h>
 
 bool pp_settings_command(PPSettings *settings, PPCommand command) {
-  /* These commands replace the current editor binding. Keep its pending
-   * input on the original item until every field has been validated. Modal
-   * removal runs after field traversal and therefore needs no deferral. */
+  /* Keep pending input on the original item and validate every draft before
+   * changing selection, mutating a list or requesting Quit. Modal removal
+   * runs after field traversal and therefore needs no deferral. */
   if (settings->drawing_fields &&
       (command.kind == PP_COMMAND_SELECT_ANCHOR ||
        command.kind == PP_COMMAND_SELECT_ITEM ||
        command.kind == PP_COMMAND_ADD_TEXT ||
-       command.kind == PP_COMMAND_REMOVE_ITEM)) {
+       command.kind == PP_COMMAND_REMOVE_ITEM ||
+       command.kind == PP_COMMAND_REORDER_ITEM ||
+       command.kind == PP_COMMAND_SET_DEFAULT ||
+       command.kind == PP_COMMAND_SET_ENABLED ||
+       command.kind == PP_COMMAND_QUIT)) {
     if (settings->pending_action == PP_PROJECT_ACTION_NONE) {
       settings->pending_action = PP_PROJECT_ACTION_COMMAND;
       settings->pending_command = command;

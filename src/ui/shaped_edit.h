@@ -6,6 +6,8 @@ typedef struct PPUIShapedEdit PPUIShapedEdit;
 bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
                        struct nk_rect bounds, bool focused, bool enabled);
 bool pp_ui_shaped_event(PPUIBackend *ui, const PPPlatformEvent *event);
+/* Keep the local edit state while removing the hidden field's input target. */
+void pp_ui_shaped_suspend(PPUIBackend *ui);
 /* A reusable reset preserves ownership unchanged if its GL context cannot bind.
  */
 bool pp_ui_shaped_reset(PPUIBackend *ui);

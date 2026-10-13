@@ -1,4 +1,5 @@
 #include "settings_internal.h"
+#include "shaped_edit.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +15,7 @@ bool pp_settings_invalid(const PPSettings *settings) {
 }
 void pp_settings_revert(PPSettings *settings) {
   settings->name_error[0] = settings->interaction_error[0] = 0;
+  settings->interaction_changed = settings->editor.changed = false;
   settings->editor.id = 0;
   snprintf(settings->project_name, sizeof(settings->project_name), "%s",
            pp_app_name(settings->app));
@@ -85,7 +87,9 @@ static void geometry(PPSettings *settings) {
 void pp_settings_close(PPSettings *settings) {
   geometry(settings);
   pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_CLOSE_SETTINGS});
-  pp_item_editor_release_preview(settings);
+  pp_ui_shaped_suspend(settings->backend);
+  if (!settings->rendering)
+    pp_item_editor_release_preview(settings);
 }
 void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (!settings || !event ||
@@ -300,7 +304,12 @@ static void interaction(PPSettings *settings) {
                     settings->resize, sizeof(settings->resize), &changed);
   interaction_field(settings, "Easing duration (milliseconds)", "easing",
                     settings->easing, sizeof(settings->easing), &changed);
-  if (changed && !ui->composing) {
+  settings->interaction_changed = settings->interaction_changed || changed;
+  pp_ui_error(ui, settings->interaction_error);
+}
+static void validate_interaction(PPSettings *settings) {
+  if (settings->interaction_changed && !settings->backend->composing) {
+    settings->interaction_changed = false;
     PPProjectSettings values;
     if (!pp_ui_number(settings->activation, 1, 4096, &values.activation_dip))
       snprintf(settings->interaction_error, sizeof(settings->interaction_error),
@@ -324,7 +333,26 @@ static void interaction(PPSettings *settings) {
                                       .interaction = values});
     }
   }
-  pp_ui_error(ui, settings->interaction_error);
+}
+static void navigation(PPSettings *settings) {
+  PPUIBackend *ui = settings->backend;
+  bool enabled = !settings->dialog_pending && !ui->composing;
+  nk_layout_row_dynamic(&ui->context, 32, 2);
+  bool item_errors = settings->editor.content_error[0] ||
+                     settings->editor.appearance_error[0] ||
+                     settings->editor.font_error[0];
+  if (pp_ui_select(ui, "tab-items", item_errors ? "Items !" : "Items",
+                   settings->page == PP_SETTINGS_ITEMS,
+                   enabled)) {
+    settings->requested_page = PP_SETTINGS_ITEMS;
+    settings->page_pending = true;
+  }
+  if (pp_ui_select(ui, "tab-interaction", settings->interaction_error[0]
+                                             ? "Interaction !" : "Interaction",
+                   settings->page == PP_SETTINGS_INTERACTION, enabled)) {
+    settings->requested_page = PP_SETTINGS_INTERACTION;
+    settings->page_pending = true;
+  }
 }
 bool pp_settings_can_transition(PPSettings *settings) {
   if (!settings) return true;
@@ -413,6 +441,7 @@ void pp_settings_draw(PPSettings *settings) {
     pp_settings_revert(settings);
   }
   if (!pp_app_ui(settings->app)->settings_open) {
+    pp_ui_shaped_suspend(settings->backend);
     pp_item_editor_release_preview(settings);
     pp_ui_show(settings->backend, false);
     return;
@@ -422,6 +451,7 @@ void pp_settings_draw(PPSettings *settings) {
   float previous_scale = ui->scale;
   if (!pp_ui_begin(ui, &error))
     goto failed;
+  settings->rendering = true;
   if (ui->scale != previous_scale)
     settings->editor.preview_dirty = true;
   bool modal = pp_app_ui(settings->app)->transition_pending ||
@@ -434,33 +464,53 @@ void pp_settings_draw(PPSettings *settings) {
   if (nk_begin(ctx, "PointyPointer", nk_rect(0, 0, ui->width, ui->height),
                flags)) {
     pp_project_actions(settings);
-    float body_height = fmaxf(100, ui->height - 256);
+    navigation(settings);
+    bool item_errors = settings->editor.content_error[0] ||
+                       settings->editor.appearance_error[0] ||
+                       settings->editor.font_error[0];
+    bool page_errors = item_errors || settings->interaction_error[0];
+    float body_height = fmaxf(100, ui->height - 294 - (page_errors ? 38 : 0));
     nk_layout_row_dynamic(ctx, body_height, 1);
     struct nk_rect content_viewport = nk_widget_bounds(ctx);
     size_t first_control = ui->control_count;
-    if (nk_group_begin(ctx, "settings-content", 0)) {
-      if (ui->width >= 860) {
+    const char *content_group = settings->page == PP_SETTINGS_ITEMS
+                                    ? "items-content" : "interaction-content";
+    if (nk_group_begin(ctx, content_group, 0)) {
+      if (settings->page == PP_SETTINGS_INTERACTION) {
+        pp_ui_shaped_suspend(ui);
+        interaction(settings);
+      } else if (ui->width >= 860) {
         float widths[] = {300, nk_window_get_content_region(ctx).w - 312};
-        nk_layout_row(ctx, NK_STATIC, 1420, 2, widths);
+        nk_layout_row(ctx, NK_STATIC, fmaxf(body_height, settings->items_height),
+                      2, widths);
+        float content_height = 0;
         if (nk_group_begin(ctx, "position-column", NK_WINDOW_NO_SCROLLBAR)) {
+          float top = nk_window_get_panel(ctx)->at_y;
           anchor_selector(settings);
           ordered_items(settings);
+          struct nk_panel *panel = nk_window_get_panel(ctx);
+          content_height = panel->at_y + panel->row.height - top +
+                           2 * ctx->style.window.group_padding.y;
           nk_group_end(ctx);
         }
         if (nk_group_begin(ctx, "editor-column", NK_WINDOW_NO_SCROLLBAR)) {
+          float top = nk_window_get_panel(ctx)->at_y;
           pp_item_editor(settings);
-          interaction(settings);
+          struct nk_panel *panel = nk_window_get_panel(ctx);
+          content_height = fmaxf(content_height,
+                                panel->at_y + panel->row.height - top +
+                                    2 * ctx->style.window.group_padding.y);
           nk_group_end(ctx);
         }
+        settings->items_height = content_height;
       } else {
         anchor_selector(settings);
         ordered_items(settings);
         pp_item_editor(settings);
-        interaction(settings);
       }
       nk_group_end(ctx);
     }
-    pp_ui_reveal_focus(ui, "settings-content", content_viewport, first_control);
+    pp_ui_reveal_focus(ui, content_group, content_viewport, first_control);
     nk_layout_row_dynamic(ctx, 42, 1);
     const char *status =
         pp_settings_invalid(settings)
@@ -472,11 +522,25 @@ void pp_settings_draw(PPSettings *settings) {
     nk_label_wrap(ctx, *status ? status
                                : "Eight shared positions. Temporary sprites "
                                  "are never saved in a project.");
+    if (page_errors) {
+      nk_layout_row_dynamic(ctx, 32, 2);
+      if (pp_ui_button(ui, "show-item-errors", "Correct Items fields", item_errors &&
+                       !settings->dialog_pending && !ui->composing)) {
+        settings->requested_page = PP_SETTINGS_ITEMS;
+        settings->page_pending = true;
+      }
+      if (pp_ui_button(ui, "show-interaction-errors", "Correct Interaction fields",
+                       settings->interaction_error[0] &&
+                       !settings->dialog_pending && !ui->composing)) {
+        settings->requested_page = PP_SETTINGS_INTERACTION;
+        settings->page_pending = true;
+      }
+    }
     nk_layout_row_dynamic(ctx, 32, 3);
     if (pp_ui_button(ui, "revert-fields", "Revert fields",
                      pp_settings_invalid(settings) &&
                          !settings->dialog_pending && !ui->composing))
-      pp_settings_revert(settings);
+      settings->revert_pending = true;
     if (pp_ui_button(ui, "close-settings", "Close settings",
                      !settings->dialog_pending))
       pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
@@ -484,19 +548,48 @@ void pp_settings_draw(PPSettings *settings) {
                      !settings->dialog_pending &&
                          !pp_settings_invalid(settings)))
       pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
+    if (settings->page_pending && !modal && !settings->dialog_pending &&
+        !ui->composing && !ui->popup_id &&
+        settings->page != settings->requested_page)
+      nk_edit_unfocus(ctx);
   }
   nk_end(ctx);
   settings->drawing_fields = false;
-  /* Every field has now consumed, validated and committed this input batch. */
+  /* Validation is independent of which page is visible. Navigation and actions
+   * run only after the outgoing page has consumed its complete input batch. */
+  pp_item_editor_validate(settings);
+  validate_interaction(settings);
   pp_project_apply_action(settings);
   pp_project_confirmation(settings);
   if (!pp_ui_end(ui, &error))
     goto failed;
+  settings->rendering = false;
+  if (settings->revert_pending) {
+    settings->revert_pending = false;
+    /* Reset may delete the text field's textures. The queued frame has
+     * finished using them, and the next draw publishes the recovered fields. */
+    pp_settings_revert(settings);
+    pp_settings_draw(settings);
+    return;
+  }
+  if (settings->page_pending) {
+    settings->page_pending = false;
+    if (!modal && !settings->dialog_pending && !ui->composing && !ui->popup_id &&
+        settings->page != settings->requested_page) {
+      settings->page = settings->requested_page;
+      pp_ui_focus(ui, settings->page == PP_SETTINGS_ITEMS ? "tab-items"
+                                                         : "tab-interaction");
+      /* Rebuild the visible control registry without replaying the input batch. */
+      pp_settings_draw(settings);
+      return;
+    }
+  }
   if (!settings->render_hidden)
     pp_ui_show(ui, pp_app_ui(settings->app)->settings_open);
   if(!pp_app_ui(settings->app)->settings_open)pp_item_editor_release_preview(settings);
   return;
 failed:
+  settings->rendering = false;
   pp_item_editor_release_preview(settings);
   settings->failed = true;
   if (!settings->render_failure[0])

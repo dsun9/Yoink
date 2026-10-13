@@ -113,8 +113,11 @@ void pp_item_editor_sync(PPSettings *settings) {
   editor->draft.text_style.requested_family = editor->family;
   text_diagnostics(settings);
 }
-static void commit(PPSettings *settings) {
+void pp_item_editor_validate(PPSettings *settings) {
   PPItemEditor *editor = &settings->editor;
+  if (!editor->changed || settings->backend->composing)
+    return;
+  editor->changed = false;
   double size, angle, opacity, face;
   editor->appearance_error[0] = editor->content_error[0] =
       editor->font_error[0] = 0;
@@ -354,8 +357,7 @@ void pp_item_editor(PPSettings *settings) {
         sizeof(editor->angle), &changed);
   field(settings, "Opacity (%)", "item-opacity", editor->opacity,
         sizeof(editor->opacity), &changed);
-  if (changed && !ui->composing)
-    commit(settings);
+  editor->changed = editor->changed || changed;
   pp_ui_error(ui, editor->appearance_error);
   nk_layout_row_dynamic(&ui->context, 24, 1);
   nk_label(&ui->context, "Valid edits apply immediately to future pulls.",
