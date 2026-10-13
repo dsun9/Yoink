@@ -1232,7 +1232,7 @@ static void hidden_responsive_pages(void) {
       char name[96];
       snprintf(name, sizeof(name), "ticket21-items-%s-%d", names[size], (int)(scales[density] * 100));
       capture(name);
-      pp_ui_focus(settings->backend, "item-size"); pump(30);
+      pp_ui_focus(settings->backend, "item-size"); hidden_settle();
       PPRect bounds;
       CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
       PPRect tabs;
@@ -1250,7 +1250,7 @@ static void hidden_responsive_pages(void) {
       CHECK(!pp_ui_control_rect(settings->backend, "item-text", &bounds));
       snprintf(name, sizeof(name), "ticket21-interaction-%s-%d", names[size], (int)(scales[density] * 100));
       capture(name);
-      pp_ui_focus(settings->backend, "easing"); pump(30);
+      pp_ui_focus(settings->backend, "easing"); hidden_settle();
       CHECK(pp_ui_control_rect(settings->backend, "easing", &bounds));
       CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 90);
       hidden_click("revert-fields"); pump(30);
