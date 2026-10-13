@@ -2070,6 +2070,221 @@ static bool capture_has_warning(const char *name, PPRect region) {
   SDL_DestroySurface(surface);
   return danger_pixels > 10;
 }
+static uint64_t hidden_font_disclosure_setup(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  uint64_t id = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_FONT,
+      .item_id = id, .path = PP_FONT_FIXTURES "/PointyFixture.ttc"}, &error));
+  PPItem item = *pp_project_item(pp_app_project(app), id);
+  item.text = "A";
+  item.text_style.font_size_dip = 96;
+  item.angle_deg = 17;
+  item.opacity = .65;
+  memcpy(item.text_style.color, (uint8_t[]){0x20, 0x35, 0x47}, 3);
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+      .item_id = id, .item = &item}, &error));
+  snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/issue29-font-%lu.pointy",
+           GetCurrentProcessId());
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SAVE_AS,
+      .path = package}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  hidden_click("font-details"); hidden_settle();
+  return id;
+}
+static void check_font_disclosure_item(const PPProject *project, uint64_t id,
+                                       int face) {
+  const PPItem *item = pp_project_item(project, id);
+  CHECK(item && item->text_style.primary_face == face);
+  CHECK(item->text_style.font_size_dip == 96 && item->angle_deg == 17 &&
+        item->opacity == .65);
+  CHECK(!memcmp(item->text_style.color, (uint8_t[]){0x20, 0x35, 0x47}, 3));
+  CHECK(!strcmp(item->text, "A"));
+}
+static void hidden_font_disclosure_batch_case(bool invalid, int activation) {
+  bool collapse = activation != 0;
+  uint64_t id = hidden_font_disclosure_setup();
+  pp_ui_focus(settings->backend, "font-face"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text(invalid ? "120" : "1");
+  if (activation == 1) hidden_click("font-details");
+  else if (activation == 2) {
+    hidden_key(PP_KEY_TAB, PP_MOD_SHIFT);
+    hidden_key(PP_KEY_ENTER, 0);
+  }
+  pp_settings_draw(settings);
+  CHECK(!strcmp(settings->editor.face, invalid ? "120" : "1"));
+  CHECK(!strcmp(settings->editor.size, "96"));
+  CHECK(!strcmp(settings->editor.color, "#203547"));
+  CHECK(!strcmp(settings->editor.angle, "17") && !strcmp(settings->editor.opacity, "65"));
+  CHECK(pp_settings_invalid(settings) == invalid);
+  CHECK(!settings->editor.appearance_error[0] && !settings->editor.content_error[0]);
+  check_font_disclosure_item(pp_app_project(app), id, invalid ? 0 : 1);
+  hidden_settle();
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "font-face", &bounds) == !collapse);
+  if (!collapse) { hidden_click("font-details"); hidden_settle(); }
+  CHECK(!pp_ui_control_rect(settings->backend, "font-face", &bounds));
+  CHECK(pp_ui_focused(settings->backend, "font-details"));
+  /* No active edit/selection may migrate into the field now occupying the
+   * collection index's old numeric position. Unfocused text is discarded. */
+  hidden_text("7"); hidden_settle();
+  CHECK(!strcmp(settings->editor.size, "96"));
+  CHECK(!strcmp(settings->editor.face, invalid ? "120" : "1"));
+  check_font_disclosure_item(pp_app_project(app), id, invalid ? 0 : 1);
+  if (invalid) {
+    CHECK(strstr(settings->editor.font_error, "outside the imported collection"));
+    CHECK(!pp_app_dirty(app));
+    CHECK(pp_ui_control_rect(settings->backend, "font-details", &bounds));
+    capture("issue29-font-error-collapsed");
+    CHECK(capture_has_warning("issue29-font-error-collapsed",
+          (PPRect){bounds.x, bounds.y - 52, bounds.w, 52}));
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+        .name = "Collection draft"}, &error));
+    hidden_click("save"); hidden_settle();
+    CHECK(pp_app_dirty(app) && !settings->dialog_pending);
+    hidden_click("tab-interaction"); hidden_settle();
+    CHECK(control_label_contains("tab-items", "!"));
+    CHECK(pp_ui_control_rect(settings->backend, "show-item-errors", &bounds));
+    hidden_key(PP_KEY_S, PP_MOD_CONTROL); hidden_settle();
+    CHECK(pp_app_dirty(app) && !settings->dialog_pending);
+    PPProject *saved = NULL;
+    CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+    CHECK(strcmp(pp_project_name(saved), "Collection draft"));
+    check_font_disclosure_item(saved, id, 0);
+    pp_project_destroy(saved);
+    hidden_click("show-item-errors"); hidden_settle();
+    CHECK(!pp_ui_control_rect(settings->backend, "font-face", &bounds));
+  }
+  /* Keyboard reopening restores the retained draft without restoring an old
+   * numeric selection. Editing it and collapsing again validates that field. */
+  pp_ui_focus(settings->backend, "font-details"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, "font-face", &bounds));
+  CHECK(!strcmp(settings->editor.face, invalid ? "120" : "1"));
+  if (invalid) {
+    pp_ui_focus(settings->backend, "font-face"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("1"); hidden_click("font-details"); pp_settings_draw(settings);
+    CHECK(!pp_settings_invalid(settings) && !settings->editor.font_error[0]);
+  } else {
+    hidden_key(PP_KEY_SPACE, 0); hidden_settle();
+  }
+  CHECK(!strcmp(settings->editor.face, "1"));
+  check_font_disclosure_item(pp_app_project(app), id, 1);
+  hidden_click("save"); hidden_settle();
+  CHECK(!pp_app_dirty(app) && !settings->dialog_pending);
+  hidden_click("open"); pp_settings_draw(settings);
+  /* This chooser is controlled only at the OS boundary; load the real package. */
+  CHECK(settings->dialog_pending);
+  finish_controlled_dialog(package); hidden_settle();
+  CHECK(!pp_settings_invalid(settings) && !pp_app_dirty(app));
+  check_font_disclosure_item(pp_app_project(app), id, 1);
+  if (invalid) {
+    if (!settings->editor.font_details_open) {
+      hidden_click("font-details"); hidden_settle();
+    }
+    pp_ui_focus(settings->backend, "font-face"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("120"); hidden_click("font-details"); pp_settings_draw(settings);
+    CHECK(pp_settings_invalid(settings));
+    hidden_click("revert-fields"); hidden_settle();
+    CHECK(!pp_settings_invalid(settings) && !settings->editor.font_error[0]);
+    CHECK(!strcmp(settings->editor.face, "1"));
+    CHECK(!pp_app_dirty(app));
+    check_font_disclosure_item(pp_app_project(app), id, 1);
+  }
+  /* A later edit reaches only the explicitly focused visible field. */
+  pp_ui_focus(settings->backend, "item-angle"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("23"); hidden_settle();
+  CHECK(pp_project_item(pp_app_project(app), id)->angle_deg == 23);
+  CHECK(!strcmp(settings->editor.face, "1") && !strcmp(settings->editor.size, "96"));
+  CHECK(!strcmp(settings->editor.color, "#203547") && !strcmp(settings->editor.opacity, "65"));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+}
+static void hidden_font_disclosure_batch(void) {
+  controlled_dialog = true;
+  for (int invalid = 0; invalid < 2; invalid++)
+    for (int activation = 0; activation < 3; activation++)
+      hidden_font_disclosure_batch_case(invalid != 0, activation);
+  controlled_dialog = false;
+  puts("PASS valid/invalid collection edit-plus-collapse and no-collapse controls, visible errors, hidden-page Save blocking, reopening, correction/revert, later focused input and real package roundtrip.");
+}
+static void hidden_font_disclosure_guards(void) {
+  uint64_t id = hidden_font_disclosure_setup();
+  controlled_dialog = true;
+  for (int guard = 0; guard < 5; guard++) {
+    for (int keyboard = 0; keyboard < 2; keyboard++) {
+      PPRect details;
+      CHECK(pp_ui_control_rect(settings->backend, "font-details", &details));
+      PPPlatformEvent preedit = {.kind = PP_EVENT_COMPOSITION,
+          .window_id = pp_settings_window_id(settings),
+          .composing = true, .text_utf8 = "pending"};
+      if (guard == 0) {
+        pp_ui_focus(settings->backend, "item-text"); hidden_settle();
+        pp_settings_event(settings, &preedit); hidden_settle();
+        CHECK(settings->backend->composing);
+      } else if (guard == 1) {
+        pp_ui_focus(settings->backend, "font-face-choice"); hidden_settle();
+        hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+        CHECK(settings->backend->popup_id);
+      } else if (guard == 2) {
+        CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
+            .name = "Guard unsaved changes"}, &error));
+        hidden_click("new"); hidden_settle();
+        CHECK(pp_app_ui(app)->transition_pending);
+      } else if (guard == 3) {
+        char remove[48];
+        snprintf(remove, sizeof(remove), "item-delete-%llu", (unsigned long long)id);
+        pp_ui_focus(settings->backend, remove); hidden_settle();
+        hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+        CHECK(settings->remove_confirmation);
+      } else {
+        hidden_click("import-font"); hidden_settle();
+        CHECK(settings->dialog_pending);
+      }
+      if (keyboard) {
+        pp_ui_focus(settings->backend, "font-details");
+        hidden_key(PP_KEY_ENTER, 0);
+      } else {
+        /* Modal registries contain only confirmation controls. Send the
+         * physical location of the underlying disclosure through real events. */
+        PPPlatformEvent pointer = {.kind = PP_EVENT_POINTER_MOVE,
+            .window_id = pp_settings_window_id(settings), .button = PP_BUTTON_LEFT,
+            .window_point = {(details.x + details.w / 2) * settings->backend->window_scale,
+                             (details.y + details.h / 2) * settings->backend->window_scale}};
+        pp_settings_event(settings, &pointer);
+        pointer.kind = PP_EVENT_BUTTON_DOWN; pp_settings_event(settings, &pointer);
+        pointer.kind = PP_EVENT_BUTTON_UP; pp_settings_event(settings, &pointer);
+      }
+      hidden_settle();
+      CHECK(settings->editor.font_details_open);
+      CHECK(!strcmp(settings->editor.face, "0"));
+      CHECK(!settings->editor.font_error[0] && !settings->editor.appearance_error[0] &&
+            !settings->editor.content_error[0]);
+      check_font_disclosure_item(pp_app_project(app), id, 0);
+      if (guard == 0) {
+        preedit.composing = false; preedit.text_utf8 = "";
+        pp_settings_event(settings, &preedit); hidden_settle();
+      } else if (guard == 4) {
+        finish_controlled_dialog(NULL); hidden_settle();
+      } else {
+        hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
+        CHECK(!settings->backend->popup_id && !settings->backend->modal);
+      }
+      CHECK(!pp_settings_invalid(settings));
+    }
+  }
+  controlled_dialog = false;
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  puts("PASS pointer and keyboard disclosure activation obey composition, popup, unsaved/remove modal and file chooser guards.");
+}
 static void hidden_editor_font_feedback(void) {
   PPAppOptions options = {"", false};
   CHECK(pp_app_create(&app, &options, &error));
@@ -2593,6 +2808,8 @@ static void hidden_reorder_captures(void) {
   puts("PASS actual insertion pixels and moved-row keyboard focus at ordinary/minimum/narrow sizes and controlled 100/150/200% scale.");
 }
 static void hidden_editor_suite(void) {
+  hidden_font_disclosure_batch();
+  hidden_font_disclosure_guards();
   hidden_editor_wide_preview();
   hidden_compact_item_editor();
   hidden_editor_font_feedback();
@@ -2944,7 +3161,8 @@ int main(int argc, char **argv) {
   CHECK(argc == 2 &&
         (desktop_run || manual_font || !strcmp(argv[1], "--render-only") ||
          !strcmp(argv[1], "--items-only") || !strcmp(argv[1], "--editor-only") ||
-         !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only")));
+         !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
+         !strcmp(argv[1], "--font-disclosure-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -2952,6 +3170,10 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--font-disclosure-only")) {
+    hidden_font_disclosure_batch();
+    hidden_font_disclosure_guards();
+  }
   else if (!strcmp(argv[1], "--validation-only")) {
     hidden_corrected_draft_save();
     hidden_corrected_draft_selection();

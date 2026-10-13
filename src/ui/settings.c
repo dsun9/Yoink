@@ -742,6 +742,19 @@ void pp_settings_draw(PPSettings *settings) {
   }
   PPUIBackend *ui = settings->backend;
   PPError error = {0};
+  bool modal = pp_app_ui(settings->app)->transition_pending ||
+               settings->remove_confirmation;
+  int deferred_tab = 0;
+  bool deferred_activate = false;
+  if (settings->field_input_pending && ui->tab_direction && !modal &&
+      !settings->dialog_pending && !ui->composing && !ui->popup_id) {
+    /* Keyboard navigation changes numeric input ownership in pp_ui_begin.
+     * First let the outgoing field consume this batch at its existing focus. */
+    deferred_tab = ui->tab_direction;
+    deferred_activate = ui->activate;
+    ui->tab_direction = 0;
+    ui->activate = false;
+  }
   float previous_scale = ui->scale;
   if (!pp_ui_begin(ui, &error))
     goto failed;
@@ -749,8 +762,6 @@ void pp_settings_draw(PPSettings *settings) {
   memset(settings->row_thumbnail_used, 0, sizeof(settings->row_thumbnail_used));
   if (ui->scale != previous_scale)
     settings->editor.preview_dirty = true;
-  bool modal = pp_app_ui(settings->app)->transition_pending ||
-               settings->remove_confirmation;
   pp_ui_modal(ui, modal);
   nk_flags flags = NK_WINDOW_NO_SCROLLBAR | (modal ? NK_WINDOW_NO_INPUT : 0);
   struct nk_context *ctx = &ui->context;
@@ -844,9 +855,10 @@ void pp_settings_draw(PPSettings *settings) {
       pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
     if (pp_ui_button(ui, "quit", "Quit", pp_settings_action_enabled(settings)))
       pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
-    if (settings->page_pending && !modal && !settings->dialog_pending &&
-        !ui->composing && !ui->popup_id &&
-        settings->page != settings->requested_page)
+    if ((settings->font_details_pending ||
+         (settings->page_pending && settings->page != settings->requested_page)) &&
+        !modal && !settings->dialog_pending &&
+        !ui->composing && !ui->popup_id)
       nk_edit_unfocus(ctx);
   }
   nk_end(ctx);
@@ -868,6 +880,23 @@ void pp_settings_draw(PPSettings *settings) {
   }
   settings->rendering = false;
   release_row_thumbnails(settings, !pp_app_ui(settings->app)->settings_open);
+  if (deferred_tab) {
+    ui->tab_direction = deferred_tab;
+    ui->activate = deferred_activate;
+    pp_settings_draw(settings);
+    return;
+  }
+  if (settings->font_details_pending) {
+    settings->font_details_pending = false;
+    if (!modal && !settings->dialog_pending && !ui->composing && !ui->popup_id) {
+      /* Keep the outgoing field in the completed frame so it consumes input
+       * and validates before its numeric edit position can be reused. */
+      settings->editor.font_details_open = !settings->editor.font_details_open;
+      pp_ui_focus(ui, "font-details");
+      pp_settings_draw(settings);
+      return;
+    }
+  }
   if (settings->revert_pending) {
     settings->revert_pending = false;
     /* Reset may delete the text field's textures. The queued frame has
@@ -893,6 +922,10 @@ void pp_settings_draw(PPSettings *settings) {
   if(!pp_app_ui(settings->app)->settings_open)pp_item_editor_release_preview(settings);
   return;
 failed:
+  if (deferred_tab) {
+    ui->tab_direction = deferred_tab;
+    ui->activate = deferred_activate;
+  }
   settings->rendering = false;
   release_row_thumbnails(settings, true);
   pp_item_editor_release_preview(settings);

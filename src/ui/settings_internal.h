@@ -66,7 +66,7 @@ struct PPSettings {
   PPCommand pending_command; /* Only value-only selection/list commands. */
   bool drawing_fields, rendering, field_input_pending;
   PPSettingsPage page, requested_page;
-  bool page_pending, interaction_changed, revert_pending;
+  bool page_pending, interaction_changed, revert_pending, font_details_pending;
   float items_height;
   PPUIContentPreview row_thumbnails[8];
   uint64_t row_thumbnail_ids[8];

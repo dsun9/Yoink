@@ -131,6 +131,43 @@ static void test_failed_settings(void) {
   }
   puts("PASS failed Settings retry retains instance; clean Quit and dirty Cancel reachable");
 }
+static void settings_key(PPSettings *settings, PPKey key, unsigned modifiers) {
+  PPPlatformEvent event = {.kind = PP_EVENT_KEY_DOWN,
+      .window_id = pp_settings_window_id(settings), .key = key, .modifiers = modifiers};
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_KEY_UP; pp_settings_event(settings, &event);
+}
+static void test_failed_font_disclosure(void) {
+  PPError error = {0}; PPLifecycle life = {0};
+  CHECK(pp_lifecycle_start(&life, &(PPAppOptions){.preferences_directory=""}, &error));
+  CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+  PPSettings *retained = life.settings;
+  retained->render_hidden = true; pp_settings_draw(retained);
+  pp_ui_focus(retained->backend, "font-details");
+  settings_key(retained, PP_KEY_ENTER, 0); pp_settings_draw(retained);
+  CHECK(retained->editor.font_details_open);
+  pp_ui_focus(retained->backend, "font-face"); pp_settings_draw(retained);
+  settings_key(retained, PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(retained);
+  for (const char *p = "120"; *p; p++) {
+    PPPlatformEvent text = {.kind = PP_EVENT_TEXT,
+        .window_id = pp_settings_window_id(retained), .codepoint = (unsigned char)*p};
+    pp_settings_event(retained, &text);
+  }
+  settings_key(retained, PP_KEY_TAB, PP_MOD_SHIFT);
+  settings_key(retained, PP_KEY_ENTER, 0);
+  failed_settings_window = retained->backend->window;
+  pp_settings_draw(retained); CHECK(retained->failed);
+  failed_settings_window = NULL;
+  CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+  CHECK(life.settings == retained && !retained->failed);
+  CHECK(!strcmp(retained->editor.face, "120"));
+  CHECK(!strcmp(retained->editor.size, "96"));
+  CHECK(retained->editor.font_error[0] && pp_settings_invalid(retained));
+  CHECK(!retained->editor.font_details_open);
+  CHECK(pp_project_item(pp_app_project(life.app), retained->editor.id)->text_style.font_size_dip == 96);
+  pp_lifecycle_stop(&life);
+  puts("PASS Settings retry retains queued collection edit, Tab focus and disclosure activation.");
+}
 static void test_persistent_settings_failure(void) {
   for(int dirty=0;dirty<2;dirty++) for(int invalid=0;invalid<2;invalid++) {
     PPError error={0}; PPLifecycle life={0};
@@ -375,9 +412,10 @@ static void benchmark(const char *mode) {
   pp_lifecycle_stop(&life); offscreen=false;
 }
 int main(int argc,char **argv) {
+  if(argc==2 && !strcmp(argv[1],"--font-disclosure-recovery")) { test_failed_font_disclosure(); return 0; }
   if(argc==2 && !strcmp(argv[1],"--public-identity")) { test_public_identity(); return 0; }
   if(argc==2 && !strcmp(argv[1],"--benchmark")) { benchmark("empty");benchmark("static");benchmark("gif");return 0; }
-  test_gl_failure(); test_failed_settings(); test_persistent_settings_failure();
+  test_gl_failure(); test_failed_settings(); test_persistent_settings_failure(); test_failed_font_disclosure();
   test_failed_settings_save(); test_failed_settings_save_dialog();
   test_lifecycle(); test_last_project(); return 0;
 }

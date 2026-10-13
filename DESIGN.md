@@ -299,6 +299,15 @@ errors allocate no row. Invalid entered values remain drafts and do not dirty
 the project until a valid edit commits. Tabs, close/reopen, chooser cancellation
 and Revert fields retain the shared validation and recovery behavior.
 
+Font details changes visibility only after the outgoing controls consume and
+validate their complete input batch. The numeric editor releases its active
+field before the layout changes, and focus returns to the disclosure. An
+invalid collection index and its font error remain attached to the item when
+the section is collapsed. A click that cancels composition or dismisses a
+popup cannot also activate the disclosure in that frame.
+Queued field edits also finish before Tab changes keyboard focus, including
+Shift+Tab followed by disclosure activation in the same input batch.
+
 ## Replacement drawer
 
 The native drawer reuses `src/ui/backend.c` controls and `src/ui/theme.c` tokens.

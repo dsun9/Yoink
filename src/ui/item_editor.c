@@ -315,6 +315,10 @@ preview_ready:
 void pp_item_editor(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
+  /* An outside click may cancel composition or dismiss a popup while drawing
+   * earlier controls. That same click must not also change this disclosure. */
+  bool disclosure_enabled = !settings->dialog_pending && !ui->composing &&
+                            !ui->popup_id && !ui->modal;
   pp_item_editor_sync(settings);
   pp_ui_heading(ui, "Selected item");
   if (!editor->preview) {
@@ -382,8 +386,8 @@ void pp_item_editor(PPSettings *settings) {
     nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
     if (pp_ui_button(ui, "font-details", editor->font_details_open
                          ? "Hide font details" : "Font details",
-                     !settings->dialog_pending))
-      editor->font_details_open = !editor->font_details_open;
+                     disclosure_enabled))
+      settings->font_details_pending = true;
     if (editor->font_details_open) {
       field(settings, "Collection index (0 = first face)", "font-face",
             editor->face, sizeof(editor->face), &changed);
