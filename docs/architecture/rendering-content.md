@@ -59,6 +59,12 @@ each renderer retains one RGBA8 target and reserves a replacement before
 allocation, while the accepted target is still charged. Control-label atlases, driver/context allocations and
 compositor backing are separate. Reservations happen before allocation;
 rejection/teardown refunds only the caller's allocations.
+Native replacement allocates its private candidate source and candidate output
+before committing source identity or changing native bounds. Driver allocation
+exhaustion rejects both candidates and preserves accepted storage; context,
+framebuffer, drawing and native publication errors still remove interception.
+A prepared output keeps its overlap charge until successful publication or
+verified deletion, including cleanup through a surviving shared context.
 
 Native replacement reserves both candidate source and transformed output before
 changing the accepted source binding or presentation validity. Output reservation

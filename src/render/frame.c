@@ -23,6 +23,8 @@ struct PPRenderer {
     PPSharedTexture *shared;
     GLuint output_texture;
     int output_width,output_height;
+    GLuint output_candidate;
+    int candidate_width,candidate_height;
     PPRenderer *retired_renderers,*retired_next;
 };
 struct PPSharedTexture {PPRenderer *owner;GLuint name;int width,height;};
@@ -257,12 +259,24 @@ void pp_shared_texture_destroy(PPSharedTexture *source) {
     if(current(source->owner,NULL))glDeleteTextures(1,&source->name);
     free(source);
 }
-bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
-    uint64_t content_id,uint64_t revision,PPError *error) {
+static bool valid_source(PPRenderer *renderer,const PPFrame *source,uint64_t content_id,PPError *error) {
     if(!renderer || renderer->owns_window || !source || !source->pixels || !content_id ||
         source->width<=0 || source->height<=0 || source->width>16384 || source->height>16384 ||
         source->stride<(size_t)source->width*4 || source->stride%4 || source->stride/4>2147483647)
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid direct source");
+    return true;
+}
+static bool allocate_source(PPRenderer *r,const PPFrame *source,GLuint *candidate,PPError *error) {
+    glGenTextures(1,candidate);
+    texture(*candidate,GL_RGBA8,GL_RGBA,source->width,source->height,source->pixels);
+    GLenum failure=glGetError();r->draw_error=false;
+    if(failure==GL_NO_ERROR)return true;
+    glDeleteTextures(1,candidate);*candidate=0;
+    return error_set(error,failure==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot upload direct source texture");
+}
+bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
+    uint64_t content_id,uint64_t revision,PPError *error) {
+    if(!valid_source(renderer,source,content_id,error))return false;
     if(renderer->content_id==content_id && renderer->revision==revision &&
         renderer->source_width==source->width && renderer->source_height==source->height) return true;
     if(!current(renderer,error)) return false;
@@ -276,8 +290,9 @@ bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,
     } else {
         /* Keep the usable texture until a separately reserved candidate upload
          * succeeds. The presenter accounts the overlap before entering here. */
-        glGenTextures(1,&candidate);
-        texture(candidate,GL_RGBA8,GL_RGBA,source->width,source->height,source->pixels);
+        if(!allocate_source(renderer,source,&candidate,error)) {
+            glPixelStorei(GL_UNPACK_ROW_LENGTH,0);return false;
+        }
     }
     glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
     GLenum upload_error=glGetError();
@@ -365,20 +380,79 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
 }
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int width,int height) {
     if(width<1||height<1||width>8192||height>8192)return 0;
+    if(r&&r->output_candidate&&r->candidate_width==width&&r->candidate_height==height)return 0;
     return r&&r->output_texture&&r->output_width==width&&r->output_height==height?0:(size_t)width*height*4;
 }
 size_t pp_renderer_output_bytes(const PPRenderer *r) {
-    return r&&r->output_texture?(size_t)r->output_width*r->output_height*4:0;
+    if(!r)return 0;
+    return (r->output_texture?(size_t)r->output_width*r->output_height*4:0)+
+        (r->output_candidate?(size_t)r->candidate_width*r->candidate_height*4:0);
 }
 void pp_renderer_release_output(PPRenderer *r) {
-    if(!r||!r->output_texture)return;
+    if(!r||(!r->output_texture&&!r->output_candidate))return;
     /* A temporarily unavailable context keeps both its object and charge.
      * Destruction deletes through the share owner or transfers the charge. */
     if(!current(r,NULL))return;
     r->gl.BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
     r->gl.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
     glDeleteTextures(1,&r->output_texture);
+    glDeleteTextures(1,&r->output_candidate);r->output_candidate=0;
+    r->candidate_width=r->candidate_height=0;
     r->output_texture=0;r->output_width=r->output_height=0;
+}
+static bool allocate_output(PPRenderer *r,int w,int h,GLuint *candidate,PPError *error) {
+    if(!pp_renderer_output_candidate_bytes(r,w,h))return true;
+    glGenTextures(1,candidate);texture(*candidate,GL_RGBA8,GL_RGBA,w,h,NULL);
+    GLenum failure=glGetError();
+    if(failure!=GL_NO_ERROR) {
+        r->draw_error=false;glDeleteTextures(1,candidate);*candidate=0;
+        return error_set(error,failure==GL_OUT_OF_MEMORY?PP_ERROR_MEMORY:PP_ERROR_RENDER,"Cannot allocate retained native output");
+    }
+    r->gl.BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
+    r->gl.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,*candidate,0);
+    bool complete=r->gl.CheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+    failure=glGetError();
+    r->gl.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,r->output_texture,0);
+    if(complete&&failure==GL_NO_ERROR)return true;
+    glDeleteTextures(1,candidate);*candidate=0;
+    return error_set(error,PP_ERROR_RENDER,"Incomplete retained native framebuffer");
+}
+bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *source,PPSharedTexture *shared,
+    uint64_t id,uint64_t revision,int w,int h,PPError *error) {
+    if(!r||r->owns_window||!id||!revision||w<0||h<0||w>8192||h>8192||((w==0)!=(h==0))||r->output_candidate)
+        return error_set(error,PP_ERROR_ARGUMENT,"Invalid native preparation");
+    bool changed=r->content_id!=id||r->revision!=revision;
+    if(changed&&shared&&r->group!=shared->owner)
+        return error_set(error,PP_ERROR_ARGUMENT,"Texture belongs to another context group");
+    if(changed&&!shared&&!valid_source(r,source,id,error))return false;
+    if(!current(r,error))return false;
+    GLuint candidate_source=0,candidate_output=0;
+    if(changed) {
+        r->gl.ActiveTexture(GL_TEXTURE0);
+        if(shared) {
+            glBindTexture(GL_TEXTURE_2D,shared->name);
+            if(glGetError()!=GL_NO_ERROR)return error_set(error,PP_ERROR_RENDER,"Cannot bind shared frame");
+        } else {
+            glPixelStorei(GL_UNPACK_ALIGNMENT,1);glPixelStorei(GL_UNPACK_ROW_LENGTH,(GLint)(source->stride/4));
+            bool ok=allocate_source(r,source,&candidate_source,error);glPixelStorei(GL_UNPACK_ROW_LENGTH,0);
+            if(!ok)return false;
+        }
+    }
+    if(w&&h&&!allocate_output(r,w,h,&candidate_output,error)) {
+        if(candidate_source)glDeleteTextures(1,&candidate_source);
+        return false;
+    }
+    /* Neither accepted source ownership nor native bounds changes before both
+     * allocations succeed. Keep the old output until successful publication. */
+    if(changed) {
+        if(r->shared||shared)glFinish();
+        glDeleteTextures(1,&r->textures[0]);r->textures[0]=candidate_source;
+        r->shared=shared;r->content_id=id;r->revision=revision;
+        r->source_width=shared?shared->width:source->width;r->source_height=shared?shared->height:source->height;
+        if(!shared)r->metrics.source_uploads++;
+    }
+    r->output_candidate=candidate_output;r->candidate_width=w;r->candidate_height=h;
+    return true;
 }
 static bool publish_output(PPRenderer *r,int w,int h,PPError *error) {
     PPGL *gl=&r->gl;
@@ -412,10 +486,12 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     if(!current(renderer,error)) return false;
     int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w!=(int)extent_w || h!=(int)extent_h)
         return error_set(error,PP_ERROR_ARGUMENT,"Direct window drawable does not match canonical transform bounds");
-    PPGL *gl=&renderer->gl;GLuint candidate=0,output=renderer->output_texture;
-    if(pp_renderer_output_candidate_bytes(renderer,w,h)) {
-        glGenTextures(1,&candidate);texture(candidate,GL_RGBA8,GL_RGBA,w,h,NULL);output=candidate;
-    }
+    PPGL *gl=&renderer->gl;GLuint candidate=renderer->output_candidate,output=renderer->output_texture;
+    if(candidate&&(renderer->candidate_width!=w||renderer->candidate_height!=h))
+        return error_set(error,PP_ERROR_RENDER,"Prepared output does not match drawable bounds");
+    if(!candidate&&!allocate_output(renderer,w,h,&candidate,error))return false;
+    renderer->output_candidate=0;renderer->candidate_width=renderer->candidate_height=0;
+    if(candidate)output=candidate;
     gl->BindFramebuffer(GL_FRAMEBUFFER,renderer->fbo);
     gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,output,0);
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
@@ -523,6 +599,7 @@ static void delete_shared_objects(PPRenderer *renderer,PPGL *gl) {
     glDeleteTextures(4,renderer->textures);
     glDeleteTextures(1,&renderer->preview_texture);
     glDeleteTextures(1,&renderer->output_texture);
+    glDeleteTextures(1,&renderer->output_candidate);
 }
 bool pp_renderer_destroy_retained(PPRenderer *renderer) {
     if (!renderer) return true;

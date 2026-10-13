@@ -116,7 +116,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   int output_w,output_h;
   if(!pp_geometry_source_extent(source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
       display->drawable_pixels_per_dip,&output_w,&output_h))return false;
-  bool overlap=changed && !source.shared_texture && (r->content_id!=source.content_id || r->source_width!=frame->width || r->source_height!=frame->height);
+  bool overlap=changed && !source.shared_texture;
   size_t source_candidate=overlap?(size_t)frame->width*frame->height*4:0;
   size_t candidate=interactive&&redraw?pp_renderer_output_candidate_bytes(r->renderer,output_w,output_h):0;
   /* Reserve both candidates while the accepted source/output are still owned.
@@ -126,10 +126,10 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   if(candidate&&!pp_presenter_gpu_reserve(p,candidate,error)) {
     pp_presenter_gpu_release(p,source_candidate);return false;
   }
-  if(changed) {
+  if(changed || (interactive && redraw)) {
     bool ok=r->renderer || (pp_presenter_texture_owner(p,error) && pp_renderer_create_shared_window(&r->renderer,pp_surface_window_id(surface),p->texture_owner,error));
-    if(ok) ok=source.shared_texture?pp_renderer_bind_shared(r->renderer,source.shared_texture,source.content_id,source.source_revision,error):
-        pp_renderer_upload_source(r->renderer,frame,source.content_id,source.source_revision,error);
+    if(ok) ok=pp_renderer_prepare_source_output(r->renderer,frame,source.shared_texture,
+        source.content_id,source.source_revision,interactive?output_w:0,interactive?output_h:0,error);
     if(!ok) {
       pp_presenter_gpu_release(p,source_candidate+candidate);
       /* A protective allocation rejection leaves the transactional old texture
@@ -137,6 +137,11 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
       if(error && error->code==PP_ERROR_RENDER) goto native_failure;
       return false;
     }
+    /* Candidate output now belongs to the renderer, even if native placement
+     * later fails. Keep its charge until publication or verified deletion. */
+    r->output_bytes+=candidate;
+  }
+  if(changed) {
     if(overlap) {pp_presenter_gpu_release(p,r->gpu_bytes);r->gpu_bytes=source_candidate;}
     else if(source.shared_texture) {pp_presenter_gpu_release(p,r->gpu_bytes);r->gpu_bytes=0;}
     r->source_width=frame->width;r->source_height=frame->height;
@@ -145,17 +150,16 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   }
   bool refresh=interactive&&!redraw&&place&&newly_exposed(p,r->bounds,rectangle);
   if(!interactive)pp_retained_hide(p,surface,r);
-  if(place && !pp_surface_place_gl(surface,rectangle,interactive,error)) goto output_failure;
+  if(place && !pp_surface_place_gl(surface,rectangle,interactive,error)) goto native_failure;
   if(interactive && redraw && !pp_renderer_draw_source(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
-      pose.opacity,display->drawable_pixels_per_dip,error)) goto output_failure;
-  if(refresh&&!pp_renderer_refresh(r->renderer,error))goto output_failure;
-  if(candidate){pp_presenter_gpu_release(p,r->output_bytes);r->output_bytes=pp_renderer_output_bytes(r->renderer);}
+      pose.opacity,display->drawable_pixels_per_dip,error)) goto native_failure;
+  if(refresh&&!pp_renderer_refresh(r->renderer,error))goto native_failure;
+  size_t output_bytes=pp_renderer_output_bytes(r->renderer);
+  pp_presenter_gpu_release(p,r->output_bytes-output_bytes);r->output_bytes=output_bytes;
   if(place || (redraw && interactive)) p->metrics.native_publications++;
   r->drawn=pose;r->layout=source.layout;r->source_rect=source.source_rect;r->bounds=rectangle;
   r->density=display->drawable_pixels_per_dip;r->visible=interactive;r->valid=true;
   return true;
-output_failure:
-  pp_presenter_gpu_release(p,candidate);
 native_failure:
   pp_retained_hide(p,surface,r);p->failed_surface=surface;return false;
 }

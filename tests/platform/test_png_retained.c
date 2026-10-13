@@ -23,6 +23,12 @@ static bool left_held,right_held,alt_held,no_displays;
 static unsigned downs[3],ups[3],moves[3],wheels[3];
 bool pp_test_desktop_capture_start(RECT rectangle);
 unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new);
+void pp_test_replacement_reject_output(bool reject);
+void pp_test_replacement_reject_source(void);
+bool pp_test_replacement_candidates_released(void);
+unsigned pp_test_replacement_source_allocations(void);
+unsigned pp_test_replacement_output_rejections(void);
+unsigned pp_test_replacement_candidate_deletions(void);
 static double now(void){LARGE_INTEGER n,f;QueryPerformanceCounter(&n);QueryPerformanceFrequency(&f);return(double)n.QuadPart/f.QuadPart;}
 static void cleanup(void){
   pp_platform_settings_window(0);pp_platform_drawer_close(false);SDL_DestroyWindow(drawer);SDL_DestroyWindow(settings);
@@ -81,7 +87,9 @@ static void pose(uint64_t id,PPPose value){API(pp_scene_set_pose(scene,id,value,
 static void unchanged(PPRendererMetrics before,PPSourceMetrics source){PPRendererMetrics after=pp_anchor_presenter_renderer_metrics(presenter);CHECK(after.transform_draws==before.transform_draws&&after.source_uploads==before.source_uploads&&after.readbacks==before.readbacks);CHECK(pp_assets_source_metrics(assets).raster_builds==source.raster_builds);}
 static SDL_Window *ui(const char *name){SDL_Window *window=SDL_CreateWindow(name,80,80,SDL_WINDOW_HIDDEN|SDL_WINDOW_BORDERLESS|SDL_WINDOW_NOT_FOCUSABLE|SDL_WINDOW_ALWAYS_ON_TOP);CHECK(window);CHECK(SDL_SetWindowPosition(window,260,260));CHECK(SDL_ShowWindow(window));return window;}
 int main(int argc,char **argv){
-  CHECK(argc==2);setvbuf(stdout,NULL,_IONBF,0);old_foreground=GetForegroundWindow();CHECK(GetCursorPos(&old_cursor));atexit(cleanup);SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  CHECK(argc==2||(argc==3&&(!strcmp(argv[2],"--output-exhaustion")||!strcmp(argv[2],"--source-exhaustion"))));
+  bool output_exhaustion=argc==3&&!strcmp(argv[2],"--output-exhaustion"),source_exhaustion=argc==3&&!strcmp(argv[2],"--source-exhaustion");
+  setvbuf(stdout,NULL,_IONBF,0);old_foreground=GetForegroundWindow();CHECK(GetCursorPos(&old_cursor));atexit(cleanup);SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   char name[80];snprintf(name,sizeof(name),"Local\\PointyPNGReceiver-%lu",GetCurrentProcessId());mapping=CreateFileMappingA(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(ReceiverState),name);CHECK(mapping);
   receiver=MapViewOfFile(mapping,FILE_MAP_ALL_ACCESS,0,0,sizeof(*receiver));CHECK(receiver);char command[2048];snprintf(command,sizeof(command),"\"%s\" %s",argv[1],name);STARTUPINFOA startup={sizeof(startup)};
   CHECK(CreateProcessA(NULL,command,NULL,NULL,FALSE,0,NULL,NULL,&startup,&child));ULONGLONG until=GetTickCount64()+4000;while(!receiver->window&&GetTickCount64()<until)Sleep(10);CHECK(receiver->window);
@@ -113,11 +121,24 @@ int main(int argc,char **argv){
   unsigned char *artwork=pp_test_desktop_capture(rectangle,true);CHECK(artwork);
   size_t charge=pp_anchor_presenter_gpu_resources(presenter).retained_bytes;
   PPRendererMetrics rejected_before=pp_anchor_presenter_renderer_metrics(presenter);
-  presenter->gpu.limit_bytes=charge+128;
+  if(output_exhaustion) {
+    CHECK(pp_display_at(displays,display_count,accepted_pose.center)->drawable_pixels_per_dip==1.5);
+    pp_test_replacement_reject_output(true);
+  } else if(source_exhaustion)pp_test_replacement_reject_source();
+  else presenter->gpu.limit_bytes=charge+128;
   API(pp_scene_replace(scene,id,&blue,now(),&error));pump();
   CHECK(pp_scene_get(scene,id)&&pp_scene_count(scene)==1&&presenter->instance_count==1);
   accepted=pp_sprites_find(presenter,id);CHECK(accepted&&accepted->surface==surface&&accepted->retained.valid);
-  CHECK(presenter->notice.code==PP_ERROR_RESOURCE_LIMIT&&!presenter->failed_surface);
+  CHECK(presenter->notice.code==(output_exhaustion||source_exhaustion?PP_ERROR_MEMORY:PP_ERROR_RESOURCE_LIMIT)&&!presenter->failed_surface);
+  if(output_exhaustion) {
+    CHECK(pp_test_replacement_source_allocations()==1&&pp_test_replacement_output_rejections()==1);
+    CHECK(pp_test_replacement_candidate_deletions()==2);
+    CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+144*72*4);
+  }
+  if(source_exhaustion)CHECK(pp_test_replacement_source_allocations()==0&&pp_test_replacement_output_rejections()==0&&pp_test_replacement_candidate_deletions()==1);
+  if(output_exhaustion||source_exhaustion) {
+    API(pp_renderer_complete(presenter->texture_owner,&error));CHECK(pp_test_replacement_candidates_released());
+  }
   CHECK(pp_scene_get(scene,id)->snapshot==snapshot&&accepted->retained.snapshot==snapshot);
   CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&accepted_pose,sizeof(accepted_pose)));
   CHECK(!memcmp(&accepted->pose,&accepted_pose,sizeof(accepted_pose)));
@@ -138,14 +159,24 @@ int main(int argc,char **argv){
   PPRendererMetrics rejected_after=pp_anchor_presenter_renderer_metrics(presenter);
   CHECK(rejected_after.source_uploads==rejected_before.source_uploads&&rejected_after.transform_draws==rejected_before.transform_draws);
   before=downs[id];below=receiver->clicks;click(300,300);CHECK(downs[id]==before+1&&receiver->clicks==below&&GetForegroundWindow()==(HWND)receiver->window);
+  if(output_exhaustion||source_exhaustion) {
+    /* Force an accepted-source transform after rejection. A cached old output
+     * alone cannot satisfy this check if the old source was already retired. */
+    PPPose redraw=accepted_pose;redraw.opacity=.5;pose(id,redraw);pose(id,accepted_pose);
+    CHECK(GetWindowRect(window,&rejected_bounds));CHECK(!memcmp(&rectangle,&rejected_bounds,sizeof(rectangle)));
+    pixel("accepted source redraw after rejection",rectangle.left+5,300,255,191,159);
+    CHECK(pp_scene_get(scene,id)->snapshot==snapshot&&pp_anchor_presenter_gpu_resources(presenter).retained_bytes==charge);
+  }
   presenter->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
+  pp_test_replacement_reject_output(false);
   CHECK(SetCursorPos(300,300));API(pp_scene_replace(scene,id,&blue,now(),&error));pump();pixel("stationary immutable replacement",300,300,0,0,255);CHECK(native(surface)==window);
   CHECK(pp_scene_get(scene,id)->snapshot!=snapshot&&pp_scene_get(scene,id)->animation_start>start);
   accepted=pp_sprites_find(presenter,id);CHECK(accepted->retained.source_width==8&&accepted->retained.source_height==4);
   CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==charge-retained.gpu_bytes-retained.output_bytes+accepted->retained.gpu_bytes+accepted->retained.output_bytes);
   CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+pp_sprites_find(presenter,id)->retained.output_bytes);
   pp_item_snapshot_release(snapshot);
-  puts("PASS source-changing output-budget rejection preserves sprite, snapshot, pose, clock, native bounds, all displayed pixels, GPU charge and input; sufficient-budget retry commits");
+  printf("PASS replacement %s rejection preserves sprite, snapshot, pose, clock, native bounds, all displayed pixels, GPU charge and input; retry commits\n",
+    output_exhaustion?"driver output":source_exhaustion?"driver source":"application budget");
   PPItem empty=image("retained-empty.png");mouse(MOUSEEVENTF_LEFTDOWN,0);API(pp_scene_replace(scene,id,&empty,now(),&error));pump();mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!IsWindowVisible(window)&&pp_scene_get(scene,id)->pose.opacity==1);below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1);API(pp_scene_replace(scene,id,&blue,now(),&error));pump();CHECK(IsWindowVisible(window));
   puts("PASS fully transparent PNG source at opacity1 releases input/capture, with source visibility retained between updates");
   created=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){{300,300},96,0,1},now(),&error);CHECK(created);uint64_t second=created->id;pump();before=downs[second];click(300,300);CHECK(downs[second]==before+1);

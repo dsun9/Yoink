@@ -709,6 +709,13 @@ int main(int argc,char **argv) {
  * retained color allocation and publication. */
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int w,int h){(void)r;(void)w;(void)h;return 0;}
 size_t pp_renderer_output_bytes(const PPRenderer *r){(void)r;return 0;}
+bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *frame,PPSharedTexture *shared,
+    uint64_t id,uint64_t revision,int w,int h,PPError *error) {
+  (void)w;(void)h;
+  if(shared)return pp_renderer_bind_shared(r,shared,id,revision,error);
+  if(frame)return pp_renderer_upload_source(r,frame,id,revision,error);
+  return true;
+}
 void pp_renderer_release_output(PPRenderer *r){(void)r;}
 bool pp_renderer_refresh(PPRenderer *r,PPError *error){(void)error;r->metrics.presentation_refreshes++;return true;}
 bool pp_renderer_destroy_retained(PPRenderer *r){pp_renderer_destroy(r);return true;}

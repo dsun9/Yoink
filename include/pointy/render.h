@@ -44,6 +44,15 @@ bool pp_renderer_preview_source(PPRenderer *renderer,const PPFrame *source,
  * and revision reuses the upload. Source bytes are borrowed only during upload. */
 bool pp_renderer_upload_source(PPRenderer *renderer, const PPFrame *source,
     uint64_t content_id, uint64_t revision, PPError *error);
+/* Native preparation commits the source only after candidate source and output
+ * storage both succeed. Failure preserves accepted storage and identity.
+ * Unchanged sources may omit frame/shared. Zero output dimensions skip output.
+ * Caller reserves changed private source and candidate output overlap first,
+ * then places the native window and draws. output_bytes includes pending output
+ * until drawing publishes it or release/destroy discards it. */
+bool pp_renderer_prepare_source_output(PPRenderer *renderer,const PPFrame *source,
+    PPSharedTexture *shared,uint64_t content_id,uint64_t revision,
+    int output_width,int output_height,PPError *error);
 /* Draws the retained source into the window and swaps; never returns CPU pixels.
  * layout_size defines the canonical unrotated aspect, independent of source
  * raster dimensions. Window drawable dimensions must match its extent. */

@@ -78,6 +78,53 @@ window bounds and retaining the shared-source and final zero-charge checks.
 Both standards and specification reviews found no actionable issues.
 Run the native regression with the supervised `png_retained` command above.
 
+## Driver allocation rejection regression
+
+[Issue #17](https://github.com/dsun9/Yoink/issues/17) extends replacement rollback
+past application budget reservations. `replacement_output_exhaustion` permits
+both reservations and verifies real 8 by 4 candidate source storage before
+injecting `GL_OUT_OF_MEMORY` specifically for the 144 by 72 candidate output.
+The accepted source is the 3 by 1 alpha PNG at 96 DIP and actual 1.5 drawable
+density. On reviewed commit `d560f826`, the regression failed because its only
+scene and presenter sprite disappeared. The baseline supervisor verified
+released input and restored cursor and foreground.
+
+Preparation now keeps accepted source ownership until both allocations succeed,
+and keeps accepted output until publication succeeds. Allocation exhaustion is
+a protective memory rejection. The native test checks the same sprite and
+surface, snapshot, pose, animation start, source identity, native bounds, every
+displayed RGB pixel through fresh Desktop Duplication, usable rectangular input,
+exact accepted GPU charge, and deletion of both rejected texture names. It then
+forces an accepted-source redraw and successfully retries the replacement after
+removing the injected failure. Candidate overlap contributes to the peak charge.
+`replacement_source_exhaustion` applies the same checks when source allocation
+fails, while `png_retained` retains application budget rollback coverage.
+
+The full Release build and all 36 non-desktop tests passed on 2026-10-12.
+All 35 desktop tests passed across supervised groups, including both allocation
+regressions, ownership, PNG presentation, native failure/input cleanup and all
+four edges for hand and PNG at both 96 and 1536 DIP. An initial `sprite_flow`
+run failed to locate its Settings cancel-transition control; the reviewed
+baseline and isolated fixed-branch rerun passed. The original failure evidence
+is retained, and no fixture or product change was made for that transient
+failure. Every supervised run verified input, cursor and foreground restoration.
+Standards and specification reviews each reported zero actionable findings.
+The regression concerns OpenGL storage and native presentation; its desktop
+capture helper does not change the application's OpenGL backend. macOS native
+execution remains unverified.
+
+```powershell
+cmake --build --preset windows-release --parallel 6
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -TestRegex '^(replacement_output_exhaustion|replacement_source_exhaustion|png_retained|sprite_exposure_ownership)$' -LogPrefix issue17-replacement
+```
+
+Evidence is retained in `build/issue17-red-desktop.log`,
+`build/issue17-green-desktop.log`, `build/issue17-exhaustion-desktop.log`,
+`build/issue17-non-desktop.log`, `build/issue17-edges-desktop.log`,
+`build/issue17-edges-details.log`, `build/issue17-native-rest-desktop.log`,
+`build/issue17-flow-baseline-desktop.log`, and
+`build/issue17-native-remaining-desktop.log`.
+
 ## Scoped timing and limits
 
 The [performance matrix](rendering-performance.md) now measures PNG through `pp_sprite_present` and aggregates its retained renderer. Each timer query is created, resolved and deleted in its owning context. The PNG-only diagnostic completed 16/16 cases, 320/320 warm GPU observations and tagged native input observations in all 16 cases. Every case reported zero raster builds, one cold source upload, 23 transform draws across cold/warmup/varying-pose samples and zero readbacks. Worst complete-path p95 was 16.851 ms and maximum tagged hook-arrival wait was 32 ms. GL completion waits include driver/swap pacing; these are synthetic poses in offscreen windows, with visible compositor timing unobserved.
