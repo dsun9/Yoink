@@ -8,6 +8,111 @@
 static const char *anchor_names[PP_ANCHOR_COUNT] = {
     "Top left",     "Top center",  "Top right",     "Center left",
     "Center right", "Bottom left", "Bottom center", "Bottom right"};
+static bool contains(struct nk_rect rect, struct nk_vec2 point) {
+  return point.x >= rect.x && point.y >= rect.y &&
+         point.x < rect.x + rect.w && point.y < rect.y + rect.h;
+}
+static uint64_t list_order(const PPAnchorList *list) {
+  uint64_t hash = UINT64_C(14695981039346656037);
+  for (size_t i = 0; i < list->count; i++)
+    hash = (hash ^ list->item_ids[i]) * UINT64_C(1099511628211);
+  return hash ^ list->count;
+}
+static bool drag_list_valid(PPSettings *settings) {
+  const PPAppUIState *state = pp_app_ui(settings->app);
+  return settings->page == PP_SETTINGS_ITEMS &&
+         settings->drag.generation == pp_app_generation(settings->app) &&
+         settings->drag.anchor == state->anchor &&
+         settings->drag.order == list_order(pp_project_anchor(pp_app_project(settings->app), state->anchor));
+}
+/* A gap is measured against the latest completed row geometry, then converted
+ * to the command's final item index with the source removed. */
+static bool drag_target(PPSettings *settings, size_t *gap, float *marker) {
+  PPItemDrag *drag = &settings->drag;
+  if (!drag_list_valid(settings) || !contains(drag->viewport, drag->pointer))
+    return false;
+  const PPAnchorList *list = pp_project_anchor(pp_app_project(settings->app), drag->anchor);
+  *gap = list->count;
+  for (size_t i = 0; i < list->count; i++) {
+    char id[48]; PPRect row;
+    snprintf(id, sizeof(id), "item-%llu", (unsigned long long)list->item_ids[i]);
+    if (!pp_ui_control_rect(settings->backend, id, &row)) return false;
+    if (drag->pointer.y < row.y + row.h / 2) {
+      *gap = i;
+      if (marker) *marker = (float)row.y;
+      return true;
+    }
+    if (marker) *marker = (float)(row.y + row.h);
+  }
+  return list->count != 0;
+}
+static void cancel_drag(PPSettings *settings) {
+  settings->drag.pressed = settings->drag.active = settings->drag.drop_pending = false;
+}
+static void item_pointer_event(PPSettings *settings, const PPPlatformEvent *event) {
+  PPUIBackend *ui = settings->backend;
+  PPItemDrag *drag = &settings->drag;
+  if (event->kind == PP_EVENT_FOCUS_LOST || event->kind == PP_EVENT_CANCEL ||
+      event->kind == PP_EVENT_WINDOW_CLOSE || event->kind == PP_EVENT_WINDOW_RESIZE ||
+      (event->kind == PP_EVENT_KEY_DOWN && event->key == PP_KEY_ESCAPE)) {
+    cancel_drag(settings);
+    if (event->kind == PP_EVENT_FOCUS_LOST || event->kind == PP_EVENT_CANCEL ||
+        event->kind == PP_EVENT_WINDOW_CLOSE)
+      drag->consuming = drag->suppress_release = false;
+    return;
+  }
+  if (event->kind != PP_EVENT_POINTER_MOVE && event->kind != PP_EVENT_BUTTON_DOWN &&
+      event->kind != PP_EVENT_BUTTON_UP) return;
+  drag->pointer = nk_vec2((float)(event->window_point.x / ui->window_scale),
+                         (float)(event->window_point.y / ui->window_scale));
+  if (event->kind == PP_EVENT_BUTTON_DOWN && event->button == PP_BUTTON_LEFT &&
+      settings->page == PP_SETTINGS_ITEMS && !settings->dialog_pending &&
+      !settings->remove_confirmation && !pp_app_ui(settings->app)->transition_pending &&
+      !ui->popup_id && !pp_settings_invalid(settings) && contains(drag->viewport, drag->pointer)) {
+    const PPAppUIState *state = pp_app_ui(settings->app);
+    const PPAnchorList *list = pp_project_anchor(pp_app_project(settings->app), state->anchor);
+    for (size_t i = 0; i < list->count; i++) {
+      char id[48]; PPRect row;
+      snprintf(id, sizeof(id), "item-%llu", (unsigned long long)list->item_ids[i]);
+      if (pp_ui_control_rect(ui, id, &row) &&
+          contains(nk_rect((float)row.x, (float)row.y, (float)row.w, (float)row.h), drag->pointer)) {
+        drag->pressed = true;
+        drag->active = drag->consuming = drag->drop_pending = false;
+        drag->start = drag->pointer;
+        drag->item = list->item_ids[i];
+        drag->anchor = state->anchor;
+        drag->generation = pp_app_generation(settings->app);
+        drag->order = list_order(list);
+        drag->scroll_time = SDL_GetTicks() / 1000.0;
+        drag->scroll_fraction = 0;
+        break;
+      }
+    }
+  }
+  if (drag->pressed && !drag_list_valid(settings)) cancel_drag(settings);
+  if (drag->pressed && event->kind == PP_EVENT_POINTER_MOVE) {
+    float dx = drag->pointer.x - drag->start.x, dy = drag->pointer.y - drag->start.y;
+    if (dx * dx + dy * dy >= 36) drag->active = drag->consuming = true;
+  }
+  if (event->kind == PP_EVENT_BUTTON_UP && event->button == PP_BUTTON_LEFT) {
+    if (drag->active) {
+      size_t gap;
+      if (drag_target(settings, &gap, NULL)) {
+        const PPAnchorList *list = pp_project_anchor(pp_app_project(settings->app), drag->anchor);
+        for (size_t i = 0; i < list->count; i++)
+          if (list->item_ids[i] == drag->item) {
+            drag->destination = gap > i ? gap - 1 : gap;
+            drag->drop_pending = drag->destination != i;
+            break;
+          }
+      }
+    }
+    drag->suppress_release = drag->consuming;
+    drag->pressed = drag->active = drag->consuming = false;
+  }
+  if (drag->consuming || drag->suppress_release)
+    ui->context.input.mouse.buttons[NK_BUTTON_LEFT].clicked = 0;
+}
 static void release_row_thumbnails(PPSettings *settings, bool all) {
   for (size_t i = 0; i < 8; i++) {
     if (all || !settings->row_thumbnail_used[i]) {
@@ -85,7 +190,10 @@ static void row_content(PPSettings *settings, const PPItem *item, const char *la
   row_thumbnail(settings, item, nk_rect(bounds.x + 5, bounds.y + 6, 32, 32));
   struct nk_user_font *font = &ui->utility_font->handle;
   struct nk_rect text = nk_rect(bounds.x + 44, bounds.y + (bounds.h - font->height) / 2,
-                                fmaxf(0, bounds.w - 50), font->height);
+                                fmaxf(0, bounds.w - 72), font->height);
+  pp_ui_draw_icon(nk_window_get_canvas(&ui->context),
+                 nk_rect(bounds.x + bounds.w - 23, bounds.y + 10, 20, 24),
+                 PP_UI_ICON_DRAG, pp_ui_theme.muted);
   char display[128];
   snprintf(display, sizeof(display), "%s", label);
   int length = (int)strlen(label);
@@ -193,6 +301,7 @@ void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
       event->window_id != pp_settings_window_id(settings))
     return;
   pp_ui_backend_event(settings->backend, event);
+  item_pointer_event(settings, event);
   if (event->kind == PP_EVENT_WINDOW_CLOSE) {
     if (settings->dialog_pending)
       return;
@@ -204,6 +313,30 @@ void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
       pp_app_ui(settings->app)->transition_pending ||
       settings->remove_confirmation)
     return;
+  if (settings->page == PP_SETTINGS_ITEMS && !settings->backend->popup_id &&
+      (event->modifiers & PP_MOD_ALT) &&
+      (event->key == PP_KEY_UP || event->key == PP_KEY_DOWN)) {
+    const PPAppUIState *state = pp_app_ui(settings->app);
+    const PPAnchorList *list = pp_project_anchor(pp_app_project(settings->app), state->anchor);
+    for (size_t i = 0; i < list->count; i++) {
+      char id[48]; snprintf(id, sizeof(id), "item-%llu", (unsigned long long)list->item_ids[i]);
+      if (pp_ui_focused(settings->backend, id)) {
+        settings->reorder_key = event->key;
+        settings->reorder_item = list->item_ids[i];
+        settings->reorder_anchor = state->anchor;
+        settings->reorder_generation = pp_app_generation(settings->app);
+        settings->backend->navigation = PP_KEY_NONE;
+        /* The row shortcut consumes the arrow itself. An active outgoing
+         * numeric field must not treat it as caret navigation before text. */
+        settings->backend->context.input.keyboard.keys[NK_KEY_UP] = (struct nk_key){0};
+        settings->backend->context.input.keyboard.keys[NK_KEY_DOWN] = (struct nk_key){0};
+        /* An outgoing field may still own text in this input batch. Let it
+         * consume that input before restoring the moved row's keyboard focus. */
+        settings->backend->keyboard_focus = false;
+        return;
+      }
+    }
+  }
   if ((event->modifiers & PP_MOD_CONTROL) &&
       (event->key == PP_KEY_S || event->key == PP_KEY_N ||
        event->key == PP_KEY_O)) {
@@ -265,6 +398,33 @@ static void ordered_items(PPSettings *settings) {
   const PPAnchorList *list =
       pp_project_anchor(pp_app_project(settings->app), state->anchor);
   bool enabled = !settings->dialog_pending && !pp_settings_invalid(settings);
+  if ((settings->drag.pressed || settings->drag.drop_pending) && !drag_list_valid(settings))
+    cancel_drag(settings);
+  if (settings->drag.drop_pending) {
+    settings->drag.drop_pending = false;
+    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_REORDER_ITEM,
+        .anchor = settings->drag.anchor, .item_id = settings->drag.item,
+        .index = settings->drag.destination});
+  }
+  if (settings->reorder_key) {
+    PPKey key = settings->reorder_key;
+    settings->reorder_key = PP_KEY_NONE;
+    ui->navigation = PP_KEY_NONE;
+    if (settings->reorder_generation == pp_app_generation(settings->app) &&
+        settings->reorder_anchor == state->anchor) {
+      for (size_t i = 0; i < list->count; i++) {
+        if (list->item_ids[i] != settings->reorder_item) continue;
+        size_t next = i;
+        if (key == PP_KEY_UP && i) next--;
+        if (key == PP_KEY_DOWN && i + 1 < list->count) next++;
+        if (next != i)
+          pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_REORDER_ITEM,
+              .anchor = state->anchor, .item_id = settings->reorder_item, .index = next});
+        settings->reorder_focus_pending = true;
+        break;
+      }
+    }
+  }
   if (enabled && !ui->popup_id && ui->navigation) {
     for (size_t i = 0; i < list->count; i++) {
       char id[48];
@@ -310,6 +470,7 @@ static void ordered_items(PPSettings *settings) {
   if (nk_group_begin(ctx, "anchor-items", group_flags |
                             (offscreen ? (nk_flags)NK_WINDOW_MOVABLE | (nk_flags)NK_WINDOW_ROM : 0))) {
     ctx->current->layout->flags = group_flags;
+    settings->drag.viewport = ctx->current->layout->clip;
     if (!list->count) {
       nk_layout_row_dynamic(ctx, 48, 1);
       nk_label_wrap(ctx, "No items. Add text or import an image below.");
@@ -332,23 +493,32 @@ static void ordered_items(PPSettings *settings) {
                       nk_input_is_mouse_hovering_rect(&ctx->input, ctx->current->layout->clip)) ||
                      (ui->keyboard_focus && (pp_ui_focused(ui, id) ||
                       pp_ui_focused(ui, default_id) || pp_ui_focused(ui, delete_id)));
-      if (pp_ui_select(ui, id, "", item->id == state->selected_item,
-                       enabled))
+      /* Actual row content is drawn over the shared button. Keep its pressed
+       * fill pale so the content label and insertion line retain contrast. */
+      struct nk_style_item active = ctx->style.button.active;
+      ctx->style.button.active = nk_style_item_color(pp_ui_theme.selection);
+      bool selected = pp_ui_select(ui, id, "", item->id == state->selected_item, enabled);
+      ctx->style.button.active = active;
+      if (selected && !settings->drag.consuming && !settings->drag.suppress_release)
         pp_settings_command(
             settings,
             (PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = item->id});
       if (ui->control_count)
         snprintf(ui->controls[ui->control_count - 1].label, sizeof(ui->controls[0].label), "%s", label);
       row_content(settings, item, label, content, item->id == state->selected_item);
+      if (settings->drag.active && settings->drag.item == item->id)
+        nk_stroke_rect(nk_window_get_canvas(ctx), content,
+                       pp_ui_theme.control_radius, 1, pp_ui_theme.accent);
       if (content.y >= ctx->current->layout->clip.y &&
           content.y + content.h <= ctx->current->layout->clip.y + ctx->current->layout->clip.h)
         pp_ui_tooltip(ui, content, id, label);
       if (actions) {
+        bool action_enabled = enabled && !settings->drag.consuming && !settings->drag.suppress_release;
         if (pp_ui_icon_button(ui, default_id, item->id == list->default_id ? PP_UI_ICON_STAR : PP_UI_ICON_STAR_OUTLINE,
-                              "Default", "Default for future pulls", enabled, false))
+                              "Default", "Default for future pulls", action_enabled, false))
           pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SET_DEFAULT,
                                 .anchor = state->anchor, .item_id = item->id});
-        if (pp_ui_icon_button(ui, delete_id, PP_UI_ICON_DELETE, "Delete", "Delete this item", enabled, false))
+        if (pp_ui_icon_button(ui, delete_id, PP_UI_ICON_DELETE, "Delete", "Delete this item", action_enabled, false))
           pp_project_request_remove(settings, state->anchor, item->id);
         /* Focus reveal settles on the following frame. Do not anchor action
          * help to an offscreen row while either scroll owner is moving it. */
@@ -366,13 +536,40 @@ static void ordered_items(PPSettings *settings) {
         nk_widget(&bounds, ctx);
       }
     }
+    if (settings->drag.active) {
+      size_t gap; float marker;
+      if (drag_target(settings, &gap, &marker)) {
+        struct nk_rect clip = settings->drag.viewport;
+        marker = fmaxf(clip.y + 2, fminf(clip.y + clip.h - 2, marker));
+        nk_stroke_line(nk_window_get_canvas(ctx), clip.x + 4, marker,
+                       clip.x + clip.w - 4, marker, 3, pp_ui_theme.accent);
+      }
+      ui->tooltip_text[0] = 0;
+    }
     nk_group_end(ctx);
   }
+  if (settings->drag.active) {
+    PPItemDrag *drag = &settings->drag;
+    double now = SDL_GetTicks() / 1000.0;
+    double elapsed = fmin(0.05, fmax(0, now - drag->scroll_time));
+    drag->scroll_time = now;
+    if (contains(drag->viewport, drag->pointer)) {
+      float top = drag->pointer.y - drag->viewport.y;
+      float bottom = drag->viewport.y + drag->viewport.h - drag->pointer.y;
+      float speed = top < 24 ? -600 * (1 - top / 24)
+                              : bottom < 24 ? 600 * (1 - bottom / 24) : 0;
+      drag->scroll_fraction += (float)elapsed * speed;
+      int steps = (int)drag->scroll_fraction;
+      drag->scroll_fraction -= steps;
+      if (steps) {
+        nk_uint x, y;
+        nk_group_get_scroll(ctx, "anchor-items", &x, &y);
+        nk_group_set_scroll(ctx, "anchor-items", x,
+                            (nk_uint)fmax(0, (double)y + steps));
+      }
+    } else drag->scroll_fraction = 0;
+  }
   pp_ui_reveal_focus(ui, "anchor-items", list_viewport, first_control);
-  size_t selected_index = SIZE_MAX;
-  for (size_t i = 0; i < list->count; i++)
-    if (list->item_ids[i] == state->selected_item)
-      selected_index = i;
   nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
   if (pp_ui_button(ui, "add-text", "Add text", enabled)) {
     pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_ADD_TEXT,
@@ -381,28 +578,9 @@ static void ordered_items(PPSettings *settings) {
   }
   if (pp_ui_button(ui, "add-image", "Add image", enabled))
     pp_settings_dialog(settings, PP_DIALOG_IMPORT_IMAGE, true);
-  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
-  if (pp_ui_button(ui, "move-up", "Move up",
-                   enabled && selected_index > 0 &&
-                       selected_index < list->count)) {
-    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_REORDER_ITEM,
-                                              .anchor = state->anchor,
-                                              .item_id = state->selected_item,
-                                              .index = selected_index - 1});
-    return;
-  }
-  if (pp_ui_button(ui, "move-down", "Move down",
-                   enabled && selected_index < list->count &&
-                       selected_index + 1 < list->count)) {
-    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_REORDER_ITEM,
-                                              .anchor = state->anchor,
-                                              .item_id = state->selected_item,
-                                              .index = selected_index + 1});
-    return;
-  }
   nk_layout_row_dynamic(ctx, 40, 1);
-  nk_label_wrap(ctx, "Selecting an item leaves the default unchanged. Make "
-                     "default chooses what future pulls create.");
+  nk_label_wrap(ctx, "Drag a row to reorder, or focus it and press Alt+Up/Down. "
+                     "Selecting leaves the default unchanged.");
 }
 static void interaction_field(PPSettings *settings, const char *label,
                               const char *id, char *text, int capacity,
@@ -559,6 +737,7 @@ void pp_settings_draw(PPSettings *settings) {
   if (settings->failed)
     return;
   if (settings->generation != pp_app_generation(settings->app)) {
+    cancel_drag(settings);
     release_row_thumbnails(settings, true);
     pp_item_editor_release_preview(settings);
     settings->generation = pp_app_generation(settings->app);
@@ -684,6 +863,7 @@ void pp_settings_draw(PPSettings *settings) {
   }
   nk_end(ctx);
   settings->drawing_fields = false;
+  settings->drag.suppress_release = false;
   /* Validation is independent of which page is visible. Navigation and actions
    * run only after the outgoing page has consumed its complete input batch. */
   pp_item_editor_validate(settings);
@@ -692,6 +872,11 @@ void pp_settings_draw(PPSettings *settings) {
   pp_project_confirmation(settings);
   if (!pp_ui_end(ui, &error))
     goto failed;
+  if (settings->reorder_focus_pending) {
+    settings->reorder_focus_pending = false;
+    char id[48]; snprintf(id, sizeof(id), "item-%llu", (unsigned long long)settings->reorder_item);
+    pp_ui_focus(ui, id);
+  }
   settings->rendering = false;
   release_row_thumbnails(settings, !pp_app_ui(settings->app)->settings_open);
   if (settings->revert_pending) {

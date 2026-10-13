@@ -34,6 +34,16 @@ typedef enum PPSettingsPage {
   PP_SETTINGS_ITEMS,
   PP_SETTINGS_INTERACTION
 } PPSettingsPage;
+typedef struct PPItemDrag {
+  uint64_t item, generation, order;
+  PPAnchor anchor;
+  struct nk_vec2 start, pointer;
+  struct nk_rect viewport;
+  size_t destination;
+  double scroll_time;
+  float scroll_fraction;
+  bool pressed, active, consuming, suppress_release, drop_pending;
+} PPItemDrag;
 struct PPSettings {
   PPApp *app; /* Borrowed, must outlive settings. */
   PPUIBackend *backend;
@@ -61,6 +71,11 @@ struct PPSettings {
   PPUIContentPreview row_thumbnails[8];
   uint64_t row_thumbnail_ids[8];
   bool row_thumbnail_used[8];
+  PPKey reorder_key;
+  PPAnchor reorder_anchor;
+  uint64_t reorder_item, reorder_generation;
+  bool reorder_focus_pending;
+  PPItemDrag drag;
 };
 bool pp_settings_command(PPSettings *settings, PPCommand command);
 void pp_project_actions(PPSettings *settings);
