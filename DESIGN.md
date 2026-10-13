@@ -47,7 +47,67 @@ components:
     backgroundColor: "{colors.primary}"
 ---
 
-# PointyPointer settings
+# Yoink settings
+
+## Menu redesign direction agreed on 2026-10-13
+
+The [approved redesign specification](docs/superpowers/specs/2026-10-13-yoink-menu-redesign.md)
+is authoritative for the new menus and public rename. It also records the
+unresolved Undo behavior separately from the approved redesign.
+
+The next menu revision uses BongoCat's pale surfaces, rounded controls,
+clear section hierarchy and compact switches, adapted to a blue Yoink
+palette. The user approved these four decisions:
+
+- Blue is the principal accent and selection color.
+- Settings separates Items and Interaction into distinct pages, with a shared
+  project toolbar and project status. Items keeps the eight-position selector,
+  anchor list, actual content preview and item editor together.
+- The replacement drawer uses whole-row selection with an integrated thumbnail
+  and readable label. Selecting a row immediately replaces the sprite.
+- The first revision focuses on the light theme.
+
+The user subsequently approved the responsive Items/Interaction layout and
+feedback presentation. The drawer must remain compact, with a maximum of
+340 by 360 logical units and a smaller height for short lists. The detailed
+design now includes these requirements:
+
+- The product name is Yoink. Application branding, executable/bundle names,
+  tray and window titles, current launch instructions and distribution names
+  adopt that name. Existing `.pointy` projects and remembered preferences remain
+  compatible.
+- The project toolbar aligns the app name, project label, name field and action
+  buttons vertically. New, Open, Save and Save as use equal-width icon buttons
+  with tooltips on hover and keyboard focus. Unsaved changes appear as an
+  asterisk beside the displayed project name, outside the stored name.
+- The eight-position selector is a regular three-by-three grid with a monitor
+  icon in the unused center. Eight directional arrow labels keep the picker
+  compact. The selected position's full name remains visible below it, and
+  each button exposes its full position name on hover and keyboard focus.
+  Buttons do not overlap the screen diagram or one another.
+- Items reorder by dragging, with a visible drag handle and insertion position.
+  The list retains a keyboard reorder shortcut. Default and Delete actions
+  appear on the hovered or keyboard-focused row, with space reserved so labels
+  do not move when actions appear. The current default retains a visible star
+  indicator. The only persistent list actions are Add text and Add image.
+- Dropdowns draw a proper downward chevron inside the trigger.
+- The replacement drawer has a labeled Close button. Whole-row choices retain
+  integrated thumbnails, keyboard focus, immediate selection and dismissal.
+- Wide Settings windows pair the position/list section with the item editor.
+  Small windows stack those sections and wrap the project toolbar; focus reveals
+  the active control in the scroll area.
+- Routine font coverage information appears under Font details. Actionable
+  warnings and errors remain visible.
+- Tab switches consume the outgoing page's pending edits before changing pages.
+  Invalid drafts survive navigation, the affected tab has an error indicator,
+  and project actions continue to check errors on both pages.
+- The footer action is Undo. Its scope is still being clarified because the
+  existing Revert fields action only discards invalid drafts, while project-wide
+  edit history would be new behavior.
+
+The sections below describe the current implementation until the redesign is
+implemented. The visual reference is `Ref/BongoCat/src/ui/theme/` and its
+preferences widgets.
 
 ## Overview
 
