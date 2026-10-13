@@ -9,6 +9,7 @@ typedef struct PPItemEditor {
   char family[256], size[32], angle[32], opacity[32], color[16], face[32];
   char content_error[512], appearance_error[512], font_error[512],
       diagnostics[512];
+  char font_warnings[4][256];
   PPItem draft;
   PPItemSnapshot *preview;
   PPRenderer *renderer;
@@ -16,7 +17,7 @@ typedef struct PPItemEditor {
   GLuint preview_texture;
   int preview_width, preview_height;
   double animation_start, next_frame;
-  bool changed, preview_dirty;
+  bool changed, preview_dirty, font_details_open;
 } PPItemEditor;
 typedef enum PPProjectAction {
   PP_PROJECT_ACTION_NONE,

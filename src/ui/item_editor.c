@@ -21,6 +21,7 @@ bool pp_ui_number(const char *text, double low, double high, double *out) {
 static void text_diagnostics(PPSettings *settings) {
   PPItemEditor *editor = &settings->editor;
   editor->diagnostics[0] = 0;
+  memset(editor->font_warnings, 0, sizeof(editor->font_warnings));
   if (editor->draft.kind != PP_ITEM_TEXT)
     return;
   const PPTextDiagnostics *prepared=pp_item_snapshot_text_diagnostics(editor->preview);
@@ -33,17 +34,27 @@ static void text_diagnostics(PPSettings *settings) {
     pp_font_inspect(pp_asset_source(fallback),
                     editor->draft.text_style.fallback_face, &info, NULL);
   snprintf(editor->diagnostics, sizeof(editor->diagnostics),
-           "Requested: %.100s. Fallback: %.100s. Used fallback runs: %zu. "
-           "Missing glyphs: %zu.%s%s",
+           "Requested: %.100s. Fallback: %.100s. Fallback runs: %zu. "
+           "Missing glyphs: %zu. Bitmap glyphs: %zu; scalable glyphs: %zu.%s",
            editor->draft.text_style.requested_family,
            fallback ? info.family : "none", diagnostics.fallback_runs,
-           diagnostics.missing_glyphs,
-           diagnostics.missing_requested_families
-               ? " Requested family is unavailable."
-               : "",
+           diagnostics.missing_glyphs, diagnostics.artwork.bitmap_glyphs,
+           diagnostics.artwork.scalable_glyphs,
            diagnostics.default_emoji_fallback
-               ? " Bundled Noto is selected because Segoe UI Emoji was unavailable."
+               ? " Bundled Noto supplies emoji because Segoe UI Emoji is unavailable."
                : "");
+  if (diagnostics.missing_requested_families)
+    snprintf(editor->font_warnings[0], sizeof(editor->font_warnings[0]),
+             "Requested font is unavailable. Import that font or choose a matching collection face.");
+  if (diagnostics.fallback_runs &&
+      (diagnostics.missing_requested_families || diagnostics.missing_glyphs))
+    snprintf(editor->font_warnings[1], sizeof(editor->font_warnings[1]),
+             "Fallback renders %zu text runs. Import a font with these characters if the appearance is unexpected.",
+             diagnostics.fallback_runs);
+  if (diagnostics.missing_glyphs)
+    snprintf(editor->font_warnings[2], sizeof(editor->font_warnings[2]),
+             "%zu missing glyphs. Import a font with these characters or change the text.",
+             diagnostics.missing_glyphs);
   pp_asset_release(fallback);
 }
 void pp_item_editor_sync(PPSettings *settings) {
@@ -205,6 +216,14 @@ void pp_item_editor_validate(PPSettings *settings) {
   editor->preview_dirty = true;
   text_diagnostics(settings);
 }
+static const char *appearance_error(const PPItemEditor *editor, const char *id) {
+  const char *prefix = !strcmp(id, "item-size") ? "Size:"
+                     : !strcmp(id, "text-color") ? "Text color:"
+                     : !strcmp(id, "item-angle") ? "Angle:"
+                     : !strcmp(id, "item-opacity") ? "Opacity:" : "";
+  return *prefix && !strncmp(editor->appearance_error, prefix, strlen(prefix))
+             ? editor->appearance_error : "";
+}
 static void field(PPSettings *settings, const char *label, const char *id,
                   char *value, int capacity, bool *changed) {
   PPUIBackend *ui = settings->backend;
@@ -214,11 +233,33 @@ static void field(PPSettings *settings, const char *label, const char *id,
   *changed =
       pp_ui_edit(ui, id, value, capacity, false, !settings->dialog_pending) ||
       *changed;
+  pp_ui_error(ui, appearance_error(&settings->editor, id));
+}
+static void paired_fields(PPSettings *settings, const char *first_label,
+                          const char *first_id, char *first, int first_capacity,
+                          const char *second_label, const char *second_id,
+                          char *second, int second_capacity, bool *changed) {
+  PPUIBackend *ui = settings->backend;
+  if (ui->width < 860 || nk_window_get_content_region(&ui->context).w < 460) {
+    field(settings, first_label, first_id, first, first_capacity, changed);
+    field(settings, second_label, second_id, second, second_capacity, changed);
+    return;
+  }
+  nk_layout_row_dynamic(&ui->context, 20, 2);
+  nk_label(&ui->context, first_label, NK_TEXT_LEFT);
+  nk_label(&ui->context, second_label, NK_TEXT_LEFT);
+  nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 2);
+  *changed = pp_ui_edit(ui, first_id, first, first_capacity, false,
+                        !settings->dialog_pending) || *changed;
+  *changed = pp_ui_edit(ui, second_id, second, second_capacity, false,
+                        !settings->dialog_pending) || *changed;
+  pp_ui_error(ui, appearance_error(&settings->editor, first_id));
+  pp_ui_error(ui, appearance_error(&settings->editor, second_id));
 }
 static void preview(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
-  nk_layout_row_dynamic(&ui->context, 180, 1);
+  nk_layout_row_dynamic(&ui->context, 108, 1);
   struct nk_rect rect;
   nk_widget(&rect, &ui->context);
   struct nk_command_buffer *canvas = nk_window_get_canvas(&ui->context);
@@ -236,7 +277,7 @@ static void preview(PPSettings *settings) {
     PPError error = {0};
     PPVec2 size = pp_item_snapshot_size(editor->preview);
     double longest = fmax(size.x, size.y);
-    double fit = fmin(150.0 / longest, (rect.w - 28) / longest);
+    double fit = fmin((rect.h - 20) / size.y, (rect.w - 28) / size.x);
     fit = fmin(1, fit);
     if(!pp_ui_preview_update(ui,settings->app,&editor->retained,editor->preview,
         longest*fit,editor->draft.angle_deg,editor->draft.opacity,ui->scale,
@@ -275,7 +316,7 @@ void pp_item_editor(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
   pp_item_editor_sync(settings);
-  pp_ui_heading(ui, "Item appearance");
+  pp_ui_heading(ui, "Selected item");
   if (!editor->preview) {
     nk_layout_row_dynamic(&ui->context, 60, 1);
     nk_label_wrap(&ui->context, "This anchor has no items. Add text or import "
@@ -283,15 +324,12 @@ void pp_item_editor(PPSettings *settings) {
     return;
   }
   preview(settings);
-  if (editor->diagnostics[0]) {
-    nk_layout_row_dynamic(&ui->context, 64, 1);
-    nk_label_wrap(&ui->context, editor->diagnostics);
-  }
   if (ui->font_diagnostic[0]) {
     nk_layout_row_dynamic(&ui->context, 48, 1);
     nk_label_wrap(&ui->context, ui->font_diagnostic);
   }
   bool changed = false;
+  pp_ui_heading(ui, "Content");
   if (editor->draft.kind == PP_ITEM_TEXT && editor->text) {
     ui->text_assets=pp_app_assets(settings->app);
     nk_layout_row_dynamic(&ui->context, 20, 1);
@@ -300,17 +338,19 @@ void pp_item_editor(PPSettings *settings) {
     changed = pp_ui_edit(ui, "item-text", editor->text, editor->text_capacity,
                          true, !settings->dialog_pending);
     pp_ui_error(ui, editor->content_error);
-    nk_layout_row_dynamic(&ui->context, 24, 1);
+    for (size_t i = 0; i < 4; i++)
+      pp_ui_error(ui, editor->font_warnings[i]);
     char font[300];
     snprintf(font, sizeof(font), "Font: %s", editor->family);
-    nk_label(&ui->context, font, NK_TEXT_LEFT);
-    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
-    if (pp_ui_button(ui, "import-font", "Import font (TTF / OTF / TTC / OTC)",
+    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 2);
+    nk_label_wrap(&ui->context, font);
+    struct nk_rect import_bounds = nk_widget_bounds(&ui->context);
+    if (pp_ui_button(ui, "import-font", "Import font",
                      !settings->dialog_pending &&
                          !pp_settings_invalid(settings)))
       pp_settings_dialog(settings, PP_DIALOG_IMPORT_FONT, false);
-    field(settings, "Collection face (0 = first face)", "font-face",
-          editor->face, sizeof(editor->face), &changed);
+    pp_ui_tooltip(ui, import_bounds, "import-font",
+                  "Import a permitted TTF, OTF, TTC or OTC font");
     PPAsset *font_asset = pp_asset_retain(
         pp_app_assets(settings->app), editor->draft.text_style.primary_asset);
     PPFontInfo font_info;
@@ -340,8 +380,19 @@ void pp_item_editor(PPSettings *settings) {
     }
     pp_asset_release(font_asset);
     pp_ui_error(ui, editor->font_error);
-    field(settings, "Text color (#RRGGBB; color emoji keep their colors)",
-          "text-color", editor->color, sizeof(editor->color), &changed);
+    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
+    if (pp_ui_button(ui, "font-details", editor->font_details_open
+                         ? "Hide font details" : "Font details",
+                     !settings->dialog_pending))
+      editor->font_details_open = !editor->font_details_open;
+    if (editor->font_details_open) {
+      field(settings, "Collection index (0 = first face)", "font-face",
+            editor->face, sizeof(editor->face), &changed);
+      if (editor->diagnostics[0]) {
+        nk_layout_row_dynamic(&ui->context, 52, 1);
+        nk_label_wrap(&ui->context, editor->diagnostics);
+      }
+    }
   } else {
     nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
     if (pp_ui_button(ui, "replace-image", "Replace image (PNG / GIF / SVG)",
@@ -349,19 +400,19 @@ void pp_item_editor(PPSettings *settings) {
                          !pp_settings_invalid(settings)))
       pp_settings_dialog(settings, PP_DIALOG_IMPORT_IMAGE, false);
   }
-  field(settings,
-        editor->draft.kind == PP_ITEM_TEXT ? "Font size (logical pixels)"
-                                           : "Longest side (logical pixels)",
-        "item-size", editor->size, sizeof(editor->size), &changed);
-  field(settings, "Angle (degrees)", "item-angle", editor->angle,
-        sizeof(editor->angle), &changed);
-  field(settings, "Opacity (%)", "item-opacity", editor->opacity,
-        sizeof(editor->opacity), &changed);
+  pp_ui_heading(ui, "Appearance");
+  if (editor->draft.kind == PP_ITEM_TEXT)
+    paired_fields(settings, "Font size (logical pixels)", "item-size",
+                  editor->size, sizeof(editor->size), "Color (#RRGGBB)",
+                  "text-color", editor->color, sizeof(editor->color), &changed);
+  else
+    field(settings, "Longest side (logical pixels)", "item-size", editor->size,
+          sizeof(editor->size), &changed);
+  paired_fields(settings, "Angle (degrees)", "item-angle", editor->angle,
+                sizeof(editor->angle), "Opacity (%)", "item-opacity",
+                editor->opacity, sizeof(editor->opacity), &changed);
   editor->changed = editor->changed || changed;
-  pp_ui_error(ui, editor->appearance_error);
-  nk_layout_row_dynamic(&ui->context, 24, 1);
-  nk_label(&ui->context, "Valid edits apply immediately to future pulls.",
-           NK_TEXT_LEFT);
+  pp_ui_secondary(ui, "Valid edits apply to future pulls.");
 }
 void pp_item_editor_destroy(PPSettings *settings) {
   pp_ui_shaped_destroy(settings->backend);
