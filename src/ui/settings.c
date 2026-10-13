@@ -126,8 +126,7 @@ static void anchor_selector(PPSettings *settings) {
   PPAnchor selected = pp_app_ui(settings->app)->anchor;
   bool enabled = !settings->dialog_pending && !pp_settings_invalid(settings);
   pp_ui_heading(ui, "Pull from this position");
-  nk_layout_row_dynamic(ctx, 22, 1);
-  nk_label(ctx, "Shared on every display", NK_TEXT_LEFT);
+  pp_ui_secondary(ui, "Shared on every display");
   const int positions[] = {0, 1, 2, 3, -1, 4, 5, 6, 7};
   for (int row = 0; row < 3; row++) {
     nk_layout_row_dynamic(ctx, 40, 3);
@@ -164,7 +163,7 @@ static void anchor_selector(PPSettings *settings) {
       pp_project_anchor(pp_app_project(settings->app), selected);
   nk_layout_row_dynamic(ctx, 28, 1);
   nk_label(ctx, anchor_names[selected], NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 32, 1);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
   if (pp_ui_button(ui, "anchor-enabled",
                    list->enabled ? "Enabled  /  click to disable"
                                  : "Disabled  /  click to enable",
@@ -225,7 +224,7 @@ static void ordered_items(PPSettings *settings) {
                item->kind == PP_ITEM_TEXT ? "Text / emoji" : "Image",
                item->id == list->default_id ? "  [Default]" : "");
       snprintf(id, sizeof(id), "item-%llu", (unsigned long long)item->id);
-      nk_layout_row_dynamic(ctx, 32, 1);
+      nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
       if (pp_ui_select(ui, id, label, item->id == state->selected_item,
                        enabled))
         pp_settings_command(
@@ -239,7 +238,7 @@ static void ordered_items(PPSettings *settings) {
   for (size_t i = 0; i < list->count; i++)
     if (list->item_ids[i] == state->selected_item)
       selected_index = i;
-  nk_layout_row_dynamic(ctx, 32, 2);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
   if (pp_ui_button(ui, "add-text", "Add text", enabled)) {
     pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_ADD_TEXT,
                                               .anchor = state->anchor});
@@ -247,7 +246,7 @@ static void ordered_items(PPSettings *settings) {
   }
   if (pp_ui_button(ui, "add-image", "Import image", enabled))
     pp_settings_dialog(settings, PP_DIALOG_IMPORT_IMAGE, true);
-  nk_layout_row_dynamic(ctx, 32, 2);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
   if (pp_ui_button(ui, "move-up", "Move up",
                    enabled && selected_index > 0 &&
                        selected_index < list->count)) {
@@ -266,14 +265,14 @@ static void ordered_items(PPSettings *settings) {
                                               .index = selected_index + 1});
     return;
   }
-  nk_layout_row_dynamic(ctx, 32, 1);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
   if (pp_ui_button(ui, "make-default", "Make default for this position",
                    enabled && selected_index < list->count &&
                        state->selected_item != list->default_id))
     pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_SET_DEFAULT,
                                               .anchor = state->anchor,
                                               .item_id = state->selected_item});
-  nk_layout_row_dynamic(ctx, 32, 1);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
   if (pp_ui_button(ui, "remove-item", "Remove selected item",
                    enabled && selected_index < list->count))
     pp_project_request_action(settings, PP_PROJECT_ACTION_REMOVE);
@@ -286,7 +285,7 @@ static void interaction_field(PPSettings *settings, const char *label,
                               bool *changed) {
   nk_layout_row_dynamic(&settings->backend->context, 20, 1);
   nk_label(&settings->backend->context, label, NK_TEXT_LEFT);
-  nk_layout_row_dynamic(&settings->backend->context, 32, 1);
+  nk_layout_row_dynamic(&settings->backend->context, pp_ui_theme.row_height, 1);
   *changed = pp_ui_edit(settings->backend, id, text, capacity, false,
                         !settings->dialog_pending) ||
              *changed;
@@ -337,7 +336,7 @@ static void validate_interaction(PPSettings *settings) {
 static void navigation(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   bool enabled = !settings->dialog_pending && !ui->composing;
-  nk_layout_row_dynamic(&ui->context, 32, 2);
+  nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 2);
   bool item_errors = settings->editor.content_error[0] ||
                      settings->editor.appearance_error[0] ||
                      settings->editor.font_error[0];
@@ -469,7 +468,10 @@ void pp_settings_draw(PPSettings *settings) {
                        settings->editor.appearance_error[0] ||
                        settings->editor.font_error[0];
     bool page_errors = item_errors || settings->interaction_error[0];
-    float body_height = fmaxf(100, ui->height - 294 - (page_errors ? 38 : 0));
+    struct nk_panel *panel = nk_window_get_panel(ctx);
+    float body_top = panel->at_y + panel->row.height;
+    float body_height = fmaxf(100, ui->height - body_top - 104 -
+                                     (page_errors ? 38 : 0));
     nk_layout_row_dynamic(ctx, body_height, 1);
     struct nk_rect content_viewport = nk_widget_bounds(ctx);
     size_t first_control = ui->control_count;
@@ -523,7 +525,7 @@ void pp_settings_draw(PPSettings *settings) {
                                : "Eight shared positions. Temporary sprites "
                                  "are never saved in a project.");
     if (page_errors) {
-      nk_layout_row_dynamic(ctx, 32, 2);
+      nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 2);
       if (pp_ui_button(ui, "show-item-errors", "Correct Items fields", item_errors &&
                        !settings->dialog_pending && !ui->composing)) {
         settings->requested_page = PP_SETTINGS_ITEMS;
@@ -536,7 +538,7 @@ void pp_settings_draw(PPSettings *settings) {
         settings->page_pending = true;
       }
     }
-    nk_layout_row_dynamic(ctx, 32, 3);
+    nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 3);
     if (pp_ui_button(ui, "revert-fields", "Revert fields",
                      pp_settings_invalid(settings) &&
                          !settings->dialog_pending && !ui->composing))

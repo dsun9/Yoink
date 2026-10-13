@@ -1,12 +1,17 @@
 ---
 version: alpha
 colors:
-  primary: "#185C83"
-  canvas: "#EEF3F7"
+  primary: "#267AC0"
+  canvas: "#F0F4F9"
   surface: "#FFFFFF"
-  ink: "#203547"
-  muted: "#526A7B"
-  accent: "#185C83"
+  field: "#F5F8FC"
+  border: "#DFE7F0"
+  ink: "#182230"
+  muted: "#627387"
+  accent: "#267AC0"
+  selection: "#E7F2FC"
+  accentHover: "#1E6AAA"
+  accentPressed: "#18578F"
   danger: "#A42B34"
 typography:
   heading:
@@ -23,22 +28,22 @@ spacing:
   control: "12px"
   panel: "18px"
 rounded:
-  control: "4px"
-  panel: "8px"
+  control: "8px"
+  panel: "12px"
 components:
   button:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "{colors.field}"
     textColor: "{colors.ink}"
-    height: "32px"
+    height: "36px"
   field:
-    backgroundColor: "{colors.surface}"
+    backgroundColor: "{colors.field}"
     textColor: "{colors.ink}"
-    height: "32px"
+    height: "36px"
   canvas:
     backgroundColor: "{colors.canvas}"
   selection:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.surface}"
+    backgroundColor: "{colors.selection}"
+    textColor: "{colors.accentHover}"
   status:
     textColor: "{colors.muted}"
   error:
@@ -55,7 +60,7 @@ The [approved redesign specification](docs/superpowers/specs/2026-10-13-yoink-me
 is authoritative for the new menus and public rename. It also records the
 unresolved Undo behavior separately from the approved redesign.
 
-The next menu revision uses BongoCat's pale surfaces, rounded controls,
+The shared runtime theme uses BongoCat's pale surfaces, rounded controls,
 clear section hierarchy and compact switches, adapted to a blue Yoink
 palette. The user approved these four decisions:
 
@@ -101,13 +106,14 @@ design now includes these requirements:
 - Tab switches consume the outgoing page's pending edits before changing pages.
   Invalid drafts survive navigation, the affected tab has an error indicator,
   and project actions continue to check errors on both pages.
-- The footer action is Undo. Its scope is still being clarified because the
-  existing Revert fields action only discards invalid drafts, while project-wide
-  edit history would be new behavior.
+- Undo remains a requested follow-up with an unresolved scope. The existing
+  Revert fields action discards invalid drafts and reloads the current project
+  values. It does not undo committed project edits.
 
-The sections below describe the current implementation until the redesign is
-implemented. The visual reference is `Ref/BongoCat/src/ui/theme/` and its
-preferences widgets.
+The shared theme, toolbar and page navigation below describe the current
+implementation. Position, list, editor and replacement-row changes have their
+own follow-up tickets. The visual reference is `Ref/BongoCat/src/ui/theme/` and
+its preferences widgets.
 
 ## Overview
 
@@ -124,10 +130,14 @@ backend and form patterns, not its visual identity or domain pages.
 
 ## Colors
 
-Cool paper canvas, white editing surfaces, dark blue ink and restrained blue
-selection connect to a presentation screen without imitating slide content.
-Red is reserved for errors and removal confirmation. Selection also has a
-text marker; dirty state says “Unsaved changes”. Color never carries these alone.
+The pale canvas is #F0F4F9, white surfaces contain the toolbar, and fields use
+#F5F8FC with #DFE7F0 borders. Text is #182230, secondary text is #627387,
+and #267AC0 is the blue action and focus color. Selection uses #E7F2FC with
+the darker blue #1E6AAA text, which has 5:1 contrast on the selection fill.
+Red #A42B34 identifies errors and removal confirmation. The separate
+asterisk beside the project name marks unsaved edits, and its tooltip explains
+the state. An untouched new project has no asterisk and reports that it has
+not been saved to a file.
 
 **Runtime owner:** `src/ui/theme.c` is the only runtime palette and geometry
 token definition. It adapts these normative values into Nuklear styles. Shared
@@ -152,12 +162,13 @@ Wide layout pairs a 300-unit anchor/list column with a flexible editor. Below
 has a bounded inner scroller so long lists do not bury editor controls.
 
 ```text
-Project name / Unsaved changes       New  Open  Save  Save As
+Yoink   Project   [Project name] *   New  Open  Save  Save as
+Items                 Interaction
 +-------------------------+------------------------------------+
 | TL        TC        TR  | Selected item / actual preview     |
 | CL  display outline CR  | Content, font, size, angle, opacity |
 | BL        BC        BR  |                                    |
-| Enabled / ordered list | Shared interaction settings        |
+| Enabled / ordered list |                                    |
 | Add / order / default  |                                    |
 +-------------------------+------------------------------------+
 Persistent outcome or diagnostic                 Settings / Quit
@@ -177,7 +188,7 @@ app-owned modal within settings; underlying controls are inert while it is open.
 
 ## Shapes
 
-Four-unit control corners and eight-unit panel corners; 1-unit borders and a
+Eight-unit control corners and twelve-unit panel corners; 1-unit borders and a
 2-unit visible keyboard focus outline. Labels and status wrap instead of
 requiring hover to discover full information.
 
@@ -192,7 +203,26 @@ requiring hover to discover full information.
 | CRUD | `src/app/commands.c` | Portable project and revision | Explicit default, transactional save/open | commands; settings_smoke native import/save/open |
 | Dialog | `src/ui/project_actions.c` | Save/Discard/Cancel policy | App confirmation; required OS file chooser | settings_smoke Escape, focus, actual file chooser |
 
-Buttons are verb labels with hover, pressed, disabled and keyboard focus states.
+Project actions use equal-width 44 by 36 logical-unit drawn icon buttons.
+They share the project-name field's vertical alignment and wrap onto the next
+row when the content width is below 780 logical units. Save uses the blue
+primary style with a contrasting inset focus marker. Hover, pressed, disabled
+and keyboard focus states come from the
+shared backend. Full action names and shortcuts appear on pointer hover or
+keyboard focus. Keyboard focus takes precedence over a stationary pointer;
+moving the pointer restores hover help. Tooltips draw in Nuklear's overlay and
+cannot change text-input ownership. The asterisk is display decoration outside
+the editable value; project name and filename remain independent.
+
+`src/ui/icons.c` draws the shared action, direction, monitor, star, deletion,
+close and drag icons. `pp_ui_icon_button`, `pp_ui_switch` and `pp_ui_tooltip`
+in `src/ui/backend.c` reuse the existing control identities and input boundary.
+Dropdown labels reserve space for the drawn downward chevron. Shared field
+rows are 36 logical units; section headings keep the system semibold font and
+utility text uses 14 units. Empty shared errors reserve no row, and errors use
+the separate danger token. Density scales the existing native font atlas,
+hit targets and drawing together.
+
 No field change commits during IME composition. Edits affect future pulls; the
 preview reflects valid current edits. Save means a successful package write.
 Closing settings keeps in-memory edits. New/Open/Quit guard unsaved changes.

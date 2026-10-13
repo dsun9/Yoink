@@ -1119,8 +1119,10 @@ static void hidden_content_scroll(void) {
   hidden_settle();
   PPRect bounds;
   CHECK(pp_ui_control_rect(settings->backend, "item-opacity", &bounds));
-  CHECK(bounds.y + bounds.h > settings->backend->height - 220);
-  CHECK(bounds.y >= 200 && bounds.y + bounds.h < settings->backend->height - 95);
+  PPRect tabs, footer;
+  CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
+  CHECK(pp_ui_control_rect(settings->backend, "close-settings", &footer));
+  CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < footer.y - 42);
   pp_settings_destroy(settings); settings = NULL;
   pp_app_destroy(app); app = NULL;
   puts("PASS Items scroll ends with its editor controls instead of an empty fixed-height tail.");
@@ -1220,6 +1222,7 @@ static void hidden_responsive_pages(void) {
       CHECK(SDL_SetWindowSize(settings->backend->window,
                               (int)(sizes[size][0] * scales[density]),
                               (int)(sizes[size][1] * scales[density])));
+      hidden_settle();
       hidden_click("tab-items"); pump(30);
       pp_ui_focus(settings->backend, "tab-items"); pump(30);
       char name[96];
@@ -1228,12 +1231,14 @@ static void hidden_responsive_pages(void) {
       pp_ui_focus(settings->backend, "item-size"); pump(30);
       PPRect bounds;
       CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
-      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 90);
+      PPRect tabs;
+      CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
+      CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 90);
       hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
       hidden_text("0"); pump(30);
       hidden_settle();
       CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
-      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 135);
+      CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 135);
       snprintf(name, sizeof(name), "ticket21-items-error-%s-%d", names[size], (int)(scales[density] * 100));
       capture(name);
       hidden_click("tab-interaction"); pump(30);
@@ -1243,7 +1248,7 @@ static void hidden_responsive_pages(void) {
       capture(name);
       pp_ui_focus(settings->backend, "easing"); pump(30);
       CHECK(pp_ui_control_rect(settings->backend, "easing", &bounds));
-      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 90);
+      CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 90);
       hidden_click("revert-fields"); pump(30);
       CHECK(!pp_settings_invalid(settings));
     }
@@ -1281,7 +1286,285 @@ static void hidden_batched_interaction_save(void) {
   CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
   puts("PASS batched Interaction edit reaches saved package; hidden invalid draft survives blocked Save.");
 }
+static void hidden_compact_toolbar(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  create_settings(1, true);
+  const char *actions[] = {"new", "open", "save", "save-as"};
+  PPRect name, action;
+  CHECK(pp_ui_control_rect(settings->backend, "project-name", &name));
+  for (int i = 0; i < 4; i++) {
+    CHECK(pp_ui_control_rect(settings->backend, actions[i], &action));
+    CHECK(action.w == 44 && action.h == 36);
+    CHECK(action.y == name.y && action.h == name.h);
+  }
+  pp_ui_focus(settings->backend, "save-as");
+  hidden_settle();
+  CHECK(pp_ui_tooltip_visible(settings->backend, "Save as (Ctrl+Shift+S)"));
+  CHECK(pp_ui_control_rect(settings->backend, "open", &action));
+  pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_POINTER_MOVE,
+      .window_id = pp_settings_window_id(settings),
+      .window_point = {action.x + action.w / 2, action.y + action.h / 2}});
+  hidden_settle();
+  CHECK(pp_ui_tooltip_visible(settings->backend, "Open (Ctrl+O)"));
+  CHECK(SDL_SetWindowSize(settings->backend->window, 640, 480));
+  hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, "project-name", &name));
+  for (int i = 0; i < 4; i++) {
+    CHECK(pp_ui_control_rect(settings->backend, actions[i], &action));
+    CHECK(action.w == 44 && action.h == 36 && action.y > name.y);
+    CHECK(action.x >= 0 && action.x + action.w <= 640);
+  }
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS aligned equal-width project icons wrap at minimum size.");
+}
+static void hidden_project_composition_guard(void) {
+  snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/ticket23-composition-%lu.pointy",
+           GetCurrentProcessId());
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SAVE_AS, .path = package}, &error));
+  create_settings(1, true);
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT, .name = "Changed"}, &error));
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL);
+  pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_COMPOSITION,
+      .window_id = pp_settings_window_id(settings), .composing = true});
+  pp_settings_draw(settings);
+  CHECK(pp_app_dirty(app));
+  CHECK(!pp_settings_can_transition(settings));
+  pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_COMPOSITION,
+      .window_id = pp_settings_window_id(settings), .composing = false});
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL); pp_settings_draw(settings);
+  CHECK(!pp_app_dirty(app));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  puts("PASS composition arriving after a queued project action guards Save and transitions.");
+}
+static void hidden_toolbar_name_roundtrip(void) {
+  const char *actions[] = {"new", "open", "save", "save-as"};
+  for (int page = 0; page < 2; page++) {
+    snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/ticket23-file-%d-%lu.pointy",
+             page, GetCurrentProcessId());
+    CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+    create_settings(1, true);
+    if (page) { hidden_click("tab-interaction"); hidden_settle(); }
+    CHECK(!pp_app_dirty(app) && !*pp_app_path(app));
+    pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, "Not saved to a file; no unsaved edits"));
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("Named project");
+    controlled_dialog = true;
+    hidden_click("save-as"); pp_settings_draw(settings);
+    CHECK(settings->dialog_pending && !strcmp(pp_app_name(app), "Named project"));
+    finish_controlled_dialog(package); hidden_settle();
+    CHECK(!pp_app_dirty(app));
+    CHECK(!strcmp(settings->project_name, "Named project"));
+    pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, "Project saved"));
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("Renamed project"); hidden_click("save"); pp_settings_draw(settings);
+    CHECK(!pp_app_dirty(app) && !strcmp(pp_app_name(app), "Renamed project"));
+    PPProject *saved = NULL;
+    CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+    CHECK(!strcmp(pp_project_name(saved), "Renamed project"));
+    pp_project_destroy(saved);
+    /* Empty entered names remain visible and block all four action semantics,
+     * including a name edit and the action in the same input batch. */
+    pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_key(PP_KEY_BACKSPACE, 0); hidden_click("save"); pp_settings_draw(settings);
+    CHECK(!*settings->project_name && settings->name_error[0]);
+    unsigned dispatches = controlled_dispatches;
+    uint64_t generation = pp_app_generation(app);
+    for (int i = 0; i < 4; i++) { hidden_click(actions[i]); pp_settings_draw(settings); }
+    CHECK(controlled_dispatches == dispatches && !settings->dialog_pending);
+    CHECK(!pp_app_ui(app)->transition_pending && pp_app_generation(app) == generation);
+    CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+    CHECK(!strcmp(pp_project_name(saved), "Renamed project"));
+    pp_project_destroy(saved);
+    hidden_click("revert-fields"); hidden_settle();
+    hidden_click("open"); pp_settings_draw(settings);
+    CHECK(settings->dialog_pending);
+    finish_controlled_dialog(package); hidden_settle();
+    CHECK(!strcmp(settings->project_name, "Renamed project"));
+    CHECK(!strcmp(pp_app_name(app), "Renamed project") && !pp_app_dirty(app));
+    pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("Unsaved name"); hidden_click("new"); pp_settings_draw(settings);
+    CHECK(pp_app_ui(app)->transition_pending && !strcmp(pp_app_name(app), "Unsaved name"));
+    hidden_click("cancel-transition"); hidden_settle();
+    CHECK(!pp_app_ui(app)->transition_pending && !strcmp(settings->project_name, "Unsaved name"));
+    hidden_click("new"); pp_settings_draw(settings);
+    hidden_click("discard-transition"); hidden_settle();
+    CHECK(pp_app_generation(app) != generation && !pp_app_dirty(app) && !*pp_app_path(app));
+    controlled_dialog = false;
+    pp_settings_destroy(settings); settings = NULL;
+    pp_app_destroy(app); app = NULL;
+    CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  }
+  puts("PASS both pages preserve same-batch project names, separate dirty decoration/file path, Save as/Open roundtrips, invalid guards and New/Cancel/Discard.");
+}
+static bool capture_light_pixel(const char *name, double x, double y) {
+  char path[MAX_PATH];
+  snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", name);
+  SDL_Surface *surface = SDL_LoadBMP(path);
+  CHECK(surface);
+  Uint8 r, g, b, a;
+  CHECK(SDL_ReadSurfacePixel(surface, (int)(x * surface->w / settings->backend->width),
+      (int)(y * surface->h / settings->backend->height), &r, &g, &b, &a));
+  SDL_DestroySurface(surface);
+  return r > 220 && g > 220 && b > 220;
+}
+static void shared_control_frame(bool *enabled, int *choice, const char *capture_name) {
+  PPUIBackend *ui = settings->backend;
+  CHECK(pp_ui_begin(ui, &error));
+  struct nk_context *ctx = &ui->context;
+  if (nk_begin(ctx, "shared-controls", nk_rect(0, 0, ui->width, ui->height),
+               NK_WINDOW_NO_SCROLLBAR)) {
+    pp_ui_heading(ui, "Shared controls");
+    float widths[] = {44, 44, 44, 44};
+    nk_layout_row(ctx, NK_STATIC, 36, 4, widths);
+    pp_ui_icon_button(ui, "shared-new", PP_UI_ICON_NEW, "New", "New", true, false);
+    pp_ui_icon_button(ui, "shared-open", PP_UI_ICON_OPEN, "Open", "Open", true, false);
+    pp_ui_icon_button(ui, "shared-save", PP_UI_ICON_SAVE, "Save", "Save", true, true);
+    pp_ui_icon_button(ui, "shared-save-as", PP_UI_ICON_SAVE_AS, "Save as", "Save as", true, false);
+    nk_layout_row_static(ctx, 36, 220, 1);
+    pp_ui_switch(ui, "shared-enabled", "Enabled", enabled, true);
+    static const char *options[] = {"Very long collection font family name that must leave room for the dropdown chevron", "Second face", "Third face"};
+    nk_layout_row_static(ctx, 36, 220, 1);
+    pp_ui_choice(ui, "shared-choice", options, 3, choice, true);
+    nk_layout_row(ctx, NK_STATIC, 36, 4, widths);
+    pp_ui_icon_button(ui, "shared-star", PP_UI_ICON_STAR, "Default", "Default", true, false);
+    pp_ui_icon_button(ui, "shared-star-outline", PP_UI_ICON_STAR_OUTLINE, "Make default", "Make default", true, false);
+    pp_ui_icon_button(ui, "shared-monitor", PP_UI_ICON_MONITOR, "Display", "Display", true, false);
+    pp_ui_icon_button(ui, "shared-direction", PP_UI_ICON_NORTHEAST, "Top right", "Top right", true, false);
+  }
+  nk_end(ctx);
+  char path[MAX_PATH];
+  if (capture_name) {
+    snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", capture_name);
+    ui->capture_path = path;
+  }
+  CHECK(pp_ui_end(ui, &error));
+}
+static void hidden_shared_control_captures(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  for (int i = 0; i < 3; i++) {
+    create_settings(scales[i], true);
+    CHECK(SDL_SetWindowSize(settings->backend->window, (int)(640 * scales[i]), (int)(480 * scales[i])));
+    bool enabled = false;
+    int choice = 0;
+    shared_control_frame(&enabled, &choice, NULL);
+    shared_control_frame(&enabled, &choice, NULL);
+    hidden_click("shared-enabled");
+    char name[96];
+    snprintf(name, sizeof(name), "ticket23-shared-controls-%d", (int)(scales[i] * 100));
+    shared_control_frame(&enabled, &choice, name);
+    CHECK(enabled);
+    PPRect save_bounds;
+    CHECK(pp_ui_control_rect(settings->backend, "shared-save", &save_bounds));
+    PPPlatformEvent press = {.kind = PP_EVENT_POINTER_MOVE,
+        .window_id = pp_settings_window_id(settings), .button = PP_BUTTON_LEFT,
+        .window_point = {(save_bounds.x + 22) * scales[i], (save_bounds.y + 18) * scales[i]}};
+    pp_settings_event(settings, &press);
+    press.kind = PP_EVENT_BUTTON_DOWN; pp_settings_event(settings, &press);
+    snprintf(name, sizeof(name), "ticket23-shared-pressed-%d", (int)(scales[i] * 100));
+    shared_control_frame(&enabled, &choice, name);
+    press.kind = PP_EVENT_BUTTON_UP; pp_settings_event(settings, &press);
+    shared_control_frame(&enabled, &choice, NULL);
+    pp_ui_focus(settings->backend, "shared-save");
+    snprintf(name, sizeof(name), "ticket23-shared-primary-focus-%d", (int)(scales[i] * 100));
+    shared_control_frame(&enabled, &choice, name);
+    CHECK(pp_ui_tooltip_visible(settings->backend, "Save"));
+    /* A primary control needs a contrasting focus marker as well as a blue
+     * outline. Inspect the actual raster beside its central glyph. */
+    CHECK(capture_light_pixel(name, save_bounds.x + 3, save_bounds.y + 18));
+    CHECK(pp_ui_control_rect(settings->backend, "shared-save-as", &save_bounds));
+    press.window_point = (PPVec2){(save_bounds.x + 22) * scales[i], (save_bounds.y + 18) * scales[i]};
+    press.kind = PP_EVENT_POINTER_MOVE; pp_settings_event(settings, &press);
+    press.kind = PP_EVENT_BUTTON_DOWN; pp_settings_event(settings, &press);
+    snprintf(name, sizeof(name), "ticket23-shared-save-as-pressed-%d", (int)(scales[i] * 100));
+    shared_control_frame(&enabled, &choice, name);
+    press.kind = PP_EVENT_BUTTON_UP; pp_settings_event(settings, &press);
+    shared_control_frame(&enabled, &choice, NULL);
+    pp_ui_focus(settings->backend, "shared-choice");
+    hidden_key(PP_KEY_ENTER, 0);
+    snprintf(name, sizeof(name), "ticket23-shared-dropdown-%d", (int)(scales[i] * 100));
+    shared_control_frame(&enabled, &choice, name);
+    CHECK(settings->backend->popup_id);
+    hidden_key(PP_KEY_END, 0); shared_control_frame(&enabled, &choice, NULL);
+    hidden_key(PP_KEY_ENTER, 0); shared_control_frame(&enabled, &choice, NULL);
+    CHECK(choice == 2 && !settings->backend->popup_id);
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS shared drawn icons, switch and long-label chevron/popup through actual renderer at 100/150/200%.");
+}
+static void hidden_toolbar_state_captures(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}};
+  const char *size_names[] = {"ordinary", "minimum", "narrow"};
+  const char *ids[] = {"new", "open", "save", "save-as"};
+  const char *tooltips[] = {"New (Ctrl+N)", "Open (Ctrl+O)", "Save (Ctrl+S)", "Save as (Ctrl+Shift+S)"};
+  for (int scale = 0; scale < 3; scale++) {
+    create_settings(scales[scale], true);
+    for (int size = 0; size < 3; size++) {
+      CHECK(SDL_SetWindowSize(settings->backend->window, (int)(sizes[size][0] * scales[scale]),
+                              (int)(sizes[size][1] * scales[scale])));
+      hidden_settle();
+      for (int page = 0; page < 2; page++) {
+        hidden_click(page ? "tab-interaction" : "tab-items"); hidden_settle();
+        char name[96];
+        for (int action = 0; action < 4; action++) {
+          pp_ui_focus(settings->backend, ids[action]); hidden_settle();
+          CHECK(pp_ui_tooltip_visible(settings->backend, tooltips[action]));
+        }
+        snprintf(name, sizeof(name), "ticket23-toolbar-%s-focus-%s-%d",
+                 page ? "interaction" : "items", size_names[size], (int)(scales[scale] * 100));
+        capture(name);
+        PPRect bounds;
+        CHECK(pp_ui_control_rect(settings->backend, "open", &bounds));
+        pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_POINTER_MOVE,
+          .window_id = pp_settings_window_id(settings), .window_point = {
+            (bounds.x + bounds.w / 2) * scales[scale], (bounds.y + bounds.h / 2) * scales[scale]}});
+        hidden_settle();
+        CHECK(pp_ui_tooltip_visible(settings->backend, "Open (Ctrl+O)"));
+        snprintf(name, sizeof(name), "ticket23-toolbar-%s-hover-%s-%d",
+                 page ? "interaction" : "items", size_names[size], (int)(scales[scale] * 100));
+        capture(name);
+        pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+        hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+        hidden_key(PP_KEY_BACKSPACE, 0); pp_settings_draw(settings); hidden_settle();
+        hidden_click("save"); hidden_settle();
+        CHECK(settings->name_error[0] && !settings->dialog_pending);
+        CHECK(pp_ui_tooltip_visible(settings->backend, "Save (Ctrl+S)"));
+        snprintf(name, sizeof(name), "ticket23-toolbar-%s-disabled-%s-%d",
+                 page ? "interaction" : "items", size_names[size], (int)(scales[scale] * 100));
+        capture(name);
+        /* A separate error capture leaves the validation message unobscured by
+         * the temporary hover help of the disabled action. */
+        pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_POINTER_MOVE,
+          .window_id = pp_settings_window_id(settings), .window_point = {0, 0}});
+        hidden_settle();
+        snprintf(name, sizeof(name), "ticket23-toolbar-%s-error-%s-%d",
+                 page ? "interaction" : "items", size_names[size], (int)(scales[scale] * 100));
+        capture(name);
+        hidden_click("revert-fields"); hidden_settle();
+      }
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS toolbar action focus/hover/disabled/error states on both pages at ordinary/minimum/narrow sizes and 100/150/200% controlled scale.");
+}
 static void render_only(void) {
+  hidden_compact_toolbar();
+  hidden_project_composition_guard();
+  hidden_toolbar_name_roundtrip();
+  hidden_shared_control_captures();
+  hidden_toolbar_state_captures();
   hidden_batched_tab_edit();
   hidden_suspended_editor();
   hidden_page_errors();

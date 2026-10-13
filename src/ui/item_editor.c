@@ -210,7 +210,7 @@ static void field(PPSettings *settings, const char *label, const char *id,
   PPUIBackend *ui = settings->backend;
   nk_layout_row_dynamic(&ui->context, 20, 1);
   nk_label(&ui->context, label, NK_TEXT_LEFT);
-  nk_layout_row_dynamic(&ui->context, 32, 1);
+  nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
   *changed =
       pp_ui_edit(ui, id, value, capacity, false, !settings->dialog_pending) ||
       *changed;
@@ -304,7 +304,7 @@ void pp_item_editor(PPSettings *settings) {
     char font[300];
     snprintf(font, sizeof(font), "Font: %s", editor->family);
     nk_label(&ui->context, font, NK_TEXT_LEFT);
-    nk_layout_row_dynamic(&ui->context, 32, 1);
+    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
     if (pp_ui_button(ui, "import-font", "Import font (TTF / OTF / TTC / OTC)",
                      !settings->dialog_pending &&
                          !pp_settings_invalid(settings)))
@@ -330,7 +330,7 @@ void pp_item_editor(PPSettings *settings) {
         options[i] = names[i];
       }
       int selected = editor->draft.text_style.primary_face;
-      nk_layout_row_dynamic(&ui->context, 32, 1);
+      nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
       if (pp_ui_choice(ui, "font-face-choice", options,
                        (int)font_info.face_count, &selected,
                        !settings->dialog_pending)) {
@@ -343,7 +343,7 @@ void pp_item_editor(PPSettings *settings) {
     field(settings, "Text color (#RRGGBB; color emoji keep their colors)",
           "text-color", editor->color, sizeof(editor->color), &changed);
   } else {
-    nk_layout_row_dynamic(&ui->context, 32, 1);
+    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
     if (pp_ui_button(ui, "replace-image", "Replace image (PNG / GIF / SVG)",
                      !settings->dialog_pending &&
                          !pp_settings_invalid(settings)))

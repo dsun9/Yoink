@@ -90,11 +90,51 @@ static void test_clipped_control_focus(void) {
   nk_free(&ui.context);
   free(ui.controls);
 }
+static bool draw_switch(PPUIBackend *ui, bool *value, bool enabled) {
+  bool changed = false;
+  if (nk_begin(&ui->context, "switch-test", nk_rect(0, 0, 300, 200),
+               NK_WINDOW_NO_SCROLLBAR)) {
+    nk_layout_row_static(&ui->context, 36, 180, 1);
+    changed = pp_ui_switch(ui, "enabled", "Enabled", value, enabled);
+  }
+  nk_end(&ui->context);
+  nk_clear(&ui->context);
+  return changed;
+}
+static void test_shared_switch(void) {
+  struct nk_user_font font = {.height = 16, .width = test_width};
+  PPUIBackend ui = {.scale = 1, .window_scale = 1};
+  bool value = false;
+  CHECK(nk_init_default(&ui.context, &font));
+  nk_input_begin(&ui.context); nk_input_end(&ui.context);
+  CHECK(!draw_switch(&ui, &value, true));
+  PPRect target;
+  CHECK(pp_ui_control_rect(&ui, "enabled", &target));
+  PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE, .button = PP_BUTTON_LEFT,
+                           .window_point = {target.x + 12, target.y + 18}};
+  pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_DOWN; pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_UP; pp_ui_backend_event(&ui, &event);
+  nk_input_end(&ui.context); ui.input_started = false;
+  CHECK(draw_switch(&ui, &value, true) && value);
+  pp_ui_focus(&ui, "enabled");
+  ui.activate = true;
+  CHECK(draw_switch(&ui, &value, true) && !value);
+  ui.activate = true;
+  CHECK(!draw_switch(&ui, &value, false) && !value);
+  ui.composing = true;
+  CHECK(!draw_switch(&ui, &value, true) && !value);
+  ui.composing = false; ui.popup_id = 1;
+  CHECK(!draw_switch(&ui, &value, true) && !value);
+  ui.popup_id = 0; ui.activate = false;
+  nk_free(&ui.context); free(ui.controls);
+}
 
 int main(void) {
   CHECK(SDL_InitSubSystem(SDL_INIT_EVENTS));
   test_coalesced_click();
   test_clipped_control_focus();
+  test_shared_switch();
   SDL_Event source = {0};
   source.type = SDL_EVENT_TEXT_INPUT;
   source.text.windowID = 42;

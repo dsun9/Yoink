@@ -12,10 +12,19 @@ typedef struct PPUIControl {
 } PPUIControl;
 typedef struct PPUITheme {
   struct nk_color canvas, surface, ink, muted, accent, danger;
+  struct nk_color field, border, selection, accent_hover, accent_pressed;
   float compact, control, panel, control_radius, panel_radius;
   float body_size, heading_size, utility_size, row_height;
 } PPUITheme;
 extern const PPUITheme pp_ui_theme;
+typedef enum PPUIIcon {
+  PP_UI_ICON_NEW, PP_UI_ICON_OPEN, PP_UI_ICON_SAVE, PP_UI_ICON_SAVE_AS,
+  PP_UI_ICON_CHEVRON_DOWN, PP_UI_ICON_MONITOR, PP_UI_ICON_STAR, PP_UI_ICON_STAR_OUTLINE,
+  PP_UI_ICON_DELETE, PP_UI_ICON_CLOSE, PP_UI_ICON_DRAG,
+  PP_UI_ICON_NORTHWEST, PP_UI_ICON_NORTH, PP_UI_ICON_NORTHEAST,
+  PP_UI_ICON_WEST, PP_UI_ICON_EAST, PP_UI_ICON_SOUTHWEST,
+  PP_UI_ICON_SOUTH, PP_UI_ICON_SOUTHEAST
+} PPUIIcon;
 struct PPUIBackend {
   struct PPUIShapedEdit *shaped;
   PPAssets *text_assets; /* Borrowed app raster budget; outlives this field. */
@@ -48,6 +57,9 @@ struct PPUIBackend {
   SDL_Cursor *arrow_cursor, *hand_cursor, *text_cursor;
   bool pointer_target, text_target;
   char font_diagnostic[160];
+  char tooltip_text[256];
+  struct nk_rect tooltip_anchor, tooltip_bounds;
+  bool tooltip_focus;
   const char
       *capture_path; /* Test capture on next completed frame, before swap. */
 };
@@ -60,8 +72,20 @@ bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error);
 void pp_ui_poll_reset(uint32_t window_id);
 void pp_ui_modal(PPUIBackend *ui, bool modal);
 void pp_ui_heading(PPUIBackend *ui, const char *text);
+void pp_ui_secondary(PPUIBackend *ui, const char *text);
 bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
                   bool enabled);
+void pp_ui_draw_icon(struct nk_command_buffer *canvas, struct nk_rect bounds,
+                     PPUIIcon icon, struct nk_color color);
+bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
+                       const char *action, const char *tooltip, bool enabled,
+                       bool primary);
+/* Attach help to the preceding control or a noninteractive display region.
+ * Disabled controls still explain their state on pointer hover. */
+void pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
+                   const char *text);
+bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
+                  bool *value, bool enabled);
 bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
                   bool selected, bool enabled);
 bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
@@ -79,6 +103,7 @@ void pp_ui_premultiplied_texture(PPUIBackend *ui,GLuint previous,GLuint current)
  * geometry in logical units, does not synthesize or execute any action. */
 bool pp_ui_control_rect(const PPUIBackend *ui, const char *id, PPRect *bounds);
 bool pp_ui_focused(const PPUIBackend *ui, const char *id);
+bool pp_ui_tooltip_visible(const PPUIBackend *ui, const char *text);
 void pp_ui_focus(PPUIBackend *ui, const char *id);
 bool pp_ui_unicode_notice(const PPUIBackend *ui, const char *text, char *out,
                           size_t capacity);

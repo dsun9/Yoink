@@ -101,11 +101,14 @@ int main(void) {
   CHECK(SDL_GetWindowPosition(window, &x, &y));
   CHECK(SDL_GetWindowSize(window, &width, &height));
   int initial_preview_width = settings->editor.preview_width;
+  PPRect toolbar_save;
+  CHECK(pp_ui_control_rect(ui, "save", &toolbar_save));
+  CHECK(toolbar_save.w == 44 && toolbar_save.h == 36);
   CHECK(initial_preview_width > 0 && ui->body_font->info.height == 16);
-  const float densities[] = {2, 1};
-  const float font_pixels[] = {32, 16};
-  const int preview_factors[] = {2, 1};
-  for (size_t i = 0; i < 2; i++) {
+  const float densities[] = {1.5f, 2, 1};
+  const float font_pixels[] = {24, 32, 16};
+  const float preview_factors[] = {1.5f, 2, 1};
+  for (size_t i = 0; i < 3; i++) {
     GLuint old_texture = ui->font_texture;
     density = densities[i];
     pp_settings_event(
@@ -152,8 +155,12 @@ int main(void) {
      * reuse the deleted GL name; only the new atlas identity is stable. */
     CHECK(ui->font_texture != old_texture);
     CHECK(glIsTexture(ui->font_texture));
-    CHECK(settings->editor.preview_width ==
-          initial_preview_width * preview_factors[i]);
+    CHECK(fabs(settings->editor.preview_width -
+          initial_preview_width * preview_factors[i]) <= 1);
+    PPRect save;
+    CHECK(pp_ui_control_rect(ui, "save", &save));
+    CHECK(save.x == toolbar_save.x && save.y == toolbar_save.y &&
+          save.w == 44 && save.h == 36);
     CHECK(settings->backend == ui && ui->window == window);
     CHECK(!strcmp(settings->editor.size, "0") &&
           settings->editor.appearance_error[0]);
@@ -194,7 +201,7 @@ int main(void) {
   free(pixels);pp_content_consumer_destroy(consumer);pp_item_snapshot_release(independent);
   puts("PASS hidden Settings project epoch cancels obsolete preview work and keeps an independent source consumer's owned pixels");
   puts("PASS Settings artwork clock changes only on content commit, rename/opacity reuse sources, closure releases its consumer; hidden density 1->2->1: real font/preview rasters "
-       "refresh, old texture released; drafts, selection, focus, window and "
+       "refresh at 1->1.5->2->1, old texture released; toolbar logical targets, drafts, selection, focus, window and "
        "geometry preserved");
   /* Join private source work before CRT exit callbacks acquire the onexit
    * lock; HarfBuzz may register its own finalizer during that work. */
