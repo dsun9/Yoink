@@ -76,6 +76,11 @@ static HWND native(uint64_t id) {
     SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(sprite->surface));CHECK(window);
     return SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
 }
+static size_t native_output_bytes(uint64_t id) {
+    RECT bounds;CHECK(GetWindowRect(native(id),&bounds));
+    size_t bytes=(size_t)(bounds.right-bounds.left)*(bounds.bottom-bounds.top)*4;
+    CHECK(pp_sprites_find(presenter,id)->retained.output_bytes==bytes);return bytes;
+}
 static void pixel(const char *label,int x,int y,int r,int g,int b) {
     ULONGLONG until=GetTickCount64()+1000;COLORREF value=CLR_INVALID;
     do {pump();HDC dc=GetDC(NULL);CHECK(dc);value=GetPixel(dc,x,y);ReleaseDC(NULL,dc);
@@ -104,7 +109,7 @@ static void retained_native(void) {
     PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(presenter);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
     direct_update(1.08);PPRendererMetrics first=pp_anchor_presenter_renderer_metrics(presenter);
     CHECK(first.source_uploads==before.source_uploads+2 && first.transform_draws==before.transform_draws+3 && first.readbacks==before.readbacks);
-    CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24);
+    CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24+native_output_bytes(ids[0])+native_output_bytes(ids[1])+native_output_bytes(ids[2]));
     printf("GIF GL renderer=%s vendor=%s version=%s shared_frames=2 independent_instances=3 native_density=%.2f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),presenter->displays[0].drawable_pixels_per_dip);
     RECT a,b;CHECK(GetWindowRect(native(ids[0]),&a));CHECK(GetWindowRect(native(ids[1]),&b));
     /* On an even-width drawable, the desktop center pixel samples half a
@@ -126,7 +131,7 @@ static void retained_native(void) {
     pp_surface_raise(pp_sprites_find(presenter,ids[0])->surface);CHECK(WindowFromPoint((POINT){240,300})==native(ids[0]));
     down=direct_downs[ids[0]];direct_mouse(240,300,MOUSEEVENTF_LEFTDOWN);direct_mouse(240,300,MOUSEEVENTF_LEFTUP);CHECK(direct_downs[ids[0]]==down+1);
     overlap.center=(PPVec2){350,310};CHECK(pp_scene_set_pose(presenter->scene,ids[1],overlap,&error));direct_update(1.081);
-    pp_scene_delete(presenter->scene,ids[2]);direct_update(1.082);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24);
+    pp_scene_delete(presenter->scene,ids[2]);direct_update(1.082);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24+native_output_bytes(ids[0])+native_output_bytes(ids[1]));
     pixel("remaining shared consumer",b.left+5,310,255,0,0);
     PPItem changing=image("changing-alpha.gif",PP_ASSET_GIF);CHECK(pp_scene_replace(presenter->scene,ids[1],&changing,1.08,&error));direct_update(1.08);
     direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_update(1.19);CHECK(!IsWindowVisible(native(ids[1])));
@@ -139,7 +144,7 @@ static void retained_native(void) {
     CHECK(pp_anchor_presenter_renderer_metrics(presenter).transform_draws==stopped.transform_draws);
     direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);unsigned up=direct_ups[ids[1]];
     pp_scene_delete(presenter->scene,ids[1]);direct_update(3.01);direct_mouse(350,310,MOUSEEVENTF_LEFTUP);
-    CHECK(direct_ups[ids[1]]==up && pp_anchor_presenter_gpu_resources(presenter).retained_bytes==12);
+    CHECK(direct_ups[ids[1]]==up && pp_anchor_presenter_gpu_resources(presenter).retained_bytes==12+native_output_bytes(ids[0]));
     pp_scene_clear(presenter->scene);direct_update(4);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==0);
     CHECK(pp_anchor_presenter_renderer_metrics(presenter).readbacks==before.readbacks);
     puts("PASS retained native GIF independent clocks/shared immutable pixels, rectangle first clicks, stationary alpha/capture, nonactivation, ownership transitions, finite stop and zero-byte cleanup");
