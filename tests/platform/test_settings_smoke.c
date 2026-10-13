@@ -1197,6 +1197,10 @@ static void hidden_navigation_guards(void) {
   CHECK(!pp_ui_focused(settings->backend, "tab-interaction"));
   hidden_key(PP_KEY_ESCAPE, 0); pump(30);
   CHECK(!pp_app_ui(app)->transition_pending);
+  /* Cancellation occurs after the main window's drawing. Complete the next
+   * frames before targeting the restored main-window control registry. */
+  hidden_settle();
+  CHECK(!settings->backend->modal);
   hidden_click("tab-interaction"); pp_settings_draw(settings);
   CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
   pp_settings_destroy(settings); settings = NULL;
@@ -1559,7 +1563,268 @@ static void hidden_toolbar_state_captures(void) {
   pp_app_destroy(app); app = NULL;
   puts("PASS toolbar action focus/hover/disabled/error states on both pages at ordinary/minimum/narrow sizes and 100/150/200% controlled scale.");
 }
+static void hidden_compact_item_editor(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 780));
+  hidden_settle();
+  PPRect details, size, color, angle, opacity;
+  CHECK(pp_ui_control_rect(settings->backend, "font-details", &details));
+  CHECK(!pp_ui_control_rect(settings->backend, "font-face", &details));
+  CHECK(pp_ui_control_rect(settings->backend, "item-size", &size));
+  CHECK(pp_ui_control_rect(settings->backend, "text-color", &color));
+  CHECK(size.y == color.y && size.x + size.w <= color.x);
+  CHECK(pp_ui_control_rect(settings->backend, "item-angle", &angle));
+  CHECK(pp_ui_control_rect(settings->backend, "item-opacity", &opacity));
+  CHECK(angle.y == opacity.y && angle.x + angle.w <= opacity.x);
+  pp_ui_focus(settings->backend, "font-details"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  capture("ticket26-font-details");
+  CHECK(pp_ui_control_rect(settings->backend, "font-face", &details));
+  CHECK(pp_ui_control_rect(settings->backend, "import-font", &details));
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &details));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS compact editor pairs applicable appearance controls and exposes Font details without hiding content actions.");
+}
+static bool capture_has_warning(const char *name, PPRect region) {
+  char path[MAX_PATH];
+  snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", name);
+  SDL_Surface *surface = SDL_LoadBMP(path);
+  CHECK(surface);
+  double sx = surface->w / settings->backend->width;
+  double sy = surface->h / settings->backend->height;
+  unsigned danger_pixels = 0;
+  for (int y = (int)(region.y * sy); y < (int)((region.y + region.h) * sy); y++)
+    for (int x = (int)(region.x * sx); x < (int)((region.x + region.w) * sx); x++) {
+      Uint8 r, g, b, a;
+      CHECK(SDL_ReadSurfacePixel(surface, x, y, &r, &g, &b, &a));
+      if (r > 120 && r > g + 60 && b < 110) danger_pixels++;
+    }
+  SDL_DestroySurface(surface);
+  return danger_pixels > 10;
+}
+static void hidden_editor_font_feedback(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  uint64_t id = pp_app_ui(app)->selected_item;
+  PPItem item = *pp_project_item(pp_app_project(app), id);
+  item.text = "\xf0\x9f\x91\x89 \xf4\x8f\xbf\xbf";
+  item.text_style.requested_family = "Missing presentation font";
+  item.text_style.primary_asset = (PPAssetId){0};
+  item.text_style.primary_face = 0;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                      .item_id = id, .item = &item}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  PPRect text, details, collapsed, expanded;
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &text));
+  CHECK(pp_ui_control_rect(settings->backend, "font-details", &details));
+  CHECK(pp_ui_control_rect(settings->backend, "item-size", &collapsed));
+  capture("ticket26-font-warning-collapsed");
+  CHECK(capture_has_warning("ticket26-font-warning-collapsed",
+         (PPRect){text.x, text.y + text.h, text.w, details.y - text.y - text.h}));
+  pp_ui_focus(settings->backend, "font-details"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, "item-size", &expanded));
+  CHECK(expanded.y > collapsed.y);
+  capture("ticket26-font-warning-expanded");
+  CHECK(capture_has_warning("ticket26-font-warning-expanded",
+         (PPRect){text.x, text.y + text.h, text.w, details.y - text.y - text.h}));
+  CHECK(!strcmp(pp_project_item(pp_app_project(app), id)->text, item.text));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS fallback and missing-glyph warnings remain rendered with Font details closed or open; Unicode content is retained.");
+}
+static void hidden_editor_error_recovery(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  uint64_t id = pp_app_ui(app)->selected_item;
+  double accepted_size = pp_project_item(pp_app_project(app), id)->text_style.font_size_dip;
+  pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_settle();
+  CHECK(pp_settings_invalid(settings) && !strcmp(settings->editor.size, "0"));
+  CHECK(pp_project_item(pp_app_project(app), id)->text_style.font_size_dip == accepted_size);
+  CHECK(!pp_app_dirty(app));
+  PPRect size, angle;
+  CHECK(pp_ui_control_rect(settings->backend, "item-size", &size));
+  CHECK(pp_ui_control_rect(settings->backend, "item-angle", &angle));
+  capture("ticket26-size-error");
+  CHECK(capture_has_warning("ticket26-size-error", (PPRect){size.x, size.y + size.h,
+                         size.w * 2 + 12, angle.y - size.y - size.h}));
+  hidden_click("tab-interaction"); hidden_settle();
+  hidden_click("close-settings"); hidden_settle();
+  CHECK(!pp_app_ui(app)->settings_open);
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SHOW_SETTINGS}, &error));
+  hidden_settle();
+  CHECK(pp_settings_invalid(settings) && !strcmp(settings->editor.size, "0"));
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL); hidden_settle();
+  CHECK(!settings->dialog_pending);
+  hidden_click("show-item-errors"); hidden_settle();
+  CHECK(settings->page == PP_SETTINGS_ITEMS);
+  hidden_click("revert-fields"); hidden_settle();
+  CHECK(!pp_settings_invalid(settings));
+  CHECK(pp_project_item(pp_app_project(app), id)->text_style.font_size_dip == accepted_size);
+  CHECK(!pp_app_dirty(app));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS invalid size stays beside its appearance group, survives hidden-page close/reopen, blocks saving and recovers through Revert fields without committing a project edit.");
+}
+static void hidden_editor_responsive(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  uint64_t text_id = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_FONT,
+             .item_id = text_id, .path = PP_FONT_FIXTURES "/PointyFixture.ttc"}, &error));
+  PPItem text = *pp_project_item(pp_app_project(app), text_id);
+  text.text = "Long Unicode content\n\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e \xf0\x9f\x91\x89 \xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb\nMissing character: \xf4\x8f\xbf\xbf";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                         .item_id = text_id, .item = &text}, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_IMAGE,
+         .anchor = anchor, .path = PP_MEDIA_FIXTURES "/alpha.png"}, &error));
+  uint64_t image_id = pp_app_ui(app)->selected_item;
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}};
+  const char *names[] = {"ordinary", "minimum", "narrow"};
+  for (int density = 0; density < 3; density++) {
+    create_settings(scales[density], true);
+    for (int size = 0; size < 3; size++) {
+      CHECK(SDL_SetWindowSize(settings->backend->window,
+          (int)(sizes[size][0] * scales[density]), (int)(sizes[size][1] * scales[density])));
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM,
+                                                  .item_id = text_id}, &error));
+      hidden_settle();
+      pp_ui_focus(settings->backend, "item-text"); hidden_settle();
+      char name[96];
+      snprintf(name, sizeof(name), "ticket26-content-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      CHECK(!strcmp(pp_project_item(pp_app_project(app), text_id)->text, text.text));
+      pp_ui_focus(settings->backend, "font-face-choice"); hidden_settle();
+      hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+      CHECK(settings->backend->popup_id);
+      PPRect option;
+      CHECK(pp_ui_control_rect(settings->backend, "font-face-choice-option-1", &option));
+      CHECK(option.x >= 0 && option.y >= 0 && option.x + option.w <= settings->backend->width &&
+            option.y + option.h <= settings->backend->height);
+      snprintf(name, sizeof(name), "ticket26-popup-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
+      CHECK(!settings->backend->popup_id);
+      pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+      PPRect size_bounds, color_bounds, tabs, footer;
+      CHECK(pp_ui_control_rect(settings->backend, "item-size", &size_bounds));
+      CHECK(pp_ui_control_rect(settings->backend, "text-color", &color_bounds));
+      if (size == 0) CHECK(size_bounds.y == color_bounds.y);
+      else CHECK(color_bounds.y >= size_bounds.y + size_bounds.h);
+      hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+      hidden_text("0"); hidden_settle();
+      CHECK(pp_settings_invalid(settings) && !strcmp(settings->editor.size, "0"));
+      CHECK(pp_ui_control_rect(settings->backend, "item-size", &size_bounds));
+      CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
+      CHECK(pp_ui_control_rect(settings->backend, "close-settings", &footer));
+      CHECK(size_bounds.y >= tabs.y + tabs.h && size_bounds.y + size_bounds.h < footer.y - 42);
+      snprintf(name, sizeof(name), "ticket26-error-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      hidden_click("revert-fields"); hidden_settle();
+      CHECK(!pp_settings_invalid(settings));
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM,
+                                                  .item_id = image_id}, &error));
+      hidden_settle();
+      pp_ui_focus(settings->backend, "replace-image"); hidden_settle();
+      CHECK(pp_ui_control_rect(settings->backend, "replace-image", &option));
+      CHECK(!pp_ui_control_rect(settings->backend, "font-details", &option));
+      CHECK(!pp_ui_control_rect(settings->backend, "text-color", &option));
+      if (size == 0) {
+        pp_ui_focus(settings->backend, "tab-items");
+        PPPlatformEvent scroll = {.kind = PP_EVENT_POINTER_MOVE,
+            .window_id = pp_settings_window_id(settings),
+            .window_point = {950 * settings->backend->window_scale,
+                             400 * settings->backend->window_scale}};
+        pp_settings_event(settings, &scroll);
+        scroll.kind = PP_EVENT_WHEEL; scroll.wheel_delta = 1000;
+        pp_settings_event(settings, &scroll); hidden_settle();
+      }
+      snprintf(name, sizeof(name), "ticket26-image-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      pp_ui_focus(settings->backend, "item-opacity"); hidden_settle();
+      CHECK(pp_ui_control_rect(settings->backend, "item-opacity", &option));
+      CHECK(option.y >= tabs.y + tabs.h && option.y + option.h < footer.y - 42);
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS compact text/Unicode/emoji, collection popups, appearance errors and image controls at ordinary/minimum/narrow sizes and 100/150/200% controlled scale; focused controls remain reachable.");
+}
+static void hidden_editor_routine_fallback(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  const PPTextDiagnostics *diagnostics = pp_item_snapshot_text_diagnostics(settings->editor.preview);
+  CHECK(diagnostics && diagnostics->fallback_runs && !diagnostics->missing_glyphs &&
+        !diagnostics->missing_requested_families);
+  PPRect text, details;
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &text));
+  CHECK(pp_ui_control_rect(settings->backend, "font-details", &details));
+  capture("ticket26-routine-emoji-fallback");
+  CHECK(!capture_has_warning("ticket26-routine-emoji-fallback",
+         (PPRect){text.x, text.y + text.h, text.w, details.y - text.y - text.h}));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS complete configured emoji fallback is routine Font details information rather than an unexpected-font warning.");
+}
+static void hidden_editor_wide_preview(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  uint64_t id = pp_app_ui(app)->selected_item;
+  PPItem item = *pp_project_item(pp_app_project(app), id);
+  item.text = "Preview this presentation item";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+                         .item_id = id, .item = &item}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  capture("ticket26-wide-preview");
+  SDL_Surface *surface = SDL_LoadBMP(PP_SMOKE_OUTPUT "/ticket26-wide-preview.bmp");
+  CHECK(surface);
+  PPRect text, tabs;
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &text));
+  CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
+  unsigned widest_ink_row = 0;
+  for (int y = (int)(tabs.y + tabs.h); y < (int)(text.y - 24); y++) {
+    int first = -1, last = -1;
+    for (int x = (int)text.x; x < (int)(text.x + text.w); x++) {
+      Uint8 r, g, b, a;
+      CHECK(SDL_ReadSurfacePixel(surface, x, y, &r, &g, &b, &a));
+      if (r < 100 && g < 100 && b < 100) { if (first < 0) first = x; last = x; }
+    }
+    if (first >= 0 && (unsigned)(last - first) > widest_ink_row)
+      widest_ink_row = (unsigned)(last - first);
+  }
+  SDL_DestroySurface(surface);
+  CHECK(widest_ink_row > 240);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS a wide text preview uses available width while fitting the compact preview height.");
+}
+static void hidden_editor_suite(void) {
+  hidden_editor_wide_preview();
+  hidden_compact_item_editor();
+  hidden_editor_font_feedback();
+  hidden_editor_routine_fallback();
+  hidden_editor_error_recovery();
+  hidden_editor_responsive();
+}
 static void render_only(void) {
+  hidden_editor_suite();
   hidden_compact_toolbar();
   hidden_project_composition_guard();
   hidden_toolbar_name_roundtrip();
@@ -1867,7 +2132,8 @@ int main(int argc, char **argv) {
       dialog_diagnostic || caption_diagnostic ||
       (argc == 2 && !strcmp(argv[1], "--desktop"));
   CHECK(argc == 2 &&
-        (desktop_run || manual_font || !strcmp(argv[1], "--render-only")));
+        (desktop_run || manual_font || !strcmp(argv[1], "--render-only") ||
+         !strcmp(argv[1], "--editor-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -1875,6 +2141,8 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--editor-only"))
+    hidden_editor_suite();
   else
     render_only();
   if (caption_diagnostic)
