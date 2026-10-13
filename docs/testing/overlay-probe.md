@@ -43,8 +43,8 @@ This tolerance follows the fixed-point conversion rules in the
 ## Probe modes
 
 ```powershell
-.\build\windows-dev\Debug\PointyPointer.exe --overlay-probe ring
-.\build\windows-dev\Debug\PointyPointer.exe --overlay-probe changing-alpha
+.\build\windows-dev\Debug\Yoink.exe --overlay-probe ring
+.\build\windows-dev\Debug\Yoink.exe --overlay-probe changing-alpha
 ```
 
 Both modes use the production SDL/OpenGL transformer and native presenter.

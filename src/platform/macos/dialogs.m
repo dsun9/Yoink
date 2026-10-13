@@ -76,7 +76,7 @@ static void dialog_result(void *userdata, const char *const *files,
 void pp_platform_file_dialog(PPDialogKind kind, const char *suggested_path,
                              PPDialogCallback callback, void *userdata) {
   static const SDL_DialogFileFilter project[] = {
-      {"PointyPointer project", "pointy"}};
+      {"Yoink project", "pointy"}};
   static const SDL_DialogFileFilter images[] = {
       {"Images (PNG, GIF, static SVG)", "png;gif;svg"}};
   static const SDL_DialogFileFilter fonts[] = {

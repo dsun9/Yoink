@@ -9,6 +9,7 @@
 bool pp_preferences_load(PPApp *app, const char *directory, PPError *error) {
   if (directory && !*directory)
     return true;
+  /* Public branding is Yoink; retain the installed app's preference identity. */
   char *owned =
       directory ? NULL : SDL_GetPrefPath("PointyPointer", "PointyPointer");
   if (!directory)

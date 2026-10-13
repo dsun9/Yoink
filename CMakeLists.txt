@@ -98,6 +98,8 @@ if(WIN32 OR APPLE)
   target_include_directories(pointy_anchors PUBLIC include)
   target_link_libraries(pointy_anchors PUBLIC pointy_display pointy_interaction pointy_render pointy_platform pointy_model PRIVATE SDL3::SDL3-static)
   add_executable(PointyPointer src/main.c src/app/overlay_probe.c src/app/text_probe.c)
+  # Retain the build target for existing integrations; brand the public output.
+  set_target_properties(PointyPointer PROPERTIES OUTPUT_NAME Yoink)
   target_link_libraries(PointyPointer PRIVATE pointy_lifecycle SDL3::SDL3-static)
   target_compile_definitions(PointyPointer PRIVATE PP_PROBE_IMAGE="default-hand-proof.bmp")
   if(WIN32)
