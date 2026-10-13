@@ -1,6 +1,7 @@
 #undef pp_platform_file_dialog
 #include "../../src/platform/windows/windows_internal.h"
 #include "../../src/ui/settings_internal.h"
+#include "../../src/ui/shaped_edit.h"
 #include "../test.h"
 #include "pointy/project_store.h"
 #include <stdio.h>
@@ -26,6 +27,10 @@ static bool controlled_dialog;
 static PPDialogCallback controlled_callback;
 static void *controlled_userdata;
 static unsigned controlled_dispatches;
+static bool cleanup_done;
+static void cleanup(void);
+#undef CHECK
+#define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "%s:%d: CHECK(%s) failed\n", __FILE__, __LINE__, #expr); cleanup(); exit(1); } } while (0)
 void pp_test_file_dialog(PPDialogKind kind, const char *suggested,
                          PPDialogCallback callback, void *userdata) {
   if (!controlled_dialog) {
@@ -67,6 +72,9 @@ static bool restore_foreground(const char *stage) {
   return restored;
 }
 static void cleanup(void) {
+  if (cleanup_done)
+    return;
+  cleanup_done = true;
   pp_platform_release_capture();
   pp_surface_destroy(overlap);
   overlap = NULL;
@@ -582,12 +590,15 @@ static void hidden_key(PPKey key, unsigned modifiers) {
 }
 static void hidden_click(const char *id) {
   PPRect bounds;
+  if (!pp_ui_control_rect(settings->backend, id, &bounds))
+    fprintf(stderr, "Missing hidden control %s, page=%d failed=%d invalid=%d controls=%zu\n",
+            id, settings->page, settings->failed, pp_settings_invalid(settings), settings->backend->control_count);
   CHECK(pp_ui_control_rect(settings->backend, id, &bounds));
   PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE,
                            .window_id = pp_settings_window_id(settings),
                            .button = PP_BUTTON_LEFT,
-                           .window_point = {bounds.x + bounds.w / 2,
-                                            bounds.y + bounds.h / 2}};
+                           .window_point = {(bounds.x + bounds.w / 2) * settings->backend->window_scale,
+                                            (bounds.y + bounds.h / 2) * settings->backend->window_scale}};
   pp_settings_event(settings, &event);
   event.kind = PP_EVENT_BUTTON_DOWN;
   pp_settings_event(settings, &event);
@@ -606,6 +617,14 @@ static void hidden_text(const char *text) {
                              .window_id = pp_settings_window_id(settings),
                              .codepoint = (unsigned char)*p};
     pp_settings_event(settings, &event);
+  }
+}
+static void hidden_settle(void) {
+  /* Focus scrolling is applied to the next completed frame. Draw those frames
+   * explicitly so busy hosts do not make a duration-based pump undersample it. */
+  for (int frame = 0; frame < 4; frame++) {
+    pp_settings_draw(settings);
+    CHECK(!settings->failed);
   }
 }
 static void hidden_retained_editor_actions(void) {
@@ -953,7 +972,324 @@ static void hidden_color_validation(void) {
   pp_app_destroy(app); app = NULL;
   puts("PASS signed hex color rejected with retained draft; mixed-case hex applies.");
 }
+static void hidden_batched_tab_edit(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200));
+  pump(30);
+  uint64_t id = pp_app_ui(app)->selected_item;
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  pp_ui_focus(settings->backend, "item-text");
+  pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL);
+  pp_settings_draw(settings);
+  hidden_text("After tab change");
+  hidden_click("tab-interaction");
+  pp_settings_draw(settings);
+  CHECK(!strcmp(pp_project_item(pp_app_project(app), id)->text,
+                "After tab change"));
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
+  CHECK(!pp_ui_control_rect(settings->backend, "item-text", &bounds));
+  CHECK(pp_ui_control_rect(settings->backend, "save", &bounds));
+  hidden_click("tab-items");
+  pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
+  CHECK(!pp_ui_control_rect(settings->backend, "activation", &bounds));
+  CHECK(pp_app_ui(app)->selected_item == id && pp_app_ui(app)->anchor == anchor);
+  CHECK(!strcmp(settings->editor.text, "After tab change"));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS outgoing item edit applies before tab change; pages share project controls.");
+}
+static void hidden_suspended_editor(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200));
+  pump(30);
+  pp_ui_focus(settings->backend, "item-text"); pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("Retained draft"); pp_settings_draw(settings);
+  hidden_key(PP_KEY_LEFT, PP_MOD_SHIFT); pp_settings_draw(settings);
+  const PPUIEditState *state = pp_ui_shaped_state(settings->backend);
+  size_t caret = state->caret, anchor = state->anchor, undo = state->undo_count;
+  PPRect former;
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &former));
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  PPPlatformEvent event = {.kind = PP_EVENT_BUTTON_DOWN,
+                           .window_id = pp_settings_window_id(settings),
+                           .button = PP_BUTTON_LEFT,
+                           .window_point = {former.x + 12, former.y + 12}};
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_BUTTON_UP; pp_settings_event(settings, &event);
+  CHECK(!pp_ui_focused(settings->backend, "item-text"));
+  hidden_text("Must not enter hidden text"); pp_settings_draw(settings);
+  CHECK(!strcmp(settings->editor.text, "Retained draft"));
+  for (int i = 0; i < 24; i++) {
+    hidden_key(PP_KEY_TAB, 0); pp_settings_draw(settings);
+    CHECK(!pp_ui_focused(settings->backend, "item-text"));
+  }
+  hidden_click("tab-items"); pp_settings_draw(settings);
+  state = pp_ui_shaped_state(settings->backend);
+  CHECK(state->caret == caret && state->anchor == anchor && state->undo_count == undo);
+  pp_ui_focus(settings->backend, "item-text"); pump(30);
+  hidden_key(PP_KEY_Z, PP_MOD_CONTROL); pp_settings_draw(settings);
+  CHECK(strcmp(settings->editor.text, "Retained draft"));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS hidden text rejects former-bounds input and focus; caret/selection/local undo retained.");
+}
+static bool control_label_contains(const char *id, const char *text) {
+  PPRect bounds;
+  if (!pp_ui_control_rect(settings->backend, id, &bounds)) return false;
+  for (size_t i = 0; i < settings->backend->control_count; i++) {
+    const PPUIControl *control = &settings->backend->controls[i];
+    if (control->bounds.x == bounds.x && control->bounds.y == bounds.y &&
+        strstr(control->label, text)) return true;
+  }
+  return false;
+}
+static void hidden_page_errors(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200)); pump(30);
+  uint64_t id = pp_app_ui(app)->selected_item;
+  double original_size = pp_project_item(pp_app_project(app), id)->text_style.font_size_dip;
+  pp_ui_focus(settings->backend, "item-size"); pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_click("tab-interaction"); pp_settings_draw(settings);
+  CHECK(!strcmp(settings->editor.size, "0") && pp_settings_invalid(settings));
+  CHECK(control_label_contains("tab-items", "!"));
+  hidden_click("close-settings"); pp_settings_draw(settings);
+  CHECK(!pp_app_ui(app)->settings_open && !settings->failed);
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SHOW_SETTINGS}, &error));
+  pp_settings_draw(settings);
+  CHECK(!strcmp(settings->editor.size, "0") && pp_settings_invalid(settings));
+  PPRect reopened;
+  CHECK(pp_ui_control_rect(settings->backend, "activation", &reopened));
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL); pp_settings_draw(settings);
+  CHECK(!settings->dialog_pending);
+  CHECK(pp_project_item(pp_app_project(app), id)->text_style.font_size_dip == original_size);
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "show-item-errors", &bounds));
+  hidden_click("show-item-errors"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
+  CHECK(!strcmp(settings->editor.size, "0"));
+  hidden_click("revert-fields"); pp_settings_draw(settings);
+  CHECK(!pp_settings_invalid(settings));
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  pp_ui_focus(settings->backend, "activation"); pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_click("tab-items"); pp_settings_draw(settings);
+  CHECK(!strcmp(settings->activation, "0") && pp_settings_invalid(settings));
+  CHECK(control_label_contains("tab-interaction", "!"));
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL); pp_settings_draw(settings);
+  CHECK(!settings->dialog_pending && !strcmp(settings->activation, "0"));
+  const PPAnchorList *list = pp_project_anchor(pp_app_project(app), pp_app_ui(app)->anchor);
+  size_t count = list->count;
+  hidden_click("add-text"); pp_settings_draw(settings);
+  CHECK(pp_project_anchor(pp_app_project(app), pp_app_ui(app)->anchor)->count == count);
+  hidden_click("show-interaction-errors"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
+  pp_ui_focus(settings->backend, "activation"); pump(30);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("42"); hidden_click("tab-items"); pp_settings_draw(settings);
+  CHECK(!pp_settings_invalid(settings));
+  CHECK(pp_project_settings(pp_app_project(app))->activation_dip == 42);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS hidden-page invalid drafts mark tabs, block actions, and link to correction/reset.");
+}
+static void hidden_content_scroll(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 780)); pump(30);
+  PPPlatformEvent motion = {.kind = PP_EVENT_POINTER_MOVE,
+                            .window_id = pp_settings_window_id(settings),
+                            .window_point = {950, 400}};
+  pp_settings_event(settings, &motion);
+  PPPlatformEvent wheel = {.kind = PP_EVENT_WHEEL,
+                           .window_id = pp_settings_window_id(settings),
+                           .wheel_delta = -1000};
+  pp_settings_event(settings, &wheel); pump(30);
+  hidden_settle();
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "item-opacity", &bounds));
+  CHECK(bounds.y + bounds.h > settings->backend->height - 220);
+  CHECK(bounds.y >= 200 && bounds.y + bounds.h < settings->backend->height - 95);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS Items scroll ends with its editor controls instead of an empty fixed-height tail.");
+}
+static void hidden_batched_list_mutations(void) {
+  for (int action = 0; action < 2; action++) {
+    for (int invalid = 1; invalid >= 0; invalid--) {
+      PPAppOptions options = {"", false};
+      CHECK(pp_app_create(&app, &options, &error));
+      PPAnchor anchor = pp_app_ui(app)->anchor;
+      uint64_t original = pp_app_ui(app)->selected_item;
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+      uint64_t other = pp_app_ui(app)->selected_item;
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SET_DEFAULT, .anchor = anchor,
+                                             .item_id = other}, &error));
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = original}, &error));
+      create_settings(1, true);
+      CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200)); pump(30);
+      pp_ui_focus(settings->backend, "item-size"); pump(30);
+      hidden_settle();
+      hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+      hidden_text(invalid ? "0" : "120");
+      hidden_click(action ? "make-default" : "move-down"); pp_settings_draw(settings);
+      const PPAnchorList *list = pp_project_anchor(pp_app_project(app), anchor);
+      CHECK(list->item_ids[0] == (!action && !invalid ? other : original));
+      CHECK(list->default_id == (action && !invalid ? original : other));
+      CHECK(pp_settings_invalid(settings) == (invalid != 0));
+      if (!invalid)
+        CHECK(pp_project_item(pp_app_project(app), original)->text_style.font_size_dip == 120);
+      pp_settings_destroy(settings); settings = NULL;
+      pp_app_destroy(app); app = NULL;
+    }
+  }
+  puts("PASS batched appearance edits validate before reorder/default mutations.");
+}
+static void hidden_navigation_guards(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200)); pump(30);
+  PPRect bounds;
+  pp_ui_focus(settings->backend, "item-text"); pump(30);
+  PPPlatformEvent preedit = {.kind = PP_EVENT_COMPOSITION,
+                             .window_id = pp_settings_window_id(settings),
+                             .composing = true, .text_utf8 = "pending"};
+  pp_settings_event(settings, &preedit); pp_settings_draw(settings);
+  CHECK(pp_ui_shaped_state(settings->backend)->composing);
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
+  preedit.composing = false; preedit.text_utf8 = "";
+  pp_settings_event(settings, &preedit); pp_settings_draw(settings);
+  CHECK(!settings->backend->composing);
+  controlled_dialog = true;
+  hidden_click("add-image"); pp_settings_draw(settings);
+  CHECK(settings->dialog_pending);
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
+  finish_controlled_dialog(NULL); pump(30); controlled_dialog = false;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_IMPORT_FONT,
+                                         .item_id = pp_app_ui(app)->selected_item,
+                                         .path = PP_FONT_FIXTURES "/PointyFixture.ttc"}, &error));
+  pump(30);
+  pp_ui_focus(settings->backend, "font-face-choice"); pump(30);
+  hidden_key(PP_KEY_ENTER, 0); pp_settings_draw(settings);
+  CHECK(settings->backend->popup_id);
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
+  hidden_key(PP_KEY_ESCAPE, 0); pump(30);
+  hidden_click("new"); pp_settings_draw(settings);
+  CHECK(pp_app_ui(app)->transition_pending);
+  hidden_key(PP_KEY_TAB, 0); pp_settings_draw(settings);
+  CHECK(!pp_ui_focused(settings->backend, "tab-interaction"));
+  hidden_key(PP_KEY_ESCAPE, 0); pump(30);
+  CHECK(!pp_app_ui(app)->transition_pending);
+  hidden_click("tab-interaction"); pp_settings_draw(settings);
+  CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS composition, chooser, dropdown and modal guard Settings navigation.");
+}
+static void hidden_responsive_pages(void) {
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  PPAnchor anchor = pp_app_ui(app)->anchor;
+  for (int i = 0; i < 14; i++)
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT, .anchor = anchor}, &error));
+  uint64_t id = pp_app_ui(app)->selected_item;
+  PPItem item = *pp_project_item(pp_app_project(app), id);
+  item.text = "Long Unicode draft\n\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e \xf0\x9f\x91\x89 \xf0\x9f\x91\xa9\xe2\x80\x8d\xf0\x9f\x92\xbb\nThird line to scroll inside the text field";
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM, .item_id = id, .item = &item}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}};
+  const char *names[] = {"ordinary", "minimum", "narrow"};
+  for (int density = 0; density < 3; density++) {
+    create_settings(scales[density], true);
+    for (int size = 0; size < 3; size++) {
+      CHECK(SDL_SetWindowSize(settings->backend->window,
+                              (int)(sizes[size][0] * scales[density]),
+                              (int)(sizes[size][1] * scales[density])));
+      hidden_click("tab-items"); pump(30);
+      pp_ui_focus(settings->backend, "tab-items"); pump(30);
+      char name[96];
+      snprintf(name, sizeof(name), "ticket21-items-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      pp_ui_focus(settings->backend, "item-size"); pump(30);
+      PPRect bounds;
+      CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
+      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 90);
+      hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+      hidden_text("0"); pump(30);
+      hidden_settle();
+      CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
+      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 135);
+      snprintf(name, sizeof(name), "ticket21-items-error-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      hidden_click("tab-interaction"); pump(30);
+      CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
+      CHECK(!pp_ui_control_rect(settings->backend, "item-text", &bounds));
+      snprintf(name, sizeof(name), "ticket21-interaction-%s-%d", names[size], (int)(scales[density] * 100));
+      capture(name);
+      pp_ui_focus(settings->backend, "easing"); pump(30);
+      CHECK(pp_ui_control_rect(settings->backend, "easing", &bounds));
+      CHECK(bounds.y >= 195 && bounds.y + bounds.h < settings->backend->height - 90);
+      hidden_click("revert-fields"); pump(30);
+      CHECK(!pp_settings_invalid(settings));
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS both pages at ordinary/minimum/narrow logical sizes and 100/150/200% controlled scale; long Unicode/list/error fields remain reachable.");
+}
+static void hidden_batched_interaction_save(void) {
+  snprintf(package, sizeof(package), PP_SMOKE_OUTPUT "/ticket21-interaction-%lu-%llu.pointy",
+           GetCurrentProcessId(), GetTickCount64());
+  PPAppOptions options = {"", false};
+  CHECK(pp_app_create(&app, &options, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SAVE_AS, .path = package}, &error));
+  create_settings(1, true);
+  hidden_click("tab-interaction"); hidden_settle();
+  pp_ui_focus(settings->backend, "activation"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("42"); hidden_click("save"); pp_settings_draw(settings);
+  CHECK(!settings->dialog_pending && !pp_app_dirty(app));
+  PPProject *saved = NULL;
+  CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+  CHECK(pp_project_settings(saved)->activation_dip == 42);
+  pp_project_destroy(saved);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_click("tab-items"); pp_settings_draw(settings);
+  hidden_key(PP_KEY_S, PP_MOD_CONTROL); pp_settings_draw(settings);
+  CHECK(pp_settings_invalid(settings) && !settings->dialog_pending);
+  CHECK(!strcmp(settings->activation, "0"));
+  CHECK(pp_project_load(package, pp_app_assets(app), &saved, &error));
+  CHECK(pp_project_settings(saved)->activation_dip == 42);
+  pp_project_destroy(saved);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
+  puts("PASS batched Interaction edit reaches saved package; hidden invalid draft survives blocked Save.");
+}
 static void render_only(void) {
+  hidden_batched_tab_edit();
+  hidden_suspended_editor();
+  hidden_page_errors();
+  hidden_content_scroll();
+  hidden_batched_list_mutations();
+  hidden_navigation_guards();
+  hidden_responsive_pages();
+  hidden_batched_interaction_save();
   hidden_batched_imports();
   hidden_color_validation();
   PPSettings *invalid_settings = (PPSettings *)(uintptr_t)1;
@@ -1041,6 +1377,7 @@ static void render_only(void) {
   SDL_SetWindowSize(settings->backend->window, 960, 720);
   pump(50);
   capture("task8-hidden-narrow");
+  hidden_click("tab-interaction"); pump(30);
   for (int i = 0; i < 128 && !pp_ui_focused(settings->backend, "easing"); i++) {
     PPPlatformEvent tab = {.kind = PP_EVENT_KEY_DOWN,
                            .window_id = pp_settings_window_id(settings),
@@ -1162,6 +1499,7 @@ static void desktop_smoke(void) {
   SDL_SetWindowSize(settings->backend->window, 700, 600);
   pump(50);
   capture("task8-settings-narrow");
+  click_control("tab-interaction");
   focus_control("easing");
   CHECK(pp_ui_focused(settings->backend, "easing"));
   capture("task8-settings-narrow-scrolled");
@@ -1258,5 +1596,8 @@ int main(int argc, char **argv) {
     render_only();
   if (caption_diagnostic)
     CHECK(caption_exercised);
+  /* Join the raster worker before CRT exit takes its process teardown lock.
+   * atexit remains a fallback, and failure checks use the same idempotent path. */
+  cleanup();
   return 0;
 }
