@@ -68,7 +68,7 @@ static void item_pointer_event(PPSettings *settings, const PPPlatformEvent *even
   if (event->kind == PP_EVENT_BUTTON_DOWN && event->button == PP_BUTTON_LEFT &&
       settings->page == PP_SETTINGS_ITEMS && !settings->dialog_pending &&
       !settings->remove_confirmation && !pp_app_ui(settings->app)->transition_pending &&
-      !ui->popup_id && !pp_settings_invalid(settings) && contains(drag->viewport, drag->pointer)) {
+      !ui->popup_id && pp_settings_action_enabled(settings) && contains(drag->viewport, drag->pointer)) {
     const PPAppUIState *state = pp_app_ui(settings->app);
     const PPAnchorList *list = pp_project_anchor(pp_app_project(settings->app), state->anchor);
     for (size_t i = 0; i < list->count; i++) {
@@ -126,26 +126,9 @@ static void row_label(PPUIBackend *ui, const PPItem *item, char *label, size_t c
     snprintf(label, capacity, "Image %llu", (unsigned long long)item->id);
     return;
   }
-  size_t length = 0;
-  label[0] = 0;
-  for (const char *p = item->text; p && *p && length + 12 < capacity;) {
-    nk_rune rune;
-    int used = nk_utf_decode(p, &rune, (int)strlen(p));
-    if (used <= 0) break;
-    const struct nk_font_glyph *glyph = nk_font_find_glyph(ui->body_font, rune);
-    if (rune <= ' ') {
-      if (length && label[length - 1] != ' ') label[length++] = ' ';
-    } else if (glyph && glyph->codepoint == rune) {
-      memcpy(label + length, p, (size_t)used);
-      length += (size_t)used;
-    } else {
-      length += (size_t)snprintf(label + length, capacity - length, "U+%04X", (unsigned)rune);
-    }
-    p += used;
-  }
-  while (length && label[length - 1] == ' ') length--;
-  label[length] = 0;
-  if (!length) snprintf(label, capacity, "Text %llu", (unsigned long long)item->id);
+  pp_ui_label_text(ui->body_font, item->text, PP_UI_LABEL_COLLAPSE_WHITESPACE,
+                    label, capacity);
+  if (!label[0]) snprintf(label, capacity, "Text %llu", (unsigned long long)item->id);
 }
 static void row_thumbnail(PPSettings *settings, const PPItem *item, struct nk_rect bounds) {
   PPUIBackend *ui = settings->backend;
@@ -196,18 +179,8 @@ static void row_content(PPSettings *settings, const PPItem *item, const char *la
                  PP_UI_ICON_DRAG, pp_ui_theme.muted);
   char display[128];
   snprintf(display, sizeof(display), "%s", label);
-  int length = (int)strlen(label);
-  bool truncated = font->width(font->userdata, font->height, label, length) > text.w;
-  float suffix_width = truncated ? font->width(font->userdata, font->height, "...", 3) : 0;
-  while (length && font->width(font->userdata, font->height, label, length) + suffix_width > text.w) {
-    length--;
-    while (length && ((unsigned char)label[length] & 0xc0) == 0x80) length--;
-  }
-  if (truncated && text.w >= suffix_width) {
-    memcpy(display + length, "...", 4);
-    length += 3;
-  }
-  nk_draw_text(nk_window_get_canvas(&ui->context), text, display, length, font,
+  size_t length = pp_ui_fit_label(font, display, sizeof(display), text.w);
+  nk_draw_text(nk_window_get_canvas(&ui->context), text, display, (int)length, font,
                selected ? pp_ui_theme.selection : pp_ui_theme.field,
                selected ? pp_ui_theme.accent_hover : pp_ui_theme.ink);
 }
@@ -215,6 +188,15 @@ bool pp_settings_invalid(const PPSettings *settings) {
   return settings->backend->composing || settings->name_error[0] ||
          settings->interaction_error[0] || settings->editor.content_error[0] ||
          settings->editor.appearance_error[0] || settings->editor.font_error[0];
+}
+bool pp_settings_action_enabled(const PPSettings *settings) {
+  /* A correction can still belong to the outgoing field when earlier controls
+   * draw. Accept its action intent, then decide validity after field traversal.
+   * Without pending field input, invalid drafts keep actions disabled. */
+  return !settings->dialog_pending && !settings->remove_confirmation &&
+         !pp_app_ui(settings->app)->transition_pending &&
+         !settings->backend->composing &&
+         (!pp_settings_invalid(settings) || settings->field_input_pending);
 }
 void pp_settings_revert(PPSettings *settings) {
   settings->name_error[0] = settings->interaction_error[0] = 0;
@@ -300,6 +282,14 @@ void pp_settings_event(PPSettings *settings, const PPPlatformEvent *event) {
   if (!settings || !event ||
       event->window_id != pp_settings_window_id(settings))
     return;
+  if (event->kind == PP_EVENT_TEXT ||
+      (event->kind == PP_EVENT_KEY_DOWN &&
+       (event->key == PP_KEY_BACKSPACE || event->key == PP_KEY_DELETE ||
+        ((event->modifiers & PP_MOD_CONTROL) &&
+         (event->key == PP_KEY_V || event->key == PP_KEY_X || event->key == PP_KEY_Z)))))
+    settings->field_input_pending = true;
+  if (event->kind == PP_EVENT_FOCUS_LOST || event->kind == PP_EVENT_CANCEL)
+    settings->field_input_pending = false;
   pp_ui_backend_event(settings->backend, event);
   item_pointer_event(settings, event);
   if (event->kind == PP_EVENT_WINDOW_CLOSE) {
@@ -354,7 +344,7 @@ static void anchor_selector(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   struct nk_context *ctx = &ui->context;
   PPAnchor selected = pp_app_ui(settings->app)->anchor;
-  bool enabled = !settings->dialog_pending && !pp_settings_invalid(settings);
+  bool enabled = pp_settings_action_enabled(settings);
   pp_ui_heading(ui, "Pull from this position");
   pp_ui_secondary(ui, "Shared on every display");
   const int positions[] = {0, 1, 2, 3, -1, 4, 5, 6, 7};
@@ -397,7 +387,7 @@ static void ordered_items(PPSettings *settings) {
   const PPAppUIState *state = pp_app_ui(settings->app);
   const PPAnchorList *list =
       pp_project_anchor(pp_app_project(settings->app), state->anchor);
-  bool enabled = !settings->dialog_pending && !pp_settings_invalid(settings);
+  bool enabled = pp_settings_action_enabled(settings);
   if ((settings->drag.pressed || settings->drag.drop_pending) && !drag_list_valid(settings))
     cancel_drag(settings);
   if (settings->drag.drop_pending) {
@@ -852,9 +842,7 @@ void pp_settings_draw(PPSettings *settings) {
     if (pp_ui_button(ui, "close-settings", "Close settings",
                      !settings->dialog_pending))
       pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
-    if (pp_ui_button(ui, "quit", "Quit",
-                     !settings->dialog_pending &&
-                         !pp_settings_invalid(settings)))
+    if (pp_ui_button(ui, "quit", "Quit", pp_settings_action_enabled(settings)))
       pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
     if (settings->page_pending && !modal && !settings->dialog_pending &&
         !ui->composing && !ui->popup_id &&
@@ -868,6 +856,7 @@ void pp_settings_draw(PPSettings *settings) {
    * run only after the outgoing page has consumed its complete input batch. */
   pp_item_editor_validate(settings);
   validate_interaction(settings);
+  settings->field_input_pending = false;
   pp_project_apply_action(settings);
   pp_project_confirmation(settings);
   if (!pp_ui_end(ui, &error))

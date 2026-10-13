@@ -210,28 +210,9 @@ static void row_label(PPUIBackend *ui, const PPItem *item, size_t index,
     snprintf(label, capacity, "Image %zu", index + 1);
     return;
   }
-  size_t length = 0;
-  for (const char *text = item->text; text && *text && length + 1 < capacity;) {
-    nk_rune rune;
-    int used = nk_utf_decode(text, &rune, (int)strlen(text));
-    if (used <= 0) break;
-    const struct nk_font_glyph *glyph = nk_font_find_glyph(ui->body_font, rune);
-    char replacement[20];
-    const char *part = text;
-    size_t bytes = (size_t)used;
-    if (rune == '\n' || rune == '\r' || rune == '\t') {
-      part = " "; bytes = 1;
-    } else if (!glyph || glyph->codepoint != rune) {
-      snprintf(replacement, sizeof(replacement), "U+%04X ", (unsigned)rune);
-      part = replacement; bytes = strlen(replacement);
-    }
-    if (length + bytes >= capacity) break;
-    memcpy(label + length, part, bytes);
-    length += bytes;
-    text += used;
-  }
-  label[length] = 0;
-  if (!length) snprintf(label, capacity, "Text %zu", index + 1);
+  pp_ui_label_text(ui->body_font, item->text, PP_UI_LABEL_PRESERVE_WHITESPACE,
+                    label, capacity);
+  if (!label[0]) snprintf(label, capacity, "Text %zu", index + 1);
 }
 static bool drawer_row(PPDrawer *d, const PPItem *item, size_t index,
                        size_t *slot, PPError *error) {
@@ -255,15 +236,7 @@ static bool drawer_row(PPDrawer *d, const PPItem *item, size_t index,
   struct nk_rect text_bounds = nk_rect(bounds.x + 64, bounds.y + 8,
                                        fmaxf(0, bounds.w - 72), 22);
   const struct nk_user_font *font = &ui->body_font->handle;
-  size_t length = strlen(label);
-  bool abbreviated = font->width(font->userdata, font->height, label, (int)length) > text_bounds.w;
-  while (length && font->width(font->userdata, font->height, label, (int)length) >
-      text_bounds.w - (abbreviated ? 16 : 0)) {
-    length--;
-    while (length && ((unsigned char)label[length] & 0xc0) == 0x80) length--;
-  }
-  label[length] = 0;
-  if (abbreviated && length + 3 < sizeof(label)) strcat(label, "...");
+  size_t length = pp_ui_fit_label(font, label, sizeof(label), text_bounds.w);
   bool pressed = nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT) &&
       nk_input_is_mouse_hovering_rect(&ctx->input, bounds) &&
       nk_input_is_mouse_hovering_rect(&ctx->input, clip);
@@ -271,7 +244,7 @@ static bool drawer_row(PPDrawer *d, const PPItem *item, size_t index,
       pp_ui_focused(ui, id) || nk_input_is_mouse_hovering_rect(&ctx->input, bounds)
           ? pp_ui_theme.selection : pp_ui_theme.field;
   struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
-  nk_draw_text(canvas, text_bounds, label, (int)strlen(label), font,
+  nk_draw_text(canvas, text_bounds, label, (int)length, font,
       background, pressed ? pp_ui_theme.surface : pp_ui_theme.ink);
   nk_draw_text(canvas, nk_rect(text_bounds.x, bounds.y + 31, text_bounds.w, 18),
       item->kind == PP_ITEM_TEXT ? "Text" : "Image",

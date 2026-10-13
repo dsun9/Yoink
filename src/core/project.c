@@ -120,7 +120,7 @@ bool pp_project_set_name(PPProject *project, const char *name, PPError *error) {
         return project_error(error, PP_ERROR_ARGUMENT, "Project name is required");
     size_t length = strlen(name);
     if (!length || length > PP_PROJECT_NAME_MAX)
-        return project_error(error, PP_ERROR_ARGUMENT, "Project name must contain 1–255 UTF-8 bytes");
+        return project_error(error, PP_ERROR_ARGUMENT, "Project name must contain 1 to 255 UTF-8 bytes");
     bool visible = false;
     for (size_t at = 0; at < length;) {
         const unsigned char *p = (const unsigned char *)name + at;
