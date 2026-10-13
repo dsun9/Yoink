@@ -45,6 +45,32 @@ cmake --build --preset windows-release --target pointy_png_retained_test pointy_
 powershell -NoProfile -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -TestRegex '^(png_retained|direct_gl|windows_surface|windows_capture)$' -LogPrefix png-retained
 ```
 
+## Replacement GPU rejection regression
+
+[Issue #16](https://github.com/dsun9/Yoink/issues/16) covers a source-changing
+replacement whose source fits the remaining GPU budget but whose output does
+not. The native `png_retained` regression replaces the 3 by 1 alpha source
+with the 8 by 4 blue source at 96 DIP. At 150% drawable density, the accepted
+output is 144 by 48 and the replacement needs 144 by 72. The candidate source
+needs 128 bytes. The test sets the presenter's limit to its accepted charge
+plus 128, allowing that source while rejecting overlapping output storage.
+
+On reviewed PR #15 commit `3afd21e`, the regression failed because the scene
+lost its sole sprite. With both reservations checked before source publication,
+the same sprite retains its snapshot, pose, animation start, native surface and
+bounds, source identity, output storage and GPU charge. A fresh Desktop
+Duplication image compares every displayed RGB pixel with the accepted image.
+The receiver repaints to request a fresh desktop frame without redrawing the
+sprite. The test also checks usable rectangular input, unchanged upload/draw
+counts on rejection, successful retry after restoring the budget, and accepted
+replacement ownership. Existing native GL errors still remove the failed
+sprite and release interception and GPU charges.
+
+The failing baseline and passing replacement run on 2026-10-12 both verified
+released input, restored cursor and restored original foreground through the
+desktop supervisor. The Release build and all 36 non-desktop tests passed.
+Run the native regression with the supervised `png_retained` command above.
+
 ## Scoped timing and limits
 
 The [performance matrix](rendering-performance.md) now measures PNG through `pp_sprite_present` and aggregates its retained renderer. Each timer query is created, resolved and deleted in its owning context. The PNG-only diagnostic completed 16/16 cases, 320/320 warm GPU observations and tagged native input observations in all 16 cases. Every case reported zero raster builds, one cold source upload, 23 transform draws across cold/warmup/varying-pose samples and zero readbacks. Worst complete-path p95 was 16.851 ms and maximum tagged hook-arrival wait was 32 ms. GL completion waits include driver/swap pacing; these are synthetic poses in offscreen windows, with visible compositor timing unobserved.

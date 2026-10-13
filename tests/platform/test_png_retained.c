@@ -102,7 +102,50 @@ int main(int argc,char **argv){
   pose(id,(PPPose){{300,300},96,0,1});CHECK(SetCursorPos(300,300));mouse(MOUSEEVENTF_LEFTDOWN,0);pose(id,(PPPose){{300,300},96,0,0});mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!IsWindowVisible(window));below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1);
   pose(id,(PPPose){{300,300},96,0,1});CHECK(SetCursorPos(300,300));mouse(MOUSEEVENTF_LEFTDOWN,0);no_displays=true;pump();mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!IsWindowVisible(window));below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1);no_displays=false;pump();CHECK(IsWindowVisible(window));
   puts("PASS native PNG rectangle/alpha, original outside input, static/translation reuse, drag outside, cached opacity/wheel/rotation, zero opacity and hidden capture cleanup");
-  PPItem blue=image("retained-blue.png");CHECK(SetCursorPos(300,300));API(pp_scene_replace(scene,id,&blue,now(),&error));pump();pixel("stationary immutable replacement",300,300,0,0,255);CHECK(native(surface)==window);
+  PPItem blue=image("retained-blue.png");
+  /* The 8x4 candidate source fits in 128 bytes, but its changed aspect needs
+   * a new output while the accepted 3x1 source and output remain charged. */
+  PPSprite *accepted=pp_sprites_find(presenter,id);CHECK(accepted);
+  PPItemSnapshot *snapshot=pp_item_snapshot_retain(pp_scene_get(scene,id)->snapshot);
+  PPPose accepted_pose=pp_scene_get(scene,id)->pose;double start=pp_scene_get(scene,id)->animation_start;
+  PPRetainedPresentation retained=accepted->retained;CHECK(GetWindowRect(window,&rectangle));
+  CHECK(SetCursorPos(500,450));pump();
+  unsigned char *artwork=pp_test_desktop_capture(rectangle,true);CHECK(artwork);
+  size_t charge=pp_anchor_presenter_gpu_resources(presenter).retained_bytes;
+  PPRendererMetrics rejected_before=pp_anchor_presenter_renderer_metrics(presenter);
+  presenter->gpu.limit_bytes=charge+128;
+  API(pp_scene_replace(scene,id,&blue,now(),&error));pump();
+  CHECK(pp_scene_get(scene,id)&&pp_scene_count(scene)==1&&presenter->instance_count==1);
+  accepted=pp_sprites_find(presenter,id);CHECK(accepted&&accepted->surface==surface&&accepted->retained.valid);
+  CHECK(presenter->notice.code==PP_ERROR_RESOURCE_LIMIT&&!presenter->failed_surface);
+  CHECK(pp_scene_get(scene,id)->snapshot==snapshot&&accepted->retained.snapshot==snapshot);
+  CHECK(!memcmp(&pp_scene_get(scene,id)->pose,&accepted_pose,sizeof(accepted_pose)));
+  CHECK(!memcmp(&accepted->pose,&accepted_pose,sizeof(accepted_pose)));
+  CHECK(pp_scene_get(scene,id)->animation_start==start&&accepted->retained.animation_start==start);
+  CHECK(accepted->retained.content_id==retained.content_id&&accepted->retained.source_revision==retained.source_revision);
+  CHECK(accepted->retained.source_width==3&&accepted->retained.source_height==1);
+  CHECK(!memcmp(&accepted->retained.drawn,&retained.drawn,sizeof(retained.drawn))&&accepted->retained.density==retained.density);
+  CHECK(accepted->retained.gpu_bytes==retained.gpu_bytes&&accepted->retained.output_bytes==retained.output_bytes);
+  CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==charge);
+  RECT rejected_bounds;CHECK(GetWindowRect(window,&rejected_bounds));CHECK(!memcmp(&rectangle,&rejected_bounds,sizeof(rectangle))&&IsWindowVisible(window));
+  /* Ask the receiver to repaint so the assertion cannot reuse a cached desktop
+   * image. This does not change or redraw the accepted sprite. */
+  CHECK(RedrawWindow((HWND)receiver->window,NULL,NULL,RDW_INVALIDATE|RDW_ERASE|RDW_UPDATENOW));pump();
+  unsigned char *after=pp_test_desktop_capture(rectangle,true);CHECK(after);
+  size_t pixels=(size_t)(rectangle.right-rectangle.left)*(rectangle.bottom-rectangle.top);
+  for(size_t i=0;i<pixels;i++)for(size_t c=0;c<3;c++)CHECK(abs(after[i*4+c]-artwork[i*4+c])<=3);
+  free(after);free(artwork);
+  PPRendererMetrics rejected_after=pp_anchor_presenter_renderer_metrics(presenter);
+  CHECK(rejected_after.source_uploads==rejected_before.source_uploads&&rejected_after.transform_draws==rejected_before.transform_draws);
+  before=downs[id];below=receiver->clicks;click(300,300);CHECK(downs[id]==before+1&&receiver->clicks==below&&GetForegroundWindow()==(HWND)receiver->window);
+  presenter->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
+  CHECK(SetCursorPos(300,300));API(pp_scene_replace(scene,id,&blue,now(),&error));pump();pixel("stationary immutable replacement",300,300,0,0,255);CHECK(native(surface)==window);
+  CHECK(pp_scene_get(scene,id)->snapshot!=snapshot&&pp_scene_get(scene,id)->animation_start>start);
+  accepted=pp_sprites_find(presenter,id);CHECK(accepted->retained.source_width==8&&accepted->retained.source_height==4);
+  CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==charge-retained.gpu_bytes-retained.output_bytes+accepted->retained.gpu_bytes+accepted->retained.output_bytes);
+  CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+pp_sprites_find(presenter,id)->retained.output_bytes);
+  pp_item_snapshot_release(snapshot);
+  puts("PASS source-changing output-budget rejection preserves sprite, snapshot, pose, clock, native bounds, all displayed pixels, GPU charge and input; sufficient-budget retry commits");
   PPItem empty=image("retained-empty.png");mouse(MOUSEEVENTF_LEFTDOWN,0);API(pp_scene_replace(scene,id,&empty,now(),&error));pump();mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!IsWindowVisible(window)&&pp_scene_get(scene,id)->pose.opacity==1);below=receiver->clicks;click(300,300);CHECK(receiver->clicks==below+1);API(pp_scene_replace(scene,id,&blue,now(),&error));pump();CHECK(IsWindowVisible(window));
   puts("PASS fully transparent PNG source at opacity1 releases input/capture, with source visibility retained between updates");
   created=pp_sprites_create(presenter,PP_ANCHOR_TOP_LEFT,(PPPose){{300,300},96,0,1},now(),&error);CHECK(created);uint64_t second=created->id;pump();before=downs[second];click(300,300);CHECK(downs[second]==before+1);

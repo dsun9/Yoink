@@ -364,8 +364,8 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
     return ok;
 }
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int width,int height) {
-    if(!r||width<1||height<1||width>8192||height>8192)return 0;
-    return r->output_texture&&r->output_width==width&&r->output_height==height?0:(size_t)width*height*4;
+    if(width<1||height<1||width>8192||height>8192)return 0;
+    return r&&r->output_texture&&r->output_width==width&&r->output_height==height?0:(size_t)width*height*4;
 }
 size_t pp_renderer_output_bytes(const PPRenderer *r) {
     return r&&r->output_texture?(size_t)r->output_width*r->output_height*4:0;

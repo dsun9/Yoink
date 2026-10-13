@@ -54,7 +54,8 @@ bool pp_renderer_draw(PPRenderer *renderer, PPVec2 layout_size, double longest_d
 bool pp_renderer_draw_source(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
     double longest_dip, double angle_deg, double opacity, double pixels_per_dip, PPError *error);
 /* Reserve candidate bytes before drawing, including overlap with output_bytes.
- * A changed extent replaces the old target only after successful publication. */
+ * A changed extent replaces the old target only after successful publication.
+ * A NULL renderer has no accepted output and needs the full candidate extent. */
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *renderer,int width,int height);
 size_t pp_renderer_output_bytes(const PPRenderer *renderer);
 void pp_renderer_release_output(PPRenderer *renderer);

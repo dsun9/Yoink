@@ -60,6 +60,14 @@ allocation, while the accepted target is still charged. Control-label atlases, d
 compositor backing are separate. Reservations happen before allocation;
 rejection/teardown refunds only the caller's allocations.
 
+Native replacement reserves both candidate source and transformed output before
+changing the accepted source binding or presentation validity. Output reservation
+therefore includes the accepted source, accepted output, and candidate source.
+A protective rejection releases candidate reservations and leaves the accepted
+presentation usable so sprite rollback restores its snapshot, pose and animation
+start. A native presentation failure still hides the surface and releases its
+input and GPU ownership.
+
 Windows visible anchors and sprites use transparent direct GL windows with a
 color-only shader and rectangular input. Translation and unchanged static
 content reuse the source and native window without uploads or transform draws.
