@@ -78,7 +78,7 @@ int pp_app_run(int argc, char **argv) {
   bool smoke=argc==2 && !strcmp(argv[1],"--smoke-test");
   bool open_settings=argc==2 && !strcmp(argv[1],"--settings");
   if(argc>2 || (argc==2 && !smoke && !open_settings)) {
-    fputs("Usage: PointyPointer [--settings | --smoke-test]\n",stderr); return 2;
+    fputs("Usage: Yoink [--settings | --smoke-test]\n",stderr); return 2;
   }
   PPLifecycle life={0}; PPError error={0}; int result=1;
   PPAppOptions isolated={.preferences_directory=""};
@@ -95,7 +95,7 @@ int pp_app_run(int argc, char **argv) {
   }
   result=0;
 done:
-  if(result) fprintf(stderr,"PointyPointer: %s\n",error.message);
+  if(result) fprintf(stderr,"Yoink: %s\n",error.message);
   pp_lifecycle_stop(&life);
   SDL_Quit();
   return result;

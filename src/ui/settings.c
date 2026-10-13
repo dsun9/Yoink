@@ -52,7 +52,7 @@ bool pp_settings_create_scaled(PPSettings **out, PPApp *app, float scale,
     return false;
   }
   settings->app = app;
-  PPUIWindowOptions options = {"PointyPointer settings",
+  PPUIWindowOptions options = {"Yoink Settings",
                                pp_app_ui(app)->geometry, scale, true};
   if (!pp_ui_backend_create(&settings->backend, &options, error)) {
     free(settings);
@@ -371,7 +371,7 @@ bool pp_settings_recover(PPSettings *settings, PPError *error) {
         {0, 2, "Quit without saving"},
         {0, 3, "Save project and quit"}};
     SDL_MessageBoxData box = {.flags=SDL_MESSAGEBOX_ERROR,
-                             .title="PointyPointer Settings recovery",
+                             .title="Yoink Settings recovery",
                              .message=message, .numbuttons=can_save ? 4 : 3,
                              .buttons=buttons};
     int choice=0;
@@ -430,6 +430,7 @@ void pp_settings_draw(PPSettings *settings) {
   nk_flags flags = NK_WINDOW_NO_SCROLLBAR | (modal ? NK_WINDOW_NO_INPUT : 0);
   struct nk_context *ctx = &ui->context;
   settings->drawing_fields = true;
+  /* Stable Nuklear window ID; the native title carries the public app name. */
   if (nk_begin(ctx, "PointyPointer", nk_rect(0, 0, ui->width, ui->height),
                flags)) {
     pp_project_actions(settings);

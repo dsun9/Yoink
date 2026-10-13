@@ -136,7 +136,7 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
     if(!window_id) {
         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, texture_owner?1:0);
         if(texture_owner) {SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE,8);SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,0);SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE,0);}
-        renderer->window = SDL_CreateWindow("PointyPointer renderer", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
+        renderer->window = SDL_CreateWindow("Yoink renderer", 1, 1, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     } else renderer->window=SDL_GetWindowFromID(window_id);
     if(renderer->window) renderer->window_id=SDL_GetWindowID(renderer->window);
     int previous_share=0;SDL_GL_GetAttribute(SDL_GL_SHARE_WITH_CURRENT_CONTEXT,&previous_share);

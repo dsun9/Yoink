@@ -176,7 +176,7 @@ the relevant interactive Mac environment and are not selected by that CI label.
 On a Mac with the real SDK, configure/build first, run headless tests, then run
 the existing bounded native receiver harness. Build the unsigned bundle ZIP
 with `cpack --config build/macos-dev/CPackConfig.cmake -C Debug`; extract it to a
-different directory and launch `PointyPointer.app/Contents/MacOS/PointyPointer
+different directory and launch `Yoink.app/Contents/MacOS/Yoink
 --smoke-test` from another working directory. Then launch the bundle normally
 and verify accessory/tray-only startup, retained Settings drafts, dirty Quit,
 private font discovery and file dialogs. Signing/notarization is not included.

@@ -2,7 +2,7 @@
 
 ## Adapted settings backend
 
-PointyPointer adapts backend, input and form patterns from
+Yoink adapts backend, input and form patterns from
 [BongoCat](https://github.com/vladelaina/BongoCat), revision
 `3f39cf8c47b408ed7976d73ce9c318f59fb66528`:
 
@@ -19,7 +19,7 @@ License version 3 or later; the full license is in the repository root
 The OpenGL loader/shader setup in `src/render/gl_api.c` also adapts BongoCat
 `src/render/gl_api.c`, under the same AGPL-3.0-or-later terms.
 The adaptation removes global context lookup, uses one backend per window,
-and replaces BongoCat-specific settings with PointyPointer commands.
+and replaces BongoCat-specific settings with Yoink commands.
 The reference checkout is not a build dependency.
 
 ## Nuklear and embedded support code
@@ -105,7 +105,7 @@ This software uses FreeType under its FreeType License. Portions of this
 software are copyright © The FreeType Project (www.freetype.org). All rights
 reserved. HarfBuzz and its Microsoft shaping data retain both upstream notices.
 
-PointyPointer builds explicitly altered, hash-checked copies of SDL_image's
+Yoink builds explicitly altered, hash-checked copies of SDL_image's
 GIF decoder and SDL_ttf's shaping source. `cmake/PatchSDLImage.cmake` changes
 disposal-3 snapshots/restores to copy transparent pixels exactly.
 `cmake/PatchSDLTTF.cmake` preserves complete fallback clusters, including default
@@ -127,7 +127,7 @@ that the above copyright notice appear in all copies and that both that
 copyright notice and this permission notice appear in supporting documentation.
 This software is provided "as is" without express or implied warranty.
 
-Binary redistribution must accompany the complete corresponding PointyPointer
+Binary redistribution must accompany the complete corresponding Yoink
 source, including build scripts and pinned dependency/patch information, under
 the application AGPL terms. This local unsigned ZIP is a build artifact; no
 public distribution, signing, notarization, or source offer has been published.
