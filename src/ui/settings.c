@@ -300,14 +300,15 @@ static void ordered_items(PPSettings *settings) {
   struct nk_rect parent_clip = ctx->current->layout->clip;
   bool offscreen = list_viewport.y >= parent_clip.y + parent_clip.h ||
                    list_viewport.y + list_viewport.h <= parent_clip.y;
-  nk_flags group_flags = NK_WINDOW_BORDER |
-                         (ctx->current->layout->flags & (NK_WINDOW_ROM | NK_WINDOW_NO_INPUT));
+  nk_flags group_flags = (nk_flags)NK_WINDOW_BORDER |
+                         (ctx->current->layout->flags &
+                          ((nk_flags)NK_WINDOW_ROM | (nk_flags)NK_WINDOW_NO_INPUT));
   /* Nuklear skips fully clipped groups, which would remove every row from the
    * keyboard registry. MOVABLE bypasses that early return, and ROM prevents
    * movement during begin. Restore the intended flags before drawing widgets;
    * the group retains its actual clipped viewport and pointer eligibility. */
   if (nk_group_begin(ctx, "anchor-items", group_flags |
-                            (offscreen ? NK_WINDOW_MOVABLE | NK_WINDOW_ROM : 0))) {
+                            (offscreen ? (nk_flags)NK_WINDOW_MOVABLE | (nk_flags)NK_WINDOW_ROM : 0))) {
     ctx->current->layout->flags = group_flags;
     if (!list->count) {
       nk_layout_row_dynamic(ctx, 48, 1);

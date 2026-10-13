@@ -276,6 +276,29 @@ flows, or theme picker. Browser CSS/ARIA audits do not establish native desktop
 accessibility. Nuklear has no UI Automation accessibility tree; keyboard and
 visible-focus coverage must be reported separately from screen-reader support.
 
+## Selected-item editor
+
+The selected item uses a 108-unit actual-content preview on the shared pale
+checkerboard, followed by Content and Appearance sections. The preview fits
+the content's width and height independently so multiline and wide text use
+the available space. It retains the existing prepared sources, animation
+clock, context-local textures and exact GPU charges.
+
+Text keeps shaped Unicode and emoji editing, permitted font import and a
+direct collection-face popup. Font details holds routine coverage, the
+configured emoji fallback and the numeric collection index. Missing requested
+fonts, missing glyphs and fallback associated with those problems stay visible
+beside the content with a correction action. Complete configured fallback is
+routine information. Image items keep Replace image and their size, angle and
+opacity controls.
+
+Wide editor columns pair size with color, then angle with opacity. Narrow
+Settings stacks those fields and uses the existing focus-revealing scroll.
+Appearance errors appear directly after their field or paired group; empty
+errors allocate no row. Invalid entered values remain drafts and do not dirty
+the project until a valid edit commits. Tabs, close/reopen, chooser cancellation
+and Revert fields retain the shared validation and recovery behavior.
+
 ## Replacement drawer
 
 The native drawer reuses `src/ui/backend.c` controls and `src/ui/theme.c` tokens.
