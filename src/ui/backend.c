@@ -411,6 +411,9 @@ void pp_ui_backend_event(PPUIBackend *ui, const PPPlatformEvent *event) {
       y = (int)(event->window_point.y / ui->window_scale);
   switch (event->kind) {
   case PP_EVENT_POINTER_MOVE:
+    if (x != (int)ui->context.input.mouse.pos.x ||
+        y != (int)ui->context.input.mouse.pos.y)
+      ui->keyboard_focus = false;
     nk_input_motion(&ui->context, x, y);
     break;
   case PP_EVENT_BUTTON_DOWN:
@@ -493,9 +496,39 @@ bool pp_ui_begin(PPUIBackend *ui, PPError *error) {
   ui->tab_direction = 0;
   ui->control_count = 0;
   ui->pointer_target = ui->text_target = false;
+  ui->tooltip_text[0] = 0;
+  ui->tooltip_focus = false;
+  ui->tooltip_bounds = nk_rect(0, 0, 0, 0);
   return true;
 }
+static void draw_tooltip(PPUIBackend *ui) {
+  if (!ui->tooltip_text[0] || ui->popup_id || ui->modal)
+    return;
+  struct nk_context *ctx = &ui->context;
+  const struct nk_user_font *font = &ui->utility_font->handle;
+  float width = fminf(ui->width - 24, font->width(font->userdata, font->height,
+                      ui->tooltip_text, (int)strlen(ui->tooltip_text)) + 24);
+  float height = 36;
+  float x = fmaxf(12, fminf(ui->tooltip_anchor.x, ui->width - width - 12));
+  float y = ui->tooltip_anchor.y + ui->tooltip_anchor.h + 6;
+  if (y + height > ui->height - 12)
+    y = fmaxf(12, ui->tooltip_anchor.y - height - 6);
+  ui->tooltip_bounds = nk_rect(x, y, width, height);
+  /* Commands in Nuklear's overlay are appended after the windows. A tooltip
+   * must never become a window or change the active text-input owner. */
+  struct nk_command_buffer *canvas = &ctx->overlay;
+  nk_command_buffer_init(canvas, &ctx->memory, NK_CLIPPING_OFF);
+  nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
+  nk_fill_rect(canvas, ui->tooltip_bounds, pp_ui_theme.control_radius,
+                pp_ui_theme.surface);
+  nk_stroke_rect(canvas, ui->tooltip_bounds, pp_ui_theme.control_radius, 1,
+                  pp_ui_theme.border);
+  nk_draw_text(canvas, nk_rect(x + 12, y + 7, width - 24, 22), ui->tooltip_text,
+                 (int)strlen(ui->tooltip_text), font, pp_ui_theme.surface,
+                 pp_ui_theme.ink);
+}
 bool pp_ui_end(PPUIBackend *ui, PPError *error) {
+  draw_tooltip(ui);
   static const struct nk_draw_vertex_layout_element layout[] = {
       {NK_VERTEX_POSITION, NK_FORMAT_FLOAT, offsetof(PPUIVertex, position)},
       {NK_VERTEX_TEXCOORD, NK_FORMAT_FLOAT, offsetof(PPUIVertex, uv)},
@@ -668,23 +701,98 @@ bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
   enabled = enabled && (!ui->popup_id || ui->in_popup);
   struct nk_rect bounds;
   bool focused = control(ui, id, label, enabled, false, &bounds);
-  if (!enabled)
+  struct nk_style_button saved = ui->context.style.button;
+  if (!enabled) {
+    ui->context.style.button.normal = nk_style_item_color(pp_ui_theme.field);
+    ui->context.style.button.text_normal = pp_ui_theme.muted;
     nk_widget_disable_begin(&ui->context);
+    ui->context.style.button.color_factor_background = 1;
+    ui->context.style.button.color_factor_text = 1;
+  }
   bool clicked = nk_button_label(&ui->context, label) != 0;
   if (!enabled)
     nk_widget_disable_end(&ui->context);
+  ui->context.style.button = saved;
   focus_outline(ui, bounds, focused);
   bool activated = enabled && (clicked || (focused && ui->activate));
   if (activated)
     ui->activate = false;
   return activated;
 }
+void pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
+                   const char *text) {
+  if (!text || !*text || ui->popup_id || ui->modal ||
+      (ui->context.current->layout->flags & NK_WINDOW_NO_INPUT))
+    return;
+  bool hover = nk_input_is_mouse_hovering_rect(&ui->context.input, bounds) &&
+               nk_input_is_mouse_hovering_rect(&ui->context.input,
+                                              ui->context.current->layout->clip);
+  bool focused = id && ui->keyboard_focus && pp_ui_focused(ui, id);
+  if (focused || (hover && !ui->tooltip_focus)) {
+    snprintf(ui->tooltip_text, sizeof(ui->tooltip_text), "%s", text);
+    ui->tooltip_anchor = bounds;
+    ui->tooltip_focus = focused;
+  }
+}
+bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
+                       const char *action, const char *tooltip, bool enabled,
+                       bool primary) {
+  struct nk_context *ctx = &ui->context;
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  struct nk_style_button saved = ctx->style.button;
+  enabled = enabled && !ui->composing && (!ui->popup_id || ui->in_popup);
+  if (primary && enabled) {
+    ctx->style.button.normal = nk_style_item_color(pp_ui_theme.accent);
+    ctx->style.button.hover = nk_style_item_color(pp_ui_theme.accent_hover);
+    ctx->style.button.active = nk_style_item_color(pp_ui_theme.accent_pressed);
+  }
+  bool activated = pp_ui_button(ui, id, "", enabled);
+  if (ui->control_count)
+    snprintf(ui->controls[ui->control_count - 1].label,
+             sizeof(ui->controls[0].label), "%s", action);
+  bool pressed = enabled && nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT) &&
+                 nk_input_is_mouse_hovering_rect(&ctx->input, bounds);
+  struct nk_color color = !enabled ? pp_ui_theme.muted
+                           : primary || pressed ? pp_ui_theme.surface
+                                                : pp_ui_theme.ink;
+  pp_ui_draw_icon(nk_window_get_canvas(ctx), bounds, icon, color);
+  if (primary && enabled && ui->keyboard_focus && pp_ui_focused(ui, id))
+    nk_stroke_rect(nk_window_get_canvas(ctx),
+        nk_rect(bounds.x + 3, bounds.y + 3, bounds.w - 6, bounds.h - 6),
+        pp_ui_theme.control_radius - 2, 2, pp_ui_theme.surface);
+  ctx->style.button = saved;
+  pp_ui_tooltip(ui, bounds, id, tooltip ? tooltip : action);
+  return activated;
+}
+bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
+                  bool *value, bool enabled) {
+  struct nk_context *ctx = &ui->context;
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  enabled = enabled && !ui->composing && (!ui->popup_id || ui->in_popup);
+  bool activated = pp_ui_button(ui, id, "", enabled);
+  if (ui->control_count)
+    snprintf(ui->controls[ui->control_count - 1].label,
+             sizeof(ui->controls[0].label), "%s", label);
+  if (activated) *value = !*value;
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  struct nk_rect track = nk_rect(bounds.x + bounds.w - 54,
+                                 bounds.y + (bounds.h - 24) / 2, 46, 24);
+  nk_fill_rect(canvas, track, 12, *value && enabled ? pp_ui_theme.accent
+                                                 : pp_ui_theme.muted);
+  nk_fill_circle(canvas, nk_rect(track.x + (*value ? 24 : 3), track.y + 3, 18, 18),
+                 pp_ui_theme.surface);
+  struct nk_rect text = nk_rect(bounds.x + 8, bounds.y,
+                                fmaxf(0, bounds.w - 66), bounds.h);
+  nk_draw_text(canvas, text, label, (int)strlen(label), ctx->style.font,
+               pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
+  return activated;
+}
 bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
                   bool selected, bool enabled) {
   struct nk_style_button saved = ui->context.style.button;
   if (selected) {
-    ui->context.style.button.normal = nk_style_item_color(pp_ui_theme.accent);
-    ui->context.style.button.text_normal = pp_ui_theme.surface;
+    ui->context.style.button.normal = nk_style_item_color(pp_ui_theme.selection);
+    ui->context.style.button.text_normal = pp_ui_theme.accent_hover;
   }
   bool clicked = pp_ui_button(ui, id, label, enabled);
   ui->context.style.button = saved;
@@ -763,9 +871,34 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
   struct nk_rect trigger = nk_widget_bounds(ctx);
   uint64_t hash = control_id(id);
   char label[180];
-  snprintf(label, sizeof(label), "%s  v",
+  snprintf(label, sizeof(label), "%s",
            options[*selected >= 0 && *selected < count ? *selected : 0]);
-  if (pp_ui_button(ui, id, label, enabled)) {
+  struct nk_style_button saved = ctx->style.button;
+  ctx->style.button.text_alignment = NK_TEXT_LEFT;
+  ctx->style.button.padding.x = 12;
+  /* Draw the trigger through the regular control boundary, then clip its text
+   * to the area before the chevron. Long names cannot paint beneath the icon. */
+  bool open = pp_ui_button(ui, id, "", enabled);
+  ctx->style.button = saved;
+  if (ui->control_count)
+    snprintf(ui->controls[ui->control_count - 1].label,
+             sizeof(ui->controls[0].label), "%s", label);
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  struct nk_rect clip = canvas->clip;
+  struct nk_rect text_bounds = nk_rect(trigger.x + 12, trigger.y,
+                                       fmaxf(0, trigger.w - 48), trigger.h);
+  float clip_left = fmaxf(clip.x, text_bounds.x);
+  float clip_top = fmaxf(clip.y, text_bounds.y);
+  nk_push_scissor(canvas, nk_rect(clip_left, clip_top,
+      fmaxf(0, fminf(clip.x + clip.w, text_bounds.x + text_bounds.w) - clip_left),
+      fmaxf(0, fminf(clip.y + clip.h, text_bounds.y + text_bounds.h) - clip_top)));
+  nk_draw_text(canvas, text_bounds, label, (int)strlen(label), ctx->style.font,
+                 pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
+  nk_push_scissor(canvas, clip);
+  struct nk_rect chevron = nk_rect(trigger.x + trigger.w - 30, trigger.y, 24, trigger.h);
+  pp_ui_draw_icon(nk_window_get_canvas(ctx), chevron, PP_UI_ICON_CHEVRON_DOWN,
+                  enabled ? pp_ui_theme.muted : pp_ui_theme.border);
+  if (open) {
     ui->popup_id = hash;
     ui->popup_index = *selected;
     ui->activate = false;
@@ -803,7 +936,7 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
     for (int i = 0; i < count; i++) {
       char option_id[100];
       snprintf(option_id, sizeof(option_id), "%s-option-%d", id, i);
-      nk_layout_row_dynamic(ctx, 32, 1);
+      nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
       if (ui->keyboard_focus && i == ui->popup_index)
         ui->focus_id = control_id(option_id);
       if (i == ui->popup_index) focused_option = nk_widget_bounds(ctx);
@@ -837,9 +970,19 @@ void pp_ui_heading(PPUIBackend *ui, const char *text) {
   nk_label(&ui->context, text, NK_TEXT_LEFT);
   nk_style_pop_font(&ui->context);
 }
+void pp_ui_secondary(PPUIBackend *ui, const char *text) {
+  nk_style_push_font(&ui->context, &ui->utility_font->handle);
+  nk_layout_row_dynamic(&ui->context, 22, 1);
+  nk_label_colored(&ui->context, text, NK_TEXT_LEFT, pp_ui_theme.muted);
+  nk_style_pop_font(&ui->context);
+}
 void pp_ui_error(PPUIBackend *ui, const char *text) {
+  if (!text || !*text)
+    return;
   nk_layout_row_dynamic(&ui->context, 38, 1);
-  nk_label_wrap(&ui->context, text ? text : "");
+  nk_style_push_color(&ui->context, &ui->context.style.text.color, pp_ui_theme.danger);
+  nk_label_wrap(&ui->context, text);
+  nk_style_pop_color(&ui->context);
 }
 bool pp_ui_control_rect(const PPUIBackend *ui, const char *id, PPRect *bounds) {
   for (size_t i = 0; i < ui->control_count; i++)
@@ -852,6 +995,9 @@ bool pp_ui_control_rect(const PPUIBackend *ui, const char *id, PPRect *bounds) {
 }
 bool pp_ui_focused(const PPUIBackend *ui, const char *id) {
   return ui->focus_id == control_id(id);
+}
+bool pp_ui_tooltip_visible(const PPUIBackend *ui, const char *text) {
+  return ui->tooltip_bounds.w > 0 && !strcmp(ui->tooltip_text, text);
 }
 bool pp_ui_upload_frame(PPUIBackend *ui, GLuint *texture, const PPFrame *frame,
                         PPError *error) {

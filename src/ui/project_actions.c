@@ -166,15 +166,27 @@ void pp_project_actions(PPSettings *settings) {
   struct nk_context *ctx = &ui->context;
   bool enabled = !settings->dialog_pending &&
                  !pp_app_ui(settings->app)->transition_pending &&
-                 !settings->remove_confirmation;
-  nk_layout_row_dynamic(ctx, 24, 1);
-  nk_label(ctx,
-           pp_app_dirty(settings->app) ? "Project name  /  Unsaved changes"
-           : *pp_app_path(settings->app)
-               ? "Project name  /  Saved"
-               : "Project name  /  Not saved to a file",
-           NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 32, 1);
+                 !settings->remove_confirmation && !ui->composing;
+  float width = nk_window_get_content_region(ctx).w;
+  bool wrapped = width < 780;
+  float toolbar_top = nk_widget_bounds(ctx).y;
+  float toolbar_height = toolbar_top + 36 + (wrapped ? 42 : 0) + 4;
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  struct nk_rect clip = canvas->clip;
+  nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
+  nk_fill_rect(canvas, nk_rect(0, 0, ui->width, toolbar_height),
+                0, pp_ui_theme.surface);
+  nk_stroke_line(canvas, 0, toolbar_height, ui->width,
+                  toolbar_height, 1, pp_ui_theme.border);
+  nk_push_scissor(canvas, clip);
+  float widths[] = {100, 60, width - (wrapped ? 194 : 394), 16,
+                    44, 44, 44, 44};
+  nk_layout_row(ctx, NK_STATIC, 36, wrapped ? 4 : 8, widths);
+  nk_style_push_font(ctx, &ui->heading_font->handle);
+  nk_label_colored(ctx, "Yoink", NK_TEXT_LEFT, pp_ui_theme.accent);
+  nk_style_pop_font(ctx);
+  nk_label_colored(ctx, "Project", NK_TEXT_LEFT, pp_ui_theme.muted);
+  struct nk_rect name_bounds = nk_widget_bounds(ctx);
   if (pp_ui_edit(ui, "project-name", settings->project_name,
                  sizeof(settings->project_name), false, enabled)) {
     PPError error;
@@ -187,26 +199,37 @@ void pp_project_actions(PPSettings *settings) {
     else
       settings->name_error[0] = 0;
   }
+  nk_label_colored(ctx, pp_app_dirty(settings->app) ? "*" : "",
+                   NK_TEXT_LEFT, pp_ui_theme.accent);
+  pp_ui_tooltip(ui, name_bounds, "project-name",
+                pp_app_dirty(settings->app) ? "Unsaved changes"
+                : *pp_app_path(settings->app) ? "Project saved"
+                                             : "Not saved to a file; no unsaved edits");
   bool actions_enabled = enabled && !pp_settings_invalid(settings);
-  nk_layout_row_dynamic(ctx, 32, 4);
-  if (pp_ui_button(ui, "new", "New", actions_enabled))
+  if (wrapped) {
+    float actions[] = {44, 44, 44, 44};
+    nk_layout_row(ctx, NK_STATIC, 36, 4, actions);
+  }
+  if (pp_ui_icon_button(ui, "new", PP_UI_ICON_NEW, "New", "New (Ctrl+N)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_NEW);
-  if (pp_ui_button(ui, "open", "Open", actions_enabled))
+  if (pp_ui_icon_button(ui, "open", PP_UI_ICON_OPEN, "Open", "Open (Ctrl+O)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_OPEN);
-  if (pp_ui_button(ui, "save", "Save", actions_enabled))
+  if (pp_ui_icon_button(ui, "save", PP_UI_ICON_SAVE, "Save", "Save (Ctrl+S)",
+                        actions_enabled, true))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE);
-  if (pp_ui_button(ui, "save-as", "Save As", actions_enabled))
+  if (pp_ui_icon_button(ui, "save-as", PP_UI_ICON_SAVE_AS, "Save as", "Save as (Ctrl+Shift+S)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE_AS);
   char unicode_notice[256];
   pp_ui_unicode_notice(ui, settings->project_name, unicode_notice,
                        sizeof(unicode_notice));
-  nk_layout_row_dynamic(ctx, 38, 1);
-  nk_label_wrap(
-      ctx,
-      settings->name_error[0] ? settings->name_error
-      : unicode_notice[0]
-          ? unicode_notice
-          : "Ctrl+N New   Ctrl+O Open   Ctrl+S Save   Ctrl+Shift+S Save As");
+  pp_ui_error(ui, settings->name_error);
+  if (unicode_notice[0]) {
+    nk_layout_row_dynamic(ctx, 38, 1);
+    nk_label_wrap(ctx, unicode_notice);
+  }
 }
 void pp_project_confirmation(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
