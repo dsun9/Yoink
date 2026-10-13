@@ -767,10 +767,10 @@ static void test_desktop_flow(void) {
             ->kind == PP_ITEM_TEXT);
   LONG clicks = receiver->clicks, wheels = receiver->wheels;
   trace_hole_target("before-hole-input");
-  CHECK(WindowFromPoint((POINT){500,380})==native_sprite(a)->window);
+  CHECK(WindowFromPoint((POINT){500,380})==(HWND)receiver->window);
   click(500, 380);
   mouse(MOUSEEVENTF_WHEEL, WHEEL_DELTA);
-  CHECK(receiver->clicks == clicks && receiver->wheels == wheels);
+  CHECK(receiver->clicks == clicks+1 && receiver->wheels == wheels+1);
   POINT point = opaque_point(a);
   move(point.x, point.y);
   mouse(MOUSEEVENTF_LEFTDOWN, 0);
@@ -839,7 +839,7 @@ static void test_desktop_flow(void) {
   CHECK(pp_project_revision(pp_app_project(flow_app)) == revision &&
         !memcmp(&before, &pp_scene_get(pp_app_scene(flow_app), a)->pose,
                 sizeof(before)));
-  puts("PASS visible native hand with explicit color export, repeated default pulls, rectangular transparent click/wheel, "
+  puts("PASS visible native hand with explicit color export, repeated default pulls, silhouette hole click/wheel pass-through, "
        "cross-window capture, eased wheel/Alt wheel, stationary double-click, "
        "drawer selection/Escape/outside and presentation focus");
   /* Replace the lower sprite with an actual GIF; advancing its frame must
@@ -889,14 +889,14 @@ static void test_desktop_flow(void) {
   POINT actual;
   CHECK(GetCursorPos(&actual));
   CHECK(actual.x == stationary.x && actual.y == stationary.y);
-  CHECK(WindowFromPoint(stationary) == (HWND)receiver->window);
+  CHECK(WindowFromPoint(stationary) == gs->window);
   mouse(MOUSEEVENTF_LEFTDOWN, 0);
   mouse(MOUSEEVENTF_LEFTUP, 0);
   mouse(MOUSEEVENTF_WHEEL, WHEEL_DELTA);
-  CHECK(receiver->clicks == clicks + 1 && receiver->wheels == wheels + 1);
+  CHECK(receiver->clicks == clicks && receiver->wheels == wheels);
   frozen_time = 0;
-  puts("PASS stationary pointer across actual GIF transparent frame routes "
-       "original click/wheel to lower process");
+  puts("PASS stationary pointer across actual GIF blank frame retains "
+       "animation-union click/wheel ownership");
   point = opaque_point(a);
   move(point.x, point.y);
   mouse(MOUSEEVENTF_LEFTDOWN, 0);

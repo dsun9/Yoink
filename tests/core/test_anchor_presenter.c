@@ -37,6 +37,7 @@ struct PPSharedTexture {const PPFrame *frame;};
 static PPSurface *surfaces;
 static int source_width;
 static unsigned cpu_transforms;
+static unsigned grab_publications;
 static uint32_t window_serial;
 static PPSurface *capture_owner,*failed_gl_surface;
 static bool fail_gl_upload;
@@ -65,6 +66,7 @@ PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRendere
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++window_serial;return true;}
 uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
 bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive)pp_surface_cancel_input(s);return true;}
+bool pp_surface_set_grab_region(PPSurface *s,const PPGrabRegion *r,PPError *error) {(void)s;(void)error;if(r)grab_publications++;return true;}
 void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
 void pp_surface_inherit_order(PPSurface *s,PPSurface *old) {(void)s;(void)old;}
 bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
@@ -558,6 +560,26 @@ static void test_gif_budget_sharing_and_png_transitions(void) {
     pp_anchor_presenter_destroy(p);pp_scene_destroy(scene);pp_project_destroy(project);CHECK(!surfaces);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
     puts("PASS bounded GIF candidate overlap, PNG/GIF transitions, unique sharing and reference cleanup");
 }
+static void test_grab_budget_preserves_accepted_presentation(void) {
+#if defined(_WIN32)
+    PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
+    CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
+    PPItem old=png_item(assets,"alpha.png",96),replacement=png_item(assets,"retained-blue.png",96);
+    CHECK(pp_project_add_item(project,PP_ANCHOR_TOP_LEFT,&old,NULL,&error));CHECK(pp_anchor_presenter_create(&p,(PPRenderer *)1,project,&error));
+    PPDisplay d={1,{0,0,1920,1080},1,1};p->displays=malloc(sizeof(d));*p->displays=d;p->display_count=1;
+    PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(s&&pp_sprites_update(p,1,&error));
+    uint64_t id=s->id;PPGrabArea *accepted=pp_grab_retain(s->retained.grab);PPItemSnapshot *snapshot=pp_item_snapshot_retain(pp_scene_get(p->scene,id)->snapshot);
+    PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(p);PPRect bounds=s->retained.bounds;size_t used=pp_assets_grab_bytes(assets),fill_bytes=PP_GRAB_CACHE_LIMIT-used;
+    CHECK(used&&pp_assets_reserve_grab(assets,fill_bytes,&error));
+    CHECK(pp_scene_replace(p->scene,id,&replacement,2,&error));pp_sprites_sync(p);CHECK(pp_sprites_update(p,2,&error));
+    CHECK(pp_scene_get(p->scene,id)->snapshot==snapshot&&s->retained.grab==accepted&&s->surface->shown&&!memcmp(&bounds,&s->retained.bounds,sizeof(bounds)));
+    CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==before.source_uploads&&pp_assets_grab_bytes(assets)==PP_GRAB_CACHE_LIMIT);
+    pp_assets_release_grab(assets,fill_bytes);CHECK(pp_assets_grab_bytes(assets)==used);
+    CHECK(pp_scene_replace(p->scene,id,&replacement,3,&error));pp_sprites_sync(p);CHECK(pp_sprites_update(p,3,&error));CHECK(s->retained.grab!=accepted&&s->surface->blue==255);
+    pp_grab_release(accepted);pp_item_snapshot_release(snapshot);pp_anchor_presenter_destroy(p);CHECK(!pp_assets_grab_bytes(assets));pp_project_destroy(project);pp_assets_destroy(assets);
+    puts("PASS grab cache candidate rejection preserves accepted snapshot/artwork/shape/upload and releases private charges after retry/deletion");
+#endif
+}
 static void test_gif_transparent_frame_releases_capture(void) {
     PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
     CHECK(pp_assets_create(&assets,&error));CHECK(pp_project_create(assets,&project,&error));
@@ -567,15 +589,26 @@ static void test_gif_transparent_frame_releases_capture(void) {
     PPSprite *s=pp_sprites_create(p,PP_ANCHOR_TOP_LEFT,(PPPose){{200,200},96,0,1},1,&error);CHECK(s);
     CHECK(pp_sprites_update(p,1,&error));PPSurface *surface=s->surface;CHECK(surface->shown);
     event(p,surface,PP_EVENT_BUTTON_DOWN,200,200,1.05);CHECK(capture_owner==surface);
-    CHECK(pp_sprites_update(p,1.11,&error));CHECK(!surface->shown && !capture_owner && fabs(s->next_frame-1.2)<1e-8);
+    unsigned shape_before=grab_publications;
+    CHECK(pp_sprites_update(p,1.11,&error));
+#if defined(_WIN32)
+    CHECK(surface->shown && capture_owner==surface && fabs(s->next_frame-1.2)<1e-8);
+#else
+    CHECK(!surface->shown && !capture_owner && fabs(s->next_frame-1.2)<1e-8);
     event(p,surface,PP_EVENT_CANCEL,200,200,1.11);
+#endif
     PPRendererMetrics hidden=pp_anchor_presenter_renderer_metrics(p);
     s->pose.center.x+=10;s->dirty=true;CHECK(pp_sprites_update(p,1.12,&error));
     CHECK(pp_anchor_presenter_renderer_metrics(p).source_uploads==hidden.source_uploads && pp_anchor_presenter_renderer_metrics(p).transform_draws==hidden.transform_draws);
     CHECK(pp_sprites_update(p,1.21,&error));CHECK(surface->shown && surface->red==255 && fabs(s->next_frame-1.3)<1e-8);
+#if defined(_WIN32)
+    CHECK(grab_publications==shape_before);
+    CHECK(capture_owner==surface&&s->interaction.pressed);
+    event(p,surface,PP_EVENT_BUTTON_UP,210,200,1.22);CHECK(!capture_owner);
+#endif
     CHECK(!s->dragging && !s->interaction.pressed);
     pp_anchor_presenter_destroy(p);pp_project_destroy(project);CHECK(!surfaces);pp_assets_destroy(assets);
-    puts("PASS transparent GIF frame hides/releases input and retains the next independent animation deadline");
+    puts("PASS blank GIF frame keeps Windows union/capture; compatibility hiding and independent deadlines remain covered");
 }
 static void test_gif_rejected_replacement_preserves_clock(void) {
     PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *p=NULL;PPError error={0};
@@ -1452,6 +1485,7 @@ int main(void) {
     test_completed_target_is_revalidated_after_external_resize();
     test_cached_source_survives_compatibility_request();
     test_async_latest_text_resize();
+    test_grab_budget_preserves_accepted_presentation();
     test_gif_transparent_frame_releases_capture();
 #if defined(_WIN32)
     test_gif_budget_sharing_and_png_transitions();

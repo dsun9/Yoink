@@ -97,10 +97,35 @@ static bool runtime_settle(PPRuntime *runtime,uint64_t id,Acceptance *a,double d
   }while(pp_probe_clock()<limit);
   pp_probe_puts("INCOMPLETE settling runtime source/pose");return false;
 }
+static bool runtime_input_target(PPRuntime *runtime,uint64_t id,POINT *out) {
+  PPSprite *s=pp_sprites_find(runtime->presenter,id);if(!s)return false;
+  SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(s->surface));if(!window)return false;
+  HWND hwnd=SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
+  RECT bounds;HRGN shape=CreateRectRgn(0,0,0,0);if(!shape)return false;
+  struct {RGNDATAHEADER header;RECT rects[PP_GRAB_RECT_LIMIT];} data={0};
+  bool ok=GetWindowRect(hwnd,&bounds)&&GetWindowRgn(hwnd,shape)!=ERROR&&GetRegionData(shape,sizeof(data),(RGNDATA *)&data)>0;
+  POINT target={0};double best=HUGE_VAL;
+  if(ok)for(DWORD i=0;i<data.header.nCount;i++) {
+    RECT r=data.rects[i];POINT candidate={(r.left+r.right)/2,(r.top+r.bottom)/2};
+    double dx=candidate.x-(bounds.right-bounds.left)*.5,dy=candidate.y-(bounds.bottom-bounds.top)*.5;
+    /* Keep the helper's alternating one-pixel motion inside the native area. */
+    if(dx*dx+dy*dy<best&&PtInRegion(shape,candidate.x-1,candidate.y)&&PtInRegion(shape,candidate.x+1,candidate.y)) {
+      best=dx*dx+dy*dy;target=(POINT){bounds.left+candidate.x,bounds.top+candidate.y};
+    }
+  }
+  DeleteObject(shape);
+  if(out)*out=target;
+  return ok&&isfinite(best)&&SetCursorPos(target.x,target.y)&&WindowFromPoint(target)==hwnd;
+}
 static bool runtime_wheel(PPRuntime *runtime,uint64_t id,int delta,RuntimeObservation *observed,NativeWheel *wheel,Acceptance *a,double deadline) {
+  /* Center/padding need not be interactive under the silhouette contract.
+   * Target the accepted native region before timing the original wheel. */
+  POINT target;if(!runtime_input_target(runtime,id,&target)){pp_probe_puts("INCOMPLETE native grab input target");return false;}
   unsigned hooks_before=pp_probe_wheel_count;
   memset(observed,0,sizeof(*observed));
-  *wheel=(NativeWheel){.delta=delta};
+  *wheel=(NativeWheel){.delta=delta,.position=true,
+    .dx=MulDiv(target.x-GetSystemMetrics(SM_XVIRTUALSCREEN),65535,GetSystemMetrics(SM_CXVIRTUALSCREEN)-1),
+    .dy=MulDiv(target.y-GetSystemMetrics(SM_YVIRTUALSCREEN),65535,GetSystemMetrics(SM_CYVIRTUALSCREEN)-1)};
   HANDLE thread=CreateThread(NULL,0,send_wheel,wheel,0,NULL);
   if(!thread)return false;
   bool found=false;double limit=fmin(deadline,pp_probe_clock()+1000);
@@ -305,6 +330,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       int pixel_w=0,pixel_h=0;RECT native={0};
       HWND hwnd=SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
       if(!SDL_GetWindowSizeInPixels(window,&pixel_w,&pixel_h)||!GetWindowRect(hwnd,&native))goto done;
+      if(!runtime_input_target(runtime,id,NULL)){pp_probe_puts("INCOMPLETE cold native grab input target");goto done;}
       pp_platform_pointer(&positioned);
       pp_probe_printf("REALIZED drawable_px=%dx%d native_px=%ldx%ld native_origin=%ld,%ld desktop_units_per_dip=%.3f drawable_pixels_per_dip=%.3f actual_pose=%.9f,%.9f actual_pointer=%.0f,%.0f\n",pixel_w,pixel_h,native.right-native.left,native.bottom-native.top,native.left,native.top,densities[density],densities[density],realized->pose.longest_dip,realized->pose.angle_deg,positioned.x,positioned.y);
       if(pixel_w!=native.right-native.left||pixel_h!=native.bottom-native.top||realized->pose.longest_dip!=sizes[size]||realized->pose.angle_deg!=angles[angle]||positioned.x<native.left||positioned.x>=native.right||positioned.y<native.top||positioned.y>=native.bottom){pp_probe_puts("INCOMPLETE requested pose/drawable/native/physical target mapping");goto done;}

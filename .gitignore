@@ -58,6 +58,7 @@ Desktop.ini
 !/docs/
 !/docs/superpowers/
 !/docs/testing/
+!/docs/adr/
 !/docs/project-format.md
 !/docs/third-party-notices.md
 !/docs/README.zh-CN.md

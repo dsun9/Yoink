@@ -278,8 +278,36 @@ static void test_canonical_layout(void) {
     CHECK(metrics.source_uploads==3 && metrics.readbacks==0);
     puts("PASS canonical layout independently controls native bounds and mapping across raster aspect changes");
 }
+static void test_grab_region(PPFrame *source) {
+    create(0,source);present(0,0,1,(PPRect){220,220,64,64});
+    PPGrabArea *area=NULL;PPGrabRegion region={0};API(pp_grab_create(source,1,&area,&error));
+    API(pp_grab_project(area,(PPVec2){64,64},(PPRect){0,0,64,64},64,0,1,64,64,&region,&error));
+    API(pp_surface_set_grab_region(surfaces[0],&region,&error));pump();
+    int before=observations[0].downs;LONG below=receiver->clicks;
+    click(252,252);click(221,221);CHECK(observations[0].downs==before&&receiver->clicks==below+2);
+    click(277,252);CHECK(observations[0].downs==before+1&&receiver->clicks==below+2);
+    expect_pixel("shaped opaque rim",277,252,255,0,0);expect_pixel("shaped alpha patch",272,252,255,127,127);
+    int wheels=observations[0].wheels;LONG lower_wheels=receiver->wheels;
+    CHECK(SetCursorPos(252,252));mouse(MOUSEEVENTF_WHEEL,WHEEL_DELTA);CHECK(receiver->wheels==lower_wheels+1&&observations[0].wheels==wheels);
+    CHECK(SetCursorPos(277,252));mouse(MOUSEEVENTF_WHEEL,WHEEL_DELTA);CHECK(observations[0].wheels==wheels+1);
+    int right=observations[0].right_downs;LONG lower_right=receiver->right_clicks;
+    CHECK(SetCursorPos(252,252));mouse(MOUSEEVENTF_RIGHTDOWN,0);mouse(MOUSEEVENTF_RIGHTUP,0);CHECK(receiver->right_clicks==lower_right+1&&observations[0].right_downs==right);
+    capture_on_down=true;CHECK(SetCursorPos(277,252));int ups=observations[0].ups;
+    mouse(MOUSEEVENTF_LEFTDOWN,0);API(pp_platform_capture(surfaces[0],&error));move(252,252);move(430,350);mouse(MOUSEEVENTF_LEFTUP,0);
+    CHECK(observations[0].ups==ups+1&&GetForegroundWindow()==(HWND)receiver->window);capture_on_down=false;
+    present(0,37,1,(PPRect){220,220,90,90});
+    API(pp_grab_project(area,(PPVec2){64,64},(PPRect){0,0,64,64},64,37,1,90,90,&region,&error));
+    API(pp_surface_set_grab_region(surfaces[0],&region,&error));pump();
+    before=observations[0].downs;below=receiver->clicks;click(221,221);click(265,265);CHECK(receiver->clicks==below+2&&observations[0].downs==before);
+    /* Lower sprite remains a rectangle in this fixture. Top ring's hole must
+     * expose it using native order, without a synthetic replay. */
+    create(1,source);present(1,37,1,(PPRect){220,220,90,90});pp_surface_raise(surfaces[0]);pump();
+    int lower=observations[1].downs;click(265,265);CHECK(observations[1].downs==lower+1&&observations[0].downs==before);
+    destroy(1);pp_grab_release(area);
+    puts("PASS native quadtree hole/padding/corner first-click and wheel/right pass-through, retained rim pixels, capture outside shape, overlap order and nonactivation");
+}
 int main(int argc,char **argv) {
-    CHECK(argc==2);setvbuf(stdout,NULL,_IONBF,0);
+    CHECK(argc==2||argc==3);setvbuf(stdout,NULL,_IONBF,0);
     saved_foreground=GetForegroundWindow();CHECK(GetCursorPos(&saved_cursor));atexit(cleanup);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     char name[80];snprintf(name,sizeof(name),"Local\\PointyDirectReceiver-%lu",GetCurrentProcessId());
@@ -291,7 +319,10 @@ int main(int argc,char **argv) {
     while(!receiver->window && GetTickCount64()<until) Sleep(10);CHECK(receiver->window);
     do {SetForegroundWindow((HWND)receiver->window);pump();} while(GetForegroundWindow()!=(HWND)receiver->window && GetTickCount64()<until);
     CHECK(GetForegroundWindow()==(HWND)receiver->window);
-    PPFrame source=ring();test_alpha_and_rectangle(&source);test_capture_and_cleanup(&source);test_order_and_reuse(&source);test_canonical_layout();pp_frame_destroy(&source);
+    PPFrame source=ring();
+    if(argc==3){CHECK(!strcmp(argv[2],"--grab"));test_grab_region(&source);}
+    else {test_alpha_and_rectangle(&source);test_capture_and_cleanup(&source);test_order_and_reuse(&source);test_canonical_layout();}
+    pp_frame_destroy(&source);
     puts("PASS direct GL feasibility gate; macOS runtime unverified; timing and visible frame cadence require separate acceptance");
     return 0;
 }

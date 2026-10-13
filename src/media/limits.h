@@ -12,8 +12,9 @@ struct PPAsset {
     PPAssetId id; PPAssetKind kind; uint8_t *source; size_t source_size;
     unsigned retains; PPMediaInfo info; PPFrame *frames;
     size_t cache_bytes; double duration; uint64_t plays;
+    PPGrabArea *grab;
 };
-struct PPAssets { PPAsset *first; size_t cache_bytes, external_bytes; PPSourceMetrics metrics; };
+struct PPAssets { PPAsset *first; size_t cache_bytes, external_bytes, grab_bytes; PPSourceMetrics metrics; };
 bool pp_media_error(PPError *error,int code,const char *message);
 bool pp_media_size(int width,int height,size_t count,size_t *bytes,PPError *error);
 bool pp_media_reserve(PPAsset *asset,size_t bytes,PPError *error);

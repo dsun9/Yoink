@@ -1,5 +1,8 @@
 #import "macos_internal.h"
 #include <math.h>
+bool pp_surface_set_grab_region(PPSurface *surface,const PPGrabRegion *region,PPError *error) {
+    (void)surface;(void)region;if(error)*error=(PPError){PP_ERROR_PLATFORM,"Approximate native grab regions are Windows-only"};return false;
+}
 #include <stdlib.h>
 PPSurface *pp_mac_surfaces;
 void pp_surface_set_rectangular(PPSurface *surface,bool enabled) {if(surface) surface->rectangular=enabled;}

@@ -2,9 +2,9 @@
 
 PointyPointer is a desktop presentation helper written in C, SDL3 and OpenGL.
 Pull PNGs, animated GIFs, static SVGs, text or emoji from eight small positions
-around each display. Placed sprites stay above ordinary windows and accept
-mouse input within their native rectangular bounds, including transparent
-padding and holes. They do not take keyboard focus
+around each display. Placed sprites stay above ordinary windows. On Windows,
+their grab areas approximate the artwork and let mouse input pass through
+sufficiently large transparent holes, padding and rotated corners. They do not take keyboard focus
 from the presentation. The same eight item lists are shared by every display.
 
 ## Run
@@ -51,8 +51,14 @@ installed Segoe UI Emoji or Aptos bytes.
 Replacement keeps the instance's center, rotation, opacity and longest side,
 uses the new content's aspect ratio, and restarts a GIF. Editing/removing a list
 item affects future pulls; existing sprites keep their snapshots. Original input
-outside visible sprite and preview rectangles reaches the window below. Hidden,
-disabled, empty-frame and zero-opacity content releases its accepted input.
+outside sprite and preview grab areas reaches the window below. Windows GIFs
+keep one grab area covering artwork from any animation frame, including during
+blank frames. Hidden, disabled, wholly empty-source and zero-opacity content
+releases its accepted input. Small transparent gaps and space near edges can
+remain interactive; this approximation gets coarser at larger displayed sizes.
+The [grab-area design](docs/superpowers/specs/2026-10-12-approximate-grab-area.md)
+and [Windows validation](docs/testing/sprite-grab-area.md) document the limits.
+Cocoa retains rectangular routing and empty-frame hiding until a native follow-up.
 Changing projects clears temporary sprites only after a successful load.
 
 Previews and sprites share immutable artwork and cached CPU sources. PNG/GIF

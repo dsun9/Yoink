@@ -1,6 +1,7 @@
 #include "pointy/assets.h"
 #include "pointy/platform.h"
 #include "../../src/app/presenter_internal.h"
+#include "../../src/platform/windows/windows_internal.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
 #include <math.h>
@@ -134,8 +135,8 @@ static void retained_native(void) {
     pp_scene_delete(presenter->scene,ids[2]);direct_update(1.082);CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24+native_output_bytes(ids[0])+native_output_bytes(ids[1]));
     pixel("remaining shared consumer",b.left+5,310,255,0,0);
     PPItem changing=image("changing-alpha.gif",PP_ASSET_GIF);CHECK(pp_scene_replace(presenter->scene,ids[1],&changing,1.08,&error));direct_update(1.08);
-    direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_update(1.19);CHECK(!IsWindowVisible(native(ids[1])));
-    direct_mouse(350,310,MOUSEEVENTF_LEFTUP);below=receiver->clicks;direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_mouse(350,310,MOUSEEVENTF_LEFTUP);CHECK(receiver->clicks==below+1);
+    direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_update(1.19);CHECK(IsWindowVisible(native(ids[1]))&&pp_windows_input_owned(pp_sprites_find(presenter,ids[1])->surface));
+    direct_mouse(350,310,MOUSEEVENTF_LEFTUP);below=receiver->clicks;down=direct_downs[ids[1]];direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_mouse(350,310,MOUSEEVENTF_LEFTUP);CHECK(receiver->clicks==below&&direct_downs[ids[1]]==down+1);
     direct_update(1.29);CHECK(IsWindowVisible(native(ids[1])));pixel("stationary transparent frame returns",350,310,255,0,0);
     down=direct_downs[ids[1]];direct_mouse(350,310,MOUSEEVENTF_LEFTDOWN);direct_mouse(350,310,MOUSEEVENTF_LEFTUP);CHECK(direct_downs[ids[1]]==down+1);
     PPItem png=image("retained-blue.png",PP_ASSET_PNG);CHECK(pp_scene_replace(presenter->scene,ids[1],&png,1.3,&error));direct_update(1.3);pixel("GIF to owned PNG",350,310,0,0,255);

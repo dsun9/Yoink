@@ -484,10 +484,11 @@ static bool send_alt(bool pressed) {
   INPUT input={.type=INPUT_KEYBOARD}; input.ki.wVk=VK_MENU; input.ki.dwFlags=pressed?0:KEYEVENTF_KEYUP;
   return SendInput(1,&input,sizeof(input))==1;
 }
-typedef struct NativeWheel {int delta;double sent,returned;UINT accepted;} NativeWheel;
+typedef struct NativeWheel {int delta;double sent,returned;UINT accepted;bool position;LONG dx,dy;} NativeWheel;
 static DWORD WINAPI send_wheel(void *data) {
   NativeWheel *wheel=data;INPUT input={.type=INPUT_MOUSE};input.mi.dwFlags=MOUSEEVENTF_WHEEL;
   input.mi.mouseData=(DWORD)wheel->delta;input.mi.time=GetTickCount();input.mi.dwExtraInfo=PP_PROBE_INPUT_TAG;
+  if(wheel->position){input.mi.dwFlags|=MOUSEEVENTF_MOVE|MOUSEEVENTF_ABSOLUTE|MOUSEEVENTF_VIRTUALDESK;input.mi.dx=wheel->dx;input.mi.dy=wheel->dy;}
   wheel->sent=pp_probe_clock();pp_probe_wheel_send_ms=wheel->sent;
   wheel->accepted=SendInput(1,&input,sizeof(input));wheel->returned=pp_probe_clock();return 0;
 }

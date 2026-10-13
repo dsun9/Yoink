@@ -1,6 +1,7 @@
 #ifndef POINTY_PLATFORM_H
 #define POINTY_PLATFORM_H
 #include "pointy/render.h"
+#include "pointy/grab.h"
 #include "pointy/display.h"
 #include <stdio.h>
 
@@ -84,6 +85,9 @@ uint32_t pp_surface_window_id(const PPSurface *surface);
  * Failure hides the interceptor; renderer must be destroyed before surface. */
 bool pp_surface_place_gl(PPSurface *surface, PPRect desktop_bounds,
     bool interactive, PPError *error);
+/* Windows native input/visual exclusion. Sorted final rectangles are capped
+ * before native publication; NULL restores ordinary rectangle routing. */
+bool pp_surface_set_grab_region(PPSurface *surface,const PPGrabRegion *region,PPError *error);
 /* Rectangle input policy is independent of visible alpha. Compatibility
  * adapters may retain CPU pixels; direct GL windows already use this policy. */
 void pp_surface_set_rectangular(PPSurface *surface,bool enabled);

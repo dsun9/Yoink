@@ -1,4 +1,8 @@
 if(BUILD_TESTING AND (WIN32 OR APPLE))
+  add_executable(pointy_grab_test tests/core/test_grab.c)
+  target_link_libraries(pointy_grab_test PRIVATE pointy_assets pointy_interaction SDL3::SDL3-static)
+  add_test(NAME grab COMMAND pointy_grab_test)
+  set_tests_properties(grab PROPERTIES LABELS "core;headless" TIMEOUT 30)
   # Exercise Cocoa's CPU native-copy route with the same pure runtime mocks
   # on either host. The production pointy_anchors target keeps its platform route.
   add_executable(pointy_runtime_compat_test tests/core/test_runtime.c
@@ -92,6 +96,8 @@ if(BUILD_TESTING AND WIN32)
   target_link_libraries(pointy_direct_gl_test PRIVATE pointy_render pointy_platform SDL3::SDL3-static OpenGL::GL user32 gdi32)
   add_dependencies(pointy_direct_gl_test pointy_input_receiver)
   add_test(NAME direct_gl COMMAND pointy_direct_gl_test $<TARGET_FILE:pointy_input_receiver>)
+  add_test(NAME grab_native COMMAND pointy_direct_gl_test $<TARGET_FILE:pointy_input_receiver> --grab)
+  set_tests_properties(grab_native PROPERTIES LABELS desktop RUN_SERIAL TRUE TIMEOUT 45)
   set_tests_properties(direct_gl PROPERTIES LABELS desktop RUN_SERIAL TRUE TIMEOUT 60)
   add_executable(pointy_performance_test tests/platform/test_performance.c
     tests/platform/probe_text.c tests/platform/probe_raster.c tests/platform/probe_fonts.c

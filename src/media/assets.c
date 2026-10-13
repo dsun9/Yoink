@@ -13,6 +13,7 @@ bool pp_media_size(int w,int h,size_t count,size_t *bytes,PPError *error) {
     *bytes=size*count; return true;
 }
 void pp_media_clear(PPAsset *a) {
+    pp_grab_release(a->grab);a->grab=NULL;
     if(a->frames) { for(size_t i=0;i<a->info.count;i++) { free(a->frames[i].pixels); free(a->frames[i].content_alpha); } free(a->frames); }
     a->frames=NULL; a->owner->cache_bytes-=a->cache_bytes; a->cache_bytes=0;
 }
@@ -41,6 +42,23 @@ static bool decode(PPAsset *a,PPError *e) {
     }
     if(ok) a->owner->metrics.raster_builds++;
     return ok;
+}
+bool pp_assets_reserve_grab(PPAssets *a,size_t bytes,PPError *e) {
+    if(!a||bytes>PP_GRAB_CACHE_LIMIT)return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"Grab cache exceeds 8 MiB");
+    for(PPAsset *other=a->first;a->grab_bytes>PP_GRAB_CACHE_LIMIT-bytes&&other;other=other->next)
+        if(!other->retains)pp_media_clear(other);
+    if(a->grab_bytes>PP_GRAB_CACHE_LIMIT-bytes)return pp_media_error(e,PP_ERROR_RESOURCE_LIMIT,"Active grab cache exceeds 8 MiB including candidates");
+    a->grab_bytes+=bytes;return true;
+}
+void pp_assets_release_grab(PPAssets *a,size_t bytes){if(a&&bytes<=a->grab_bytes)a->grab_bytes-=bytes;}
+size_t pp_assets_grab_bytes(const PPAssets *a){return a?a->grab_bytes:0;}
+const PPGrabArea *pp_asset_grab_area(PPAsset *a,PPError *e) {
+    if(!a||(a->kind!=PP_ASSET_PNG&&a->kind!=PP_ASSET_GIF)){pp_media_error(e,PP_ERROR_ARGUMENT,"Grab union requires PNG/GIF");return NULL;}
+    if(a->grab)return a->grab;
+    if(!a->frames&&!decode(a,e))return NULL;
+    /* The borrowed frames must not be evicted while cache admission runs. */
+    PPGrabArea *candidate=NULL;a->retains++;bool ok=pp_grab_create_cached(a->owner,a->frames,a->info.count,&candidate,e);a->retains--;
+    if(!ok)return NULL;a->grab=candidate;return a->grab;
 }
 PPSourceMetrics pp_assets_source_metrics(const PPAssets *assets) { return assets ? assets->metrics : (PPSourceMetrics){0}; }
 bool pp_asset_import(PPAssets *assets,PPBytes b,PPAssetKind kind,PPAssetId *out,PPError *e) {

@@ -1,6 +1,7 @@
 #ifndef POINTY_ASSETS_H
 #define POINTY_ASSETS_H
 #include "pointy/render.h"
+#include "pointy/grab.h"
 typedef struct PPBytes { const uint8_t *data; size_t size; } PPBytes;
 typedef struct PPAssetId { uint8_t bytes[32]; } PPAssetId;
 typedef enum PPAssetKind { PP_ASSET_PNG, PP_ASSET_GIF, PP_ASSET_SVG, PP_ASSET_FONT } PPAssetKind;
@@ -61,6 +62,16 @@ bool pp_assets_reserve_raster(PPAssets *assets, size_t bytes, PPError *error);
 void pp_assets_release_raster(PPAssets *assets, size_t bytes);
 size_t pp_assets_external_raster_bytes(const PPAssets *assets);
 size_t pp_assets_raster_bytes(const PPAssets *assets);
+/* Separate bounded source/native grab cache. Does not change raster charges. */
+bool pp_assets_reserve_grab(PPAssets *assets,size_t bytes,PPError *error);
+void pp_assets_release_grab(PPAssets *assets,size_t bytes);
+size_t pp_assets_grab_bytes(const PPAssets *assets);
+/* Admit the exact node allocation before allocating it. Its charge lasts until
+ * the last shape reference is released; assets must outlive those references. */
+bool pp_grab_create_cached(PPAssets *assets,const PPFrame *frames,size_t count,PPGrabArea **out,PPError *error);
+/* Borrowed immutable PNG silhouette / union of all composed GIF frames.
+ * Retain the asset while borrowing. No frame-clock or playback changes. */
+const PPGrabArea *pp_asset_grab_area(PPAsset *asset,PPError *error);
 /* Evicts every unretained decoded cache, keeping owned source bytes. */
 void pp_assets_trim_cache(PPAssets *assets);
 /* Borrows cache: retain asset during use. PNG/GIF frames remain valid while any
