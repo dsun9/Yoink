@@ -69,6 +69,13 @@ sprite and release interception and GPU charges.
 The failing baseline and passing replacement run on 2026-10-12 both verified
 released input, restored cursor and restored original foreground through the
 desktop supervisor. The Release build and all 36 non-desktop tests passed.
+All 33 desktop tests also passed, run serially in supervised groups, including
+the new regression, native ownership, all four edges for hand and PNG at both
+96 and 1536 DIP, and native failure/input cleanup. The full sweep found an
+existing GIF source-only charge assertion that also failed on `3afd21e`.
+Its updated checks include retained outputs, deriving their size from native
+window bounds and retaining the shared-source and final zero-charge checks.
+Both standards and specification reviews found no actionable issues.
 Run the native regression with the supervised `png_retained` command above.
 
 ## Scoped timing and limits
