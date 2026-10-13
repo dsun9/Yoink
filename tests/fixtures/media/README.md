@@ -9,3 +9,5 @@ an opaque three-pixel row with a transparent row for native input testing.
 replacement, canonical aspect and retained GPU accounting tests.
 `retained-empty.png` has zero visual alpha at every pixel to test invisible
 source cleanup independently of the sprite's pose opacity.
+`menu-triangle.svg` is an original red triangle used by the Settings media
+chooser's PNG/GIF/SVG save and reopen acceptance flow.

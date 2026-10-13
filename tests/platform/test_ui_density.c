@@ -118,7 +118,8 @@ int main(void) {
     draw();
     /* A deleted atlas name may already be reused by a field image. Verify
      * that it no longer holds an atlas: any reused dimensions must match a
-     * current field row, whose pixels are covered in shaped_editor. */
+     * current field row, editor preview or item thumbnail. Their rendered
+     * content is covered by shaped_editor and Settings acceptance. */
     if (glIsTexture(old_texture)) {
       GLint reused_width = 0, reused_height = 0;
       glBindTexture(GL_TEXTURE_2D, old_texture);
@@ -135,7 +136,14 @@ int main(void) {
       const PPUIContentPreview *retained=&settings->editor.retained;
       bool preview_texture=(reused_width==retained->width&&reused_height==retained->height)||
         (reused_width==retained->source_width&&reused_height==retained->source_height);
-      CHECK(row_texture||preview_texture);
+      bool thumbnail_texture = false;
+      for (size_t thumbnail = 0; thumbnail < 8; thumbnail++) {
+        retained = &settings->row_thumbnails[thumbnail];
+        thumbnail_texture = thumbnail_texture ||
+            (reused_width == retained->width && reused_height == retained->height) ||
+            (reused_width == retained->source_width && reused_height == retained->source_height);
+      }
+      CHECK(row_texture||preview_texture||thumbnail_texture);
     }
     GLint atlas_width = 0, atlas_height = 0;
     glBindTexture(GL_TEXTURE_2D, ui->font_texture);

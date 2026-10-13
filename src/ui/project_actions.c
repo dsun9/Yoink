@@ -114,6 +114,14 @@ void pp_project_request_action(PPSettings *settings, PPProjectAction action) {
   if (settings->pending_action == PP_PROJECT_ACTION_NONE)
     settings->pending_action = action;
 }
+void pp_project_request_remove(PPSettings *settings, PPAnchor anchor, uint64_t item) {
+  if (settings->pending_action != PP_PROJECT_ACTION_NONE)
+    return;
+  settings->remove_anchor = anchor;
+  settings->remove_item = item;
+  settings->remove_generation = pp_app_generation(settings->app);
+  pp_project_request_action(settings, PP_PROJECT_ACTION_REMOVE);
+}
 void pp_project_apply_action(PPSettings *settings) {
   PPProjectAction action = settings->pending_action;
   settings->pending_action = PP_PROJECT_ACTION_NONE;
@@ -155,7 +163,9 @@ void pp_project_apply_action(PPSettings *settings) {
     pp_settings_command(settings, settings->pending_command);
     break;
   case PP_PROJECT_ACTION_REMOVE:
-    settings->remove_confirmation = true;
+    if (settings->remove_generation == pp_app_generation(settings->app) &&
+        pp_project_item(pp_app_project(settings->app), settings->remove_item))
+      settings->remove_confirmation = true;
     break;
   default:
     break;
@@ -282,11 +292,12 @@ void pp_project_confirmation(PPSettings *settings) {
         }
       }
     } else if (pp_ui_button(ui, "remove-confirm", "Remove item", true)) {
-      pp_settings_command(
-          settings,
-          (PPCommand){.kind = PP_COMMAND_REMOVE_ITEM,
-                      .anchor = pp_app_ui(settings->app)->anchor,
-                      .item_id = pp_app_ui(settings->app)->selected_item});
+      if (settings->remove_generation == pp_app_generation(settings->app))
+        pp_settings_command(
+            settings,
+            (PPCommand){.kind = PP_COMMAND_REMOVE_ITEM,
+                        .anchor = settings->remove_anchor,
+                        .item_id = settings->remove_item});
       settings->remove_confirmation = false;
     }
     nk_layout_row_dynamic(ctx, 48, 1);
