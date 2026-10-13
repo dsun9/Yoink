@@ -269,6 +269,7 @@ failed:
 void pp_ui_backend_destroy(PPUIBackend *ui) {
   if (!ui)
     return;
+  free(ui->tooltip_text);
   while(ui->texture_charges){GLuint texture=ui->texture_charges->texture;pp_ui_release_texture_charges(ui,1,&texture);}
   pp_ui_shaped_destroy(ui);
   pp_ui_poll_reset(pp_ui_backend_window_id(ui));
@@ -496,23 +497,58 @@ bool pp_ui_begin(PPUIBackend *ui, PPError *error) {
   ui->tab_direction = 0;
   ui->control_count = 0;
   ui->pointer_target = ui->text_target = false;
-  ui->tooltip_text[0] = 0;
-  ui->tooltip_focus = false;
-  ui->tooltip_bounds = nk_rect(0, 0, 0, 0);
+  pp_ui_tooltip_clear(ui);
   return true;
 }
+void pp_ui_tooltip_clear(PPUIBackend *ui) {
+  if (ui->tooltip_text) ui->tooltip_text[0] = 0;
+  ui->tooltip_focus = false;
+  ui->tooltip_more = NULL;
+  ui->tooltip_end = 0;
+  ui->tooltip_bounds = nk_rect(0, 0, 0, 0);
+}
 static void draw_tooltip(PPUIBackend *ui) {
-  if (!ui->tooltip_text[0] || ui->popup_id || ui->modal)
+  if (!ui->tooltip_text || !ui->tooltip_text[0] || ui->popup_id || ui->modal)
     return;
   struct nk_context *ctx = &ui->context;
   const struct nk_user_font *font = &ui->utility_font->handle;
+  size_t length = strlen(ui->tooltip_text), end = 0, lines = 0;
+  float line_height = font->height + 4;
   float width = fminf(ui->width - 24, font->width(font->userdata, font->height,
-                      ui->tooltip_text, (int)strlen(ui->tooltip_text)) + 24);
-  float height = 36;
+                      ui->tooltip_text, (int)length) + 24);
+  if (width <= 24 || ui->height <= 38) return;
+  size_t max_lines = (size_t)((fminf(200, ui->height - 24) - 14) / line_height);
+  while (end < length && lines < max_lines) {
+    size_t bytes = pp_ui_label_line(font, ui->tooltip_text + end, length - end, width - 24);
+    if (!bytes) break;
+    end += bytes;
+    lines++;
+  }
+  bool more = end < length && ui->tooltip_more;
+  size_t hint_lines = 0;
+  if (more) {
+    size_t hint_length = strlen(ui->tooltip_more), hint_end = 0;
+    while (hint_end < hint_length) {
+      size_t bytes = pp_ui_label_line(font, ui->tooltip_more + hint_end,
+                                       hint_length - hint_end, width - 24);
+      if (!bytes) return;
+      hint_end += bytes;
+      hint_lines++;
+    }
+    if (hint_lines >= max_lines) return;
+    lines = 0; end = 0;
+    while (end < length && lines < max_lines - hint_lines) {
+      size_t bytes = pp_ui_label_line(font, ui->tooltip_text + end, length - end, width - 24);
+      if (!bytes) break;
+      end += bytes; lines++;
+    }
+  }
+  float height = fmaxf(36, (lines + hint_lines) * line_height + 14);
   float x = fmaxf(12, fminf(ui->tooltip_anchor.x, ui->width - width - 12));
   float y = ui->tooltip_anchor.y + ui->tooltip_anchor.h + 6;
   if (y + height > ui->height - 12)
-    y = fmaxf(12, ui->tooltip_anchor.y - height - 6);
+    y = ui->tooltip_anchor.y - height - 6;
+  y = fmaxf(12, fminf(y, ui->height - height - 12));
   ui->tooltip_bounds = nk_rect(x, y, width, height);
   /* Commands in Nuklear's overlay are appended after the windows. A tooltip
    * must never become a window or change the active text-input owner. */
@@ -523,9 +559,14 @@ static void draw_tooltip(PPUIBackend *ui) {
                 pp_ui_theme.surface);
   nk_stroke_rect(canvas, ui->tooltip_bounds, pp_ui_theme.control_radius, 1,
                   pp_ui_theme.border);
-  nk_draw_text(canvas, nk_rect(x + 12, y + 7, width - 24, 22), ui->tooltip_text,
-                 (int)strlen(ui->tooltip_text), font, pp_ui_theme.surface,
-                 pp_ui_theme.ink);
+  ui->tooltip_end = pp_ui_label_draw(canvas,
+      nk_rect(x + 12, y + 7, width - 24, lines * line_height),
+      font, ui->tooltip_text, end, pp_ui_theme.surface, pp_ui_theme.ink);
+  if (more) {
+    pp_ui_label_draw(canvas,
+        nk_rect(x + 12, y + 7 + lines * line_height, width - 24, hint_lines * line_height),
+        font, ui->tooltip_more, strlen(ui->tooltip_more), pp_ui_theme.surface, pp_ui_theme.accent_hover);
+  }
 }
 bool pp_ui_end(PPUIBackend *ui, PPError *error) {
   draw_tooltip(ui);
@@ -719,20 +760,30 @@ bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
     ui->activate = false;
   return activated;
 }
-void pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
+bool pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
                    const char *text) {
   if (!text || !*text || ui->popup_id || ui->modal ||
       (ui->context.current->layout->flags & NK_WINDOW_NO_INPUT))
-    return;
+    return false;
   bool hover = nk_input_is_mouse_hovering_rect(&ui->context.input, bounds) &&
                nk_input_is_mouse_hovering_rect(&ui->context.input,
                                               ui->context.current->layout->clip);
   bool focused = id && ui->keyboard_focus && pp_ui_focused(ui, id);
   if (focused || (hover && !ui->tooltip_focus)) {
-    snprintf(ui->tooltip_text, sizeof(ui->tooltip_text), "%s", text);
+    size_t capacity = strlen(text) + 1;
+    if (capacity > ui->tooltip_capacity) {
+      char *copy = realloc(ui->tooltip_text, capacity);
+      if (!copy) { ui->failed = true; return false; }
+      ui->tooltip_text = copy;
+      ui->tooltip_capacity = capacity;
+    }
+    memcpy(ui->tooltip_text, text, capacity);
     ui->tooltip_anchor = bounds;
     ui->tooltip_focus = focused;
+    ui->tooltip_more = NULL;
+    return true;
   }
+  return false;
 }
 bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
                        const char *action, const char *tooltip, bool enabled,
@@ -997,7 +1048,8 @@ bool pp_ui_focused(const PPUIBackend *ui, const char *id) {
   return ui->focus_id == control_id(id);
 }
 bool pp_ui_tooltip_visible(const PPUIBackend *ui, const char *text) {
-  return ui->tooltip_bounds.w > 0 && !strcmp(ui->tooltip_text, text);
+  return ui->tooltip_bounds.w > 0 && ui->tooltip_text &&
+         ui->tooltip_end == strlen(text) && !strcmp(ui->tooltip_text, text);
 }
 bool pp_ui_upload_frame(PPUIBackend *ui, GLuint *texture, const PPFrame *frame,
                         PPError *error) {

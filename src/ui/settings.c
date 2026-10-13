@@ -121,15 +121,6 @@ static void release_row_thumbnails(PPSettings *settings, bool all) {
     }
   }
 }
-static void row_label(PPUIBackend *ui, const PPItem *item, char *label, size_t capacity) {
-  if (item->kind == PP_ITEM_IMAGE) {
-    snprintf(label, capacity, "Image %llu", (unsigned long long)item->id);
-    return;
-  }
-  pp_ui_label_text(ui->body_font, item->text, PP_UI_LABEL_COLLAPSE_WHITESPACE,
-                    label, capacity);
-  if (!label[0]) snprintf(label, capacity, "Text %llu", (unsigned long long)item->id);
-}
 static void row_thumbnail(PPSettings *settings, const PPItem *item, struct nk_rect bounds) {
   PPUIBackend *ui = settings->backend;
   struct nk_rect clip = ui->context.current->layout->clip;
@@ -177,12 +168,15 @@ static void row_content(PPSettings *settings, const PPItem *item, const char *la
   pp_ui_draw_icon(nk_window_get_canvas(&ui->context),
                  nk_rect(bounds.x + bounds.w - 23, bounds.y + 10, 20, 24),
                  PP_UI_ICON_DRAG, pp_ui_theme.muted);
-  char display[128];
-  snprintf(display, sizeof(display), "%s", label);
-  size_t length = pp_ui_fit_label(font, display, sizeof(display), text.w);
+  size_t capacity = strlen(label) + 1;
+  char *display = malloc(capacity);
+  if (!display) { ui->failed = true; return; }
+  memcpy(display, label, capacity);
+  size_t length = pp_ui_fit_label(font, display, capacity, text.w);
   nk_draw_text(nk_window_get_canvas(&ui->context), text, display, (int)length, font,
                selected ? pp_ui_theme.selection : pp_ui_theme.field,
                selected ? pp_ui_theme.accent_hover : pp_ui_theme.ink);
+  free(display);
 }
 bool pp_settings_invalid(const PPSettings *settings) {
   return settings->backend->composing || settings->name_error[0] ||
@@ -468,8 +462,9 @@ static void ordered_items(PPSettings *settings) {
     for (size_t i = 0; i < list->count; i++) {
       const PPItem *item =
           pp_project_item(pp_app_project(settings->app), list->item_ids[i]);
-      char label[128], id[48], default_id[48], delete_id[48];
-      row_label(ui, item, label, sizeof(label));
+      char id[48], default_id[48], delete_id[48];
+      char *label = pp_ui_item_label(ui->body_font, item);
+      if (!label) { ui->failed = true; break; }
       snprintf(id, sizeof(id), "item-%llu", (unsigned long long)item->id);
       snprintf(default_id, sizeof(default_id), "item-default-%llu", (unsigned long long)item->id);
       snprintf(delete_id, sizeof(delete_id), "item-delete-%llu", (unsigned long long)item->id);
@@ -494,14 +489,17 @@ static void ordered_items(PPSettings *settings) {
             settings,
             (PPCommand){.kind = PP_COMMAND_SELECT_ITEM, .item_id = item->id});
       if (ui->control_count)
-        snprintf(ui->controls[ui->control_count - 1].label, sizeof(ui->controls[0].label), "%s", label);
+        pp_ui_label_text(ui->body_font, label, PP_UI_LABEL_PRESERVE_WHITESPACE,
+                        ui->controls[ui->control_count - 1].label, sizeof(ui->controls[0].label));
       row_content(settings, item, label, content, item->id == state->selected_item);
       if (settings->drag.active && settings->drag.item == item->id)
         nk_stroke_rect(nk_window_get_canvas(ctx), content,
                        pp_ui_theme.control_radius, 1, pp_ui_theme.accent);
       if (content.y >= ctx->current->layout->clip.y &&
-          content.y + content.h <= ctx->current->layout->clip.y + ctx->current->layout->clip.h)
-        pp_ui_tooltip(ui, content, id, label);
+          content.y + content.h <= ctx->current->layout->clip.y + ctx->current->layout->clip.h &&
+          pp_ui_tooltip(ui, content, id, label))
+        ui->tooltip_more = "Select item, then Full label to read all text.";
+      free(label);
       if (actions) {
         bool action_enabled = enabled && !settings->drag.consuming && !settings->drag.suppress_release;
         if (pp_ui_icon_button(ui, default_id, item->id == list->default_id ? PP_UI_ICON_STAR : PP_UI_ICON_STAR_OUTLINE,
@@ -515,8 +513,7 @@ static void ordered_items(PPSettings *settings) {
         if (ui->keyboard_focus && (pp_ui_focused(ui, default_id) || pp_ui_focused(ui, delete_id)) &&
             (row.y < ctx->current->layout->clip.y ||
              row.y + row.h > ctx->current->layout->clip.y + ctx->current->layout->clip.h)) {
-          ui->tooltip_text[0] = 0;
-          ui->tooltip_focus = false;
+          pp_ui_tooltip_clear(ui);
         }
       } else {
         struct nk_rect bounds;
@@ -534,7 +531,7 @@ static void ordered_items(PPSettings *settings) {
         nk_stroke_line(nk_window_get_canvas(ctx), clip.x + 4, marker,
                        clip.x + clip.w - 4, marker, 3, pp_ui_theme.accent);
       }
-      ui->tooltip_text[0] = 0;
+      pp_ui_tooltip_clear(ui);
     }
     nk_group_end(ctx);
   }

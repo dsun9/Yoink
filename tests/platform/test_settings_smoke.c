@@ -699,6 +699,189 @@ static void hidden_settle(void) {
     CHECK(!settings->failed);
   }
 }
+static void hidden_complete_item_labels(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  uint64_t item = pp_app_ui(app)->selected_item;
+  char label[100], row[48];
+  memset(label, 'W', 80);
+  strcpy(label + 80, "END_MARKER");
+  PPItem edited = *pp_project_item(pp_app_project(app), item);
+  edited.text = label;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+      .item_id = item, .item = &edited}, &error));
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)item);
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}};
+  const char *size_names[] = {"ordinary", "minimum", "narrow"};
+  for (int scale = 0; scale < 3; scale++) {
+    create_settings(scales[scale], true);
+    for (int size = 0; size < 3; size++) {
+      CHECK(SDL_SetWindowSize(settings->backend->window,
+          (int)(sizes[size][0] * scales[scale]), (int)(sizes[size][1] * scales[scale])));
+      pp_ui_focus(settings->backend, row); hidden_settle();
+      for (int hover = 0; hover < 2; hover++) {
+        if (hover) { hidden_hover(row); hidden_settle(); }
+        PPUIBackend *ui = settings->backend;
+        CHECK(pp_ui_tooltip_visible(ui, label));
+        if (size == 1)
+          CHECK(ui->tooltip_bounds.h >= 2 * ui->utility_font->handle.height + 14);
+        CHECK(ui->tooltip_bounds.x >= 12 && ui->tooltip_bounds.y >= 12);
+        CHECK(ui->tooltip_bounds.x + ui->tooltip_bounds.w <= ui->width - 12);
+        CHECK(ui->tooltip_bounds.y + ui->tooltip_bounds.h <= ui->height - 12);
+        char name[96];
+        snprintf(name, sizeof(name), "issue30-label-%s-%s-%d", hover ? "hover" : "focus",
+                 size_names[size], (int)(scales[scale] * 100));
+        capture(name);
+      }
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS complete 80-W item label on focus and hover at minimum size.");
+}
+static void hidden_label_overflow(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  uint64_t item = pp_app_ui(app)->selected_item;
+  char label[2200], source[2200], row[48];
+  for (int line = 0; line < 50; line++) {
+    memset(label + line * 42, 'W', 39);
+    memset(source + line * 42, 'W', 39);
+    memcpy(label + line * 42 + 39, "\xc3\xa9", 2);
+    memcpy(source + line * 42 + 39, "\xc3\xa9", 2);
+    label[line * 42 + 41] = ' ';
+    source[line * 42 + 41] = '\n';
+  }
+  strcpy(label + 2100, "TAIL_COMPLETE");
+  strcpy(source + 2100, "TAIL_COMPLETE");
+  PPItem edited = *pp_project_item(pp_app_project(app), item);
+  edited.text = source;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+      .item_id = item, .item = &edited}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 640, 480));
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)item);
+  pp_ui_focus(settings->backend, row); hidden_settle();
+  CHECK(!strcmp(settings->backend->tooltip_text, label));
+  CHECK(settings->backend->tooltip_more && settings->backend->tooltip_end < strlen(label));
+  capture("issue30-label-overflow-help");
+  pp_ui_focus(settings->backend, "full-item-label"); hidden_settle();
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "full-item-label", &bounds));
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_ui_control_rect(settings->backend, "next-label-page", &bounds));
+  size_t length = strlen(label), previous_end = settings->editor.label_end;
+  CHECK(settings->editor.label_open && settings->editor.label_begin == 0 && previous_end > 0);
+  uint64_t revision = pp_project_revision(pp_app_project(app));
+  PPItemSnapshot *preview = settings->editor.preview;
+  for (int page = 0; page < 100 && settings->editor.label_end < length; page++) {
+    pp_ui_focus(settings->backend, "next-label-page"); hidden_settle();
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    CHECK(settings->editor.label_begin == previous_end);
+    CHECK(settings->editor.label_end > previous_end);
+    CHECK(((unsigned char)label[settings->editor.label_begin] & 0xc0) != 0x80);
+    CHECK(((unsigned char)label[settings->editor.label_end] & 0xc0) != 0x80);
+    previous_end = settings->editor.label_end;
+  }
+  CHECK(settings->editor.label_end == length);
+  CHECK(strstr(label + settings->editor.label_begin, "TAIL_COMPLETE"));
+  CHECK(pp_project_revision(pp_app_project(app)) == revision && settings->editor.preview == preview);
+  CHECK(!strcmp(pp_project_item(pp_app_project(app), item)->text, source));
+  size_t final_begin = settings->editor.label_begin;
+  capture("issue30-label-overflow-final");
+  pp_ui_focus(settings->backend, "previous-label-page"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->editor.label_end == final_begin);
+  capture("issue30-label-overflow-page");
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS overflow instruction and complete keyboard paging without item or preview mutation.");
+}
+static void hidden_distinguishing_labels(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  uint64_t items[2] = {pp_app_ui(app)->selected_item, 0};
+  char source[2][240], labels[2][240];
+  for (int item = 0; item < 2; item++) {
+    if (item) {
+      CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT,
+          .anchor = pp_app_ui(app)->anchor}, &error));
+      items[item] = pp_app_ui(app)->selected_item;
+    }
+    memset(source[item], 'W', 60);
+    for (int rune = 0; rune < 40; rune++) memcpy(source[item] + 60 + rune * 2, "\xc3\xa9", 2);
+    memcpy(labels[item], source[item], 140);
+    snprintf(source[item] + 140, sizeof(source[item]) - 140, "\n\t\xf0\x9f\x91\x89  END_%c", 'A' + item);
+    snprintf(labels[item] + 140, sizeof(labels[item]) - 140, " U+1F449 END_%c", 'A' + item);
+    PPItem edited = *pp_project_item(pp_app_project(app), items[item]);
+    edited.text = source[item]; edited.text_style.font_size_dip = 20;
+    CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+        .item_id = edited.id, .item = &edited}, &error));
+  }
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 640, 480));
+  uint64_t selected = pp_app_ui(app)->selected_item;
+  uint64_t default_item = pp_project_anchor(pp_app_project(app), pp_app_ui(app)->anchor)->default_id;
+  uint64_t revision = pp_project_revision(pp_app_project(app));
+  PPItemSnapshot *preview = settings->editor.preview;
+  for (int item = 0; item < 2; item++) {
+    char row[48]; snprintf(row, sizeof(row), "item-%llu", (unsigned long long)items[item]);
+    pp_ui_focus(settings->backend, row); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, labels[item]));
+    hidden_hover(row); hidden_settle();
+    CHECK(pp_ui_tooltip_visible(settings->backend, labels[item]));
+    CHECK(!strcmp(pp_project_item(pp_app_project(app), items[item])->text, source[item]));
+  }
+  CHECK(pp_app_ui(app)->selected_item == selected && settings->editor.preview == preview);
+  CHECK(pp_project_revision(pp_app_project(app)) == revision);
+  CHECK(pp_project_anchor(pp_app_project(app), pp_app_ui(app)->anchor)->default_id == default_item);
+  /* Pointer help must leave a queued edit with its original owner. */
+  pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+  hidden_key(PP_KEY_END, 0); hidden_text("X");
+  char row[48]; snprintf(row, sizeof(row), "item-%llu", (unsigned long long)items[0]);
+  hidden_hover(row); hidden_settle();
+  CHECK(pp_ui_tooltip_visible(settings->backend, labels[0]));
+  CHECK(pp_ui_focused(settings->backend, "project-name"));
+  CHECK(strstr(pp_project_name(pp_app_project(app)), "X"));
+  CHECK(pp_app_ui(app)->selected_item == selected);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS distinguishing suffixes beyond 127 UTF-8 bytes, label policy and hover edit ownership.");
+}
+static void hidden_label_window_edges(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}};
+  const char *names[] = {"ordinary", "minimum", "narrow"};
+  char label[100]; memset(label, 'W', 80); strcpy(label + 80, "END_MARKER");
+  for (int scale = 0; scale < 3; scale++) {
+    create_settings(scales[scale], true);
+    for (int size = 0; size < 3; size++) {
+      PPUIBackend *ui = settings->backend;
+      CHECK(SDL_SetWindowSize(ui->window, (int)(sizes[size][0] * scales[scale]),
+                              (int)(sizes[size][1] * scales[scale])));
+      pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_POINTER_MOVE,
+          .window_id = pp_settings_window_id(settings), .window_point = {0, 0}});
+      pp_ui_focus(ui, "edge-label");
+      CHECK(pp_ui_begin(ui, &error));
+      CHECK(nk_begin(&ui->context, "label-edge-test", nk_rect(0, 0, ui->width, ui->height),
+                     NK_WINDOW_NO_SCROLLBAR));
+      CHECK(pp_ui_tooltip(ui, nk_rect(ui->width - 42, ui->height - 42, 30, 30), "edge-label", label));
+      nk_end(&ui->context);
+      char path[MAX_PATH];
+      snprintf(path, sizeof(path), "%s/issue30-label-edge-%s-%d.bmp", PP_SMOKE_OUTPUT,
+               names[size], (int)(scales[scale] * 100));
+      ui->capture_path = path;
+      CHECK(pp_ui_end(ui, &error));
+      CHECK(pp_ui_tooltip_visible(ui, label));
+      CHECK(ui->tooltip_bounds.x >= 12 && ui->tooltip_bounds.y >= 12);
+      CHECK(ui->tooltip_bounds.x + ui->tooltip_bounds.w <= ui->width - 12);
+      CHECK(ui->tooltip_bounds.y + ui->tooltip_bounds.h <= ui->height - 12);
+      CHECK(ui->tooltip_bounds.y + ui->tooltip_bounds.h < ui->tooltip_anchor.y);
+    }
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS actual shared help rendering near right/bottom edges in nine controlled size/scale layouts.");
+}
 static void hidden_position_picker(void) {
   PPAppOptions options = {"", false};
   CHECK(pp_app_create(&app, &options, &error));
@@ -2818,6 +3001,10 @@ static void hidden_editor_suite(void) {
   hidden_editor_responsive();
 }
 static void render_only(void) {
+  hidden_complete_item_labels();
+  hidden_label_overflow();
+  hidden_distinguishing_labels();
+  hidden_label_window_edges();
   hidden_corrected_draft_save();
   hidden_corrected_draft_selection();
   hidden_corrected_draft_mutations();
@@ -3162,7 +3349,8 @@ int main(int argc, char **argv) {
         (desktop_run || manual_font || !strcmp(argv[1], "--render-only") ||
          !strcmp(argv[1], "--items-only") || !strcmp(argv[1], "--editor-only") ||
          !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
-         !strcmp(argv[1], "--font-disclosure-only")));
+         !strcmp(argv[1], "--font-disclosure-only") ||
+         !strcmp(argv[1], "--labels-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -3173,6 +3361,12 @@ int main(int argc, char **argv) {
   else if (!strcmp(argv[1], "--font-disclosure-only")) {
     hidden_font_disclosure_batch();
     hidden_font_disclosure_guards();
+  }
+  else if (!strcmp(argv[1], "--labels-only")) {
+    hidden_complete_item_labels();
+    hidden_label_overflow();
+    hidden_distinguishing_labels();
+    hidden_label_window_edges();
   }
   else if (!strcmp(argv[1], "--validation-only")) {
     hidden_corrected_draft_save();

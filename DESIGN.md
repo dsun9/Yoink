@@ -231,7 +231,11 @@ label and reserved Default/Delete button space. Text labels collapse whitespace
 and identify unsupported control-atlas glyphs by codepoint; the editor and
 thumbnail retain the original Unicode. Image labels use their stable item ID
 and never add a persisted naming field. Long labels shorten with an ellipsis
-and expose their derived label on hover/focus.
+and expose their complete derived label on hover/focus. Help wraps at UTF-8
+codepoint boundaries using the utility drawing font and stays within the
+window. When the label exceeds the bounded help area, an instruction points
+to the selected item's Full label disclosure. Its Previous and Next controls
+reveal every page of the same derived label without changing item content.
 
 The filled star identifies the default continuously. Row selection changes
 the item being edited; Default and Delete retain that row's stable identity

@@ -71,6 +71,10 @@ void pp_item_editor_sync(PPSettings *settings) {
   bool selection_changed=editor->id!=id||editor->generation!=pp_app_generation(settings->app);
   PPAssetId previous=pp_item_snapshot_artwork_id(editor->preview),current=pp_item_snapshot_artwork_id(snapshot);
   bool content_changed=selection_changed||memcmp(&previous,&current,sizeof(current));
+  if (content_changed) {
+    editor->label_open = false;
+    editor->label_page = editor->label_begin = editor->label_end = 0;
+  }
   if(content_changed&&!pp_ui_shaped_reset(settings->backend)) {
     pp_item_snapshot_release(snapshot);
     snprintf(editor->content_error,sizeof(editor->content_error),"Cannot bind editor context; retry selection.");
@@ -312,6 +316,50 @@ preview_ready:
         &image, pp_ui_theme.surface);
   }
 }
+static void full_label(PPSettings *settings) {
+  PPUIBackend *ui = settings->backend;
+  PPItemEditor *editor = &settings->editor;
+  struct nk_context *ctx = &ui->context;
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
+  if (pp_ui_button(ui, "full-item-label", editor->label_open ? "Hide full label" : "Full label",
+                   !settings->dialog_pending && !ui->composing))
+    editor->label_open = !editor->label_open;
+  if (!editor->label_open) return;
+  char *label = pp_ui_item_label(ui->body_font, &editor->draft);
+  if (!label) { ui->failed = true; return; }
+  const struct nk_user_font *font = &ui->utility_font->handle;
+  float line_height = font->height + 4;
+  nk_layout_row_dynamic(ctx, 4 * line_height, 1);
+  struct nk_rect bounds;
+  nk_widget(&bounds, ctx);
+  size_t length = strlen(label), begin = 0, page = 0;
+  /* Recompute pages with the current drawing font and available width so
+   * resize and density changes cannot split a codepoint or leave gaps. */
+  while (begin < length && page < editor->label_page) {
+    size_t end = begin;
+    for (int line = 0; line < 4 && end < length; line++) {
+      size_t bytes = pp_ui_label_line(font, label + end, length - end, bounds.w);
+      if (!bytes) break;
+      end += bytes;
+    }
+    if (end == begin || end == length) break;
+    begin = end; page++;
+  }
+  editor->label_page = page;
+  editor->label_begin = begin;
+  editor->label_end = begin + pp_ui_label_draw(nk_window_get_canvas(ctx), bounds,
+      font, label + begin, length - begin, pp_ui_theme.canvas, pp_ui_theme.ink);
+  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 3);
+  bool enabled = !settings->dialog_pending && !ui->composing;
+  if (pp_ui_button(ui, "previous-label-page", "Previous", enabled && page > 0))
+    editor->label_page--;
+  char status[48];
+  snprintf(status, sizeof(status), "Label page %zu", page + 1);
+  nk_label(ctx, status, NK_TEXT_CENTERED);
+  if (pp_ui_button(ui, "next-label-page", "Next", enabled && editor->label_end < length))
+    editor->label_page++;
+  free(label);
+}
 void pp_item_editor(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
@@ -342,6 +390,7 @@ void pp_item_editor(PPSettings *settings) {
     changed = pp_ui_edit(ui, "item-text", editor->text, editor->text_capacity,
                          true, !settings->dialog_pending);
     pp_ui_error(ui, editor->content_error);
+    full_label(settings);
     for (size_t i = 0; i < 4; i++)
       pp_ui_error(ui, editor->font_warnings[i]);
     char font[300];

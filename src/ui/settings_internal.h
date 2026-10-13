@@ -17,7 +17,8 @@ typedef struct PPItemEditor {
   GLuint preview_texture;
   int preview_width, preview_height;
   double animation_start, next_frame;
-  bool changed, preview_dirty, font_details_open;
+  bool changed, preview_dirty, font_details_open, label_open;
+  size_t label_page, label_begin, label_end;
 } PPItemEditor;
 typedef enum PPProjectAction {
   PP_PROJECT_ACTION_NONE,

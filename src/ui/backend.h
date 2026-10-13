@@ -57,7 +57,9 @@ struct PPUIBackend {
   SDL_Cursor *arrow_cursor, *hand_cursor, *text_cursor;
   bool pointer_target, text_target;
   char font_diagnostic[160];
-  char tooltip_text[256];
+  char *tooltip_text;
+  size_t tooltip_capacity, tooltip_end;
+  const char *tooltip_more;
   struct nk_rect tooltip_anchor, tooltip_bounds;
   bool tooltip_focus;
   const char
@@ -81,6 +83,16 @@ typedef enum PPUILabelWhitespace {
  * Menus retain ownership of their empty-text and image fallback labels. */
 void pp_ui_label_text(const struct nk_font *font, const char *text,
                       PPUILabelWhitespace whitespace, char *label, size_t capacity);
+/* Caller owns the complete derived Settings label, before presentation fitting. */
+char *pp_ui_item_label(const struct nk_font *font, const PPItem *item);
+/* Return the next measured line's byte length, including any break space.
+ * Every returned boundary is a complete UTF-8 codepoint. */
+size_t pp_ui_label_line(const struct nk_user_font *font, const char *text,
+                        size_t length, float width);
+/* Draw measured lines inside bounds. Return the number of source bytes drawn. */
+size_t pp_ui_label_draw(struct nk_command_buffer *canvas, struct nk_rect bounds,
+                        const struct nk_user_font *font, const char *text,
+                        size_t length, struct nk_color background, struct nk_color ink);
 /* Fit in place using the drawing font's measured width, retaining whole UTF-8
  * codepoints and reserving the actual ellipsis width when it fits. */
 size_t pp_ui_fit_label(const struct nk_user_font *font, char *label,
@@ -94,8 +106,9 @@ bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
                        bool primary);
 /* Attach help to the preceding control or a noninteractive display region.
  * Disabled controls still explain their state on pointer hover. */
-void pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
+bool pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
                    const char *text);
+void pp_ui_tooltip_clear(PPUIBackend *ui);
 bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
                   bool *value, bool enabled);
 bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
