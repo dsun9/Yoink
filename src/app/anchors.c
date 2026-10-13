@@ -128,7 +128,7 @@ static bool anchor_preview(PPAnchorPresenter *p,AnchorSurface *a,PPItemSnapshot 
   bool gif=direct&&pp_snapshot_is_gif(snapshot);struct PPGifEntry *candidate=NULL;
   bool ok=!gif||pp_gif_acquire(p,snapshot,elapsed,&source,next,&candidate,error);
   if(ok) {
-    if(!source.frame){pp_surface_hide(a->preview);ok=true;}
+    if(!source.frame){pp_retained_hide(p,a->preview,&a->retained);ok=true;}
     else if(direct)ok=pp_retained_present(p,a->preview,&a->retained,source,pose,&a->display,error);
     else {ok=pp_present_source(p,a->preview,source,pose,&a->display,&a->preview_bytes,error);if(ok)a->retained.visible=source.visual_alpha&&pose.opacity>0;}
   }
@@ -226,7 +226,7 @@ static bool sync_displays(PPAnchorPresenter *p, const PPDisplay *d,
   for (size_t i = 0; i < p->instance_count; i++) {
     PPSprite *instance = p->instances + i;
     if (changed && instance->interaction.pressed) {
-      pp_sprite_hide(instance);
+      pp_sprite_hide(p,instance);
       memset(&instance->interaction, 0, sizeof(instance->interaction));
       instance->dirty = true;
     }
@@ -386,11 +386,11 @@ failed:
   /* A presentation failure removes every interceptor owned by this probe.
    * Returning false lets the caller report and shut down the owner. */
   for (size_t i = 0; i < p->anchor_count; i++) {
-    pp_surface_hide(p->anchors[i].target);
-    pp_surface_hide(p->anchors[i].preview);
+    pp_retained_hide(p,p->anchors[i].target,&p->anchors[i].target_retained);
+    pp_retained_hide(p,p->anchors[i].preview,&p->anchors[i].retained);
   }
   for (size_t i = 0; i < p->instance_count; i++)
-    pp_surface_hide(p->instances[i].surface);
+    pp_sprite_hide(p,p->instances+i);
   return false;
 }
 static bool target_grab(PPAnchorPresenter *p, AnchorSurface *a, PPVec2 point,
