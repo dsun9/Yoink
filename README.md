@@ -171,6 +171,18 @@ The Windows ZIP and Mac bundle are unsigned. Signing/notarization is outside
 this build. CI is configured to build Windows and macOS and run **headless**
 core/media/storage tests, separately from real pointer-routing acceptance.
 
+Pushing a tag triggers both Release builds and their headless tests. After both
+jobs succeed, CI attaches the Windows ZIP and unsigned macOS application ZIP to
+the GitHub release for that tag. If no release exists, CI creates one with
+generated release notes. Re-running the workflow replaces assets with the same
+filenames. Branch pushes and pull requests continue to upload build artifacts.
+For example, after committing and pushing the workflow changes:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ## Coverage and licensing
 
 The Yoink output rename has been built and smoke-tested on Windows. The macOS

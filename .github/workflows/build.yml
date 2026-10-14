@@ -1,7 +1,13 @@
 name: build
 on:
   push:
+    branches:
+      - '**'
+    tags:
+      - '**'
   pull_request:
+permissions:
+  contents: read
 jobs:
   windows:
     runs-on: windows-2022
@@ -20,6 +26,7 @@ jobs:
         with:
           name: Yoink-Windows
           path: build/windows-release/Yoink-*.zip
+          if-no-files-found: error
   macos:
     runs-on: macos-14
     steps:
@@ -37,4 +44,30 @@ jobs:
         with:
           name: Yoink-macOS-unsigned
           path: build/macos-dev/Yoink-*.zip
+          if-no-files-found: error
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Yoink-*
+          path: release-assets
+          merge-multiple: true
+      - name: Create release and upload packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" release-assets/*.zip --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/*.zip \
+              --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi
 # Hosted CI intentionally excludes native input routing and physical display gates.
