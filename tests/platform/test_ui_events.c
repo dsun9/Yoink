@@ -90,11 +90,116 @@ static void test_clipped_control_focus(void) {
   nk_free(&ui.context);
   free(ui.controls);
 }
+static bool draw_switch(PPUIBackend *ui, bool *value, bool enabled) {
+  bool changed = false;
+  if (nk_begin(&ui->context, "switch-test", nk_rect(0, 0, 300, 200),
+               NK_WINDOW_NO_SCROLLBAR)) {
+    nk_layout_row_static(&ui->context, 36, 180, 1);
+    changed = pp_ui_switch(ui, "enabled", "Enabled", value, enabled);
+  }
+  nk_end(&ui->context);
+  nk_clear(&ui->context);
+  return changed;
+}
+static void test_shared_switch(void) {
+  struct nk_user_font font = {.height = 16, .width = test_width};
+  PPUIBackend ui = {.scale = 1, .window_scale = 1};
+  bool value = false;
+  CHECK(nk_init_default(&ui.context, &font));
+  nk_input_begin(&ui.context); nk_input_end(&ui.context);
+  CHECK(!draw_switch(&ui, &value, true));
+  PPRect target;
+  CHECK(pp_ui_control_rect(&ui, "enabled", &target));
+  PPPlatformEvent event = {.kind = PP_EVENT_POINTER_MOVE, .button = PP_BUTTON_LEFT,
+                           .window_point = {target.x + 12, target.y + 18}};
+  pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_DOWN; pp_ui_backend_event(&ui, &event);
+  event.kind = PP_EVENT_BUTTON_UP; pp_ui_backend_event(&ui, &event);
+  nk_input_end(&ui.context); ui.input_started = false;
+  CHECK(draw_switch(&ui, &value, true) && value);
+  pp_ui_focus(&ui, "enabled");
+  ui.activate = true;
+  CHECK(draw_switch(&ui, &value, true) && !value);
+  ui.activate = true;
+  CHECK(!draw_switch(&ui, &value, false) && !value);
+  ui.composing = true;
+  CHECK(!draw_switch(&ui, &value, true) && !value);
+  ui.composing = false; ui.popup_id = 1;
+  CHECK(!draw_switch(&ui, &value, true) && !value);
+  ui.popup_id = 0; ui.activate = false;
+  nk_free(&ui.context); free(ui.controls);
+}
 
+static void test_label_help(void) {
+  struct nk_user_font font = {.height = 16, .width = test_width};
+  PPUIBackend ui = {.scale = 1, .window_scale = 1};
+  CHECK(nk_init_default(&ui.context, &font));
+  nk_input_begin(&ui.context);
+  nk_input_motion(&ui.context, 40, 40);
+  nk_input_unicode(&ui.context, 'X');
+  nk_input_end(&ui.context);
+  CHECK(nk_begin(&ui.context, "help-test", nk_rect(0, 0, 300, 200), NK_WINDOW_NO_SCROLLBAR));
+  char label[420];
+  memset(label, 'W', 400); strcpy(label + 400, "END_MARKER");
+  pp_ui_focus(&ui, "edit-owner");
+  ui.keyboard_focus = false;
+  ui.activate = true;
+  struct nk_input pending = ui.context.input;
+  uint64_t focus = ui.focus_id;
+  CHECK(pp_ui_tooltip(&ui, nk_rect(20, 20, 80, 40), "row", label));
+  CHECK(!strcmp(ui.tooltip_text, label));
+  label[400] = 0;
+  CHECK(strstr(ui.tooltip_text, "END_MARKER"));
+  CHECK(ui.focus_id == focus && ui.activate && !memcmp(&pending, &ui.context.input, sizeof(pending)));
+  pp_ui_tooltip_clear(&ui);
+  ui.popup_id = 1;
+  CHECK(!pp_ui_tooltip(&ui, nk_rect(20, 20, 80, 40), "row", "Popup suppressed"));
+  CHECK(!ui.tooltip_text[0]);
+  ui.popup_id = 0; ui.modal = true;
+  CHECK(!pp_ui_tooltip(&ui, nk_rect(20, 20, 80, 40), "row", "Modal suppressed"));
+  ui.modal = false;
+  pp_ui_focus(&ui, "row");
+  nk_input_motion(&ui.context, 280, 180);
+  CHECK(pp_ui_tooltip(&ui, nk_rect(20, 20, 80, 40), "row", "Focus help"));
+  CHECK(ui.tooltip_focus && !strcmp(ui.tooltip_text, "Focus help"));
+  CHECK(!pp_ui_tooltip(&ui, nk_rect(260, 160, 40, 40), "other", "Stationary hover"));
+  CHECK(pp_ui_focused(&ui, "row"));
+  const char wrapped[] = "\xc3\xa9\xc3\xa9" "END";
+  struct nk_rect area = nk_rect(20, 100, 32, 60);
+  CHECK(pp_ui_label_draw(nk_window_get_canvas(&ui.context), area, &font,
+      wrapped, strlen(wrapped), nk_rgb(255, 255, 255), nk_rgb(0, 0, 0)) == strlen(wrapped));
+  nk_end(&ui.context);
+  char drawn[32] = {0}; size_t drawn_length = 0;
+  const struct nk_command *command;
+  nk_foreach(command, &ui.context) {
+    if (command->type != NK_COMMAND_TEXT) continue;
+    const struct nk_command_text *text = (const struct nk_command_text *)command;
+    if (text->y < area.y) continue;
+    CHECK(text->x >= area.x && text->x + text->w <= area.x + area.w);
+    CHECK(text->y + text->h <= area.y + area.h);
+    CHECK(font.width(font.userdata, font.height, text->string, text->length) <= text->w);
+    CHECK(drawn_length + text->length < sizeof(drawn));
+    memcpy(drawn + drawn_length, text->string, text->length);
+    drawn_length += text->length;
+  }
+  CHECK(!strcmp(drawn, wrapped));
+  nk_free(&ui.context); free(ui.controls); free(ui.tooltip_text);
+
+  CHECK(pp_ui_label_line(&font, "aa bb", 5, 32) == 3);
+  CHECK(pp_ui_label_line(&font, "WWWWW", 5, 24) == 3);
+  CHECK(pp_ui_label_line(&font, "\xc3\xa9\xc3\xa9X", 5, 24) == 2);
+  CHECK(pp_ui_label_line(&font, "\xf0\x9f\x91\x89X", 5, 32) == 4);
+  CHECK(pp_ui_label_line(&font, "W", 1, 4) == 0);
+  char fit[12] = "\xc3\xa9WWWW";
+  CHECK(pp_ui_fit_label(&font, fit, sizeof(fit), 40) == 5);
+  CHECK(!strcmp(fit, "\xc3\xa9..."));
+}
 int main(void) {
   CHECK(SDL_InitSubSystem(SDL_INIT_EVENTS));
   test_coalesced_click();
   test_clipped_control_focus();
+  test_shared_switch();
+  test_label_help();
   SDL_Event source = {0};
   source.type = SDL_EVENT_TEXT_INPUT;
   source.text.windowID = 42;

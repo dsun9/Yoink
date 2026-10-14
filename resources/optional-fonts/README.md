@@ -7,7 +7,7 @@ and opening an existing project retains its saved font bytes and appearance.
 
 ## Open the example
 
-1. Open PointyPointer Settings and choose **Open** (Ctrl+O).
+1. Open Yoink Settings and choose **Open** (Ctrl+O).
 2. Choose `resources/examples/twemoji-example.pointy` beside the application.
 3. Select the **Top-left** list. It contains a hand, skin-tone hand, heart,
    woman technologist, US flag and keycap, all using **Twemoji Mozilla** as

@@ -36,7 +36,7 @@ bool pp_surface_create_gl(PPSurface **out,PPError *error) {
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1);SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE,8);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,0);SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE,0);
-    surface->gl_window=SDL_CreateWindow("PointyPointer direct GL diagnostic",1,1,
+    surface->gl_window=SDL_CreateWindow("Yoink direct GL diagnostic",1,1,
         SDL_WINDOW_OPENGL|SDL_WINDOW_TRANSPARENT|SDL_WINDOW_BORDERLESS|SDL_WINDOW_HIDDEN|
         SDL_WINDOW_NOT_FOCUSABLE|SDL_WINDOW_ALWAYS_ON_TOP|SDL_WINDOW_UTILITY);
     if(surface->gl_window) surface->window=SDL_GetPointerProperty(SDL_GetWindowProperties(surface->gl_window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);

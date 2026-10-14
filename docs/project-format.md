@@ -1,4 +1,4 @@
-# PointyPointer project format, schema 1
+# Yoink project format, schema 1
 
 A `.pointy` file is a self-contained ZIP package. It stores the shared eight lists, item appearance, defaults, interaction settings, owned image/font bytes, and project-specific resource notices. Placed sprites, scenes, window positions, display IDs, source paths, and network references are absent.
 

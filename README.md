@@ -1,6 +1,6 @@
-# PointyPointer
+# Yoink
 
-PointyPointer is a desktop presentation helper written in C, SDL3 and OpenGL.
+Yoink is a desktop presentation helper written in C, SDL3 and OpenGL.
 Pull PNGs, animated GIFs, static SVGs, text or emoji from eight small positions
 around each display. Placed sprites stay above ordinary windows. On Windows,
 their grab areas approximate the artwork and let mouse input pass through
@@ -10,7 +10,7 @@ from the presentation. The same eight item lists are shared by every display.
 ## Run
 
 Extract the entire unsigned Windows Release ZIP, keep `resources/` beside
-`PointyPointer.exe`, and double-click the executable. Startup is tray-only;
+`Yoink.exe`, and double-click the executable. Startup is tray-only;
 open **Settings** or **Quit** from the tray menu. There is no console or settings
 window on ordinary startup. The last successfully saved/opened project is
 restored. A missing or corrupt project falls back to the default pointing hand
@@ -89,6 +89,10 @@ name is portable data, independent of the filename; Save As or renaming the
 package does not change that name. Temporary scenes, window positions and
 per-display overrides are not saved. Local preferences store only the last
 project path and Settings geometry.
+Yoink continues to read the existing PointyPointer preference directory and
+keeps the installed-app identifiers. Existing `.pointy` files retain their
+extension and schema; the rename does not rename project files or migrate
+preferences.
 
 PNG alpha and composited GIF disposal/finite looping are supported. Static SVG
 supports paths, basic shapes, groups, transforms, `viewBox`, local `use`, solid
@@ -132,7 +136,7 @@ ctest --preset windows-release -LE desktop --output-on-failure
 cpack --config build/windows-release/CPackConfig.cmake -C Release
 ```
 
-`PointyPointer.exe --smoke-test` starts the real tray/runtime with isolated local
+`Yoink.exe --smoke-test` starts the real tray/runtime with isolated local
 preferences, loads the default resource and exits after approximately one second
 of event-loop operation. Automated callers should impose an outer timeout for
 native driver/startup failures. `--settings` explicitly opens Settings at startup.
@@ -153,13 +157,22 @@ ctest --preset macos-dev -L headless --output-on-failure
 cpack --config build/macos-dev/CPackConfig.cmake -C Debug
 ```
 
-The bundle is `build/macos-dev/Debug/PointyPointer.app`. SDL's bundle base path
+The bundle is `build/macos-dev/Debug/Yoink.app`. SDL's bundle base path
 resolves `Contents/Resources`; the application loads its `resources/` child.
+The archives are named `Yoink-0.1.0-Windows-AMD64.zip` on Windows x64 and
+`Yoink-0.1.0-Darwin-<architecture>.zip` on macOS. Keep the complete resources
+and licenses from the archive with the application. The internal CMake target
+remains `PointyPointer`, so existing `--target PointyPointer` commands build
+the renamed executable or bundle.
 The Windows ZIP and Mac bundle are unsigned. Signing/notarization is outside
 this build. CI is configured to build Windows and macOS and run **headless**
 core/media/storage tests, separately from real pointer-routing acceptance.
 
 ## Coverage and licensing
+
+The Yoink output rename has been built and smoke-tested on Windows. The macOS
+bundle name and resource paths are updated, but the renamed bundle has not been
+built or run on this Windows host.
 
 Windows is the first validated platform. The available host has one 3840×2160
 display at 150%; simulated geometry/density checks do not establish physical
@@ -173,7 +186,7 @@ policy with a color-only compatibility readback. The complete 16.7 ms warm,
 follow-up instructions in [Windows testing](docs/testing/windows.md) and
 [macOS testing](docs/testing/macos.md).
 
-PointyPointer uses AGPL-3.0-or-later adapted BongoCat runtime/UI code. Preserve
+Yoink uses AGPL-3.0-or-later adapted BongoCat runtime/UI code. Preserve
 [LICENSE](LICENSE), [third-party notices](docs/third-party-notices.md), the packaged
 license texts and corresponding source when redistributing. The Noto font is
 under SIL OFL. No Aptos, Segoe UI or Segoe UI Emoji font is shipped in the application package.

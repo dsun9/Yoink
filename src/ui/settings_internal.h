@@ -9,6 +9,7 @@ typedef struct PPItemEditor {
   char family[256], size[32], angle[32], opacity[32], color[16], face[32];
   char content_error[512], appearance_error[512], font_error[512],
       diagnostics[512];
+  char font_warnings[4][256];
   PPItem draft;
   PPItemSnapshot *preview;
   PPRenderer *renderer;
@@ -16,7 +17,8 @@ typedef struct PPItemEditor {
   GLuint preview_texture;
   int preview_width, preview_height;
   double animation_start, next_frame;
-  bool changed, preview_dirty;
+  bool changed, preview_dirty, font_details_open, label_open;
+  size_t label_page, label_begin, label_end;
 } PPItemEditor;
 typedef enum PPProjectAction {
   PP_PROJECT_ACTION_NONE,
@@ -29,6 +31,20 @@ typedef enum PPProjectAction {
   PP_PROJECT_ACTION_DIALOG,
   PP_PROJECT_ACTION_COMMAND
 } PPProjectAction;
+typedef enum PPSettingsPage {
+  PP_SETTINGS_ITEMS,
+  PP_SETTINGS_INTERACTION
+} PPSettingsPage;
+typedef struct PPItemDrag {
+  uint64_t item, generation, order;
+  PPAnchor anchor;
+  struct nk_vec2 start, pointer;
+  struct nk_rect viewport;
+  size_t destination;
+  double scroll_time;
+  float scroll_fraction;
+  bool pressed, active, consuming, suppress_release, drop_pending;
+} PPItemDrag;
 struct PPSettings {
   PPApp *app; /* Borrowed, must outlive settings. */
   PPUIBackend *backend;
@@ -45,24 +61,40 @@ struct PPSettings {
   PPDialogKind dialog_kind;
   PPAnchor dialog_anchor;
   uint64_t dialog_item, dialog_generation;
+  PPAnchor remove_anchor;
+  uint64_t remove_item, remove_generation;
   PPProjectAction pending_action;
   PPCommand pending_command; /* Only value-only selection/list commands. */
-  bool drawing_fields;
+  bool drawing_fields, rendering, field_input_pending;
+  PPSettingsPage page, requested_page;
+  bool page_pending, interaction_changed, revert_pending, font_details_pending;
+  float items_height;
+  PPUIContentPreview row_thumbnails[8];
+  uint64_t row_thumbnail_ids[8];
+  bool row_thumbnail_used[8];
+  PPKey reorder_key;
+  PPAnchor reorder_anchor;
+  uint64_t reorder_item, reorder_generation;
+  bool reorder_focus_pending;
+  PPItemDrag drag;
 };
 bool pp_settings_command(PPSettings *settings, PPCommand command);
 void pp_project_actions(PPSettings *settings);
 void pp_project_request_action(PPSettings *settings, PPProjectAction action);
+void pp_project_request_remove(PPSettings *settings, PPAnchor anchor, uint64_t item);
 void pp_project_apply_action(PPSettings *settings);
 void pp_settings_close(PPSettings *settings);
 void pp_project_confirmation(PPSettings *settings);
 void pp_settings_dialog(PPSettings *settings, PPDialogKind kind,
                         bool add_image);
 void pp_item_editor(PPSettings *settings);
+void pp_item_editor_validate(PPSettings *settings);
 void pp_item_editor_destroy(PPSettings *settings);
 void pp_item_editor_sync(PPSettings *settings);
 void pp_item_editor_release_preview(PPSettings *settings);
 bool pp_ui_number(const char *text, double low, double high, double *out);
 bool pp_settings_invalid(const PPSettings *settings);
+bool pp_settings_action_enabled(const PPSettings *settings);
 void pp_settings_revert(PPSettings *settings);
 bool pp_settings_create_scaled(PPSettings **out, PPApp *app, float scale,
                                PPError *error);

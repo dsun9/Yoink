@@ -4,14 +4,18 @@
 #include <string.h>
 
 bool pp_settings_command(PPSettings *settings, PPCommand command) {
-  /* These commands replace the current editor binding. Keep its pending
-   * input on the original item until every field has been validated. Modal
-   * removal runs after field traversal and therefore needs no deferral. */
+  /* Keep pending input on the original item and validate every draft before
+   * changing selection, mutating a list or requesting Quit. Modal removal
+   * runs after field traversal and therefore needs no deferral. */
   if (settings->drawing_fields &&
       (command.kind == PP_COMMAND_SELECT_ANCHOR ||
        command.kind == PP_COMMAND_SELECT_ITEM ||
        command.kind == PP_COMMAND_ADD_TEXT ||
-       command.kind == PP_COMMAND_REMOVE_ITEM)) {
+       command.kind == PP_COMMAND_REMOVE_ITEM ||
+       command.kind == PP_COMMAND_REORDER_ITEM ||
+       command.kind == PP_COMMAND_SET_DEFAULT ||
+       command.kind == PP_COMMAND_SET_ENABLED ||
+       command.kind == PP_COMMAND_QUIT)) {
     if (settings->pending_action == PP_PROJECT_ACTION_NONE) {
       settings->pending_action = PP_PROJECT_ACTION_COMMAND;
       settings->pending_command = command;
@@ -110,6 +114,14 @@ void pp_project_request_action(PPSettings *settings, PPProjectAction action) {
   if (settings->pending_action == PP_PROJECT_ACTION_NONE)
     settings->pending_action = action;
 }
+void pp_project_request_remove(PPSettings *settings, PPAnchor anchor, uint64_t item) {
+  if (settings->pending_action != PP_PROJECT_ACTION_NONE)
+    return;
+  settings->remove_anchor = anchor;
+  settings->remove_item = item;
+  settings->remove_generation = pp_app_generation(settings->app);
+  pp_project_request_action(settings, PP_PROJECT_ACTION_REMOVE);
+}
 void pp_project_apply_action(PPSettings *settings) {
   PPProjectAction action = settings->pending_action;
   settings->pending_action = PP_PROJECT_ACTION_NONE;
@@ -151,7 +163,9 @@ void pp_project_apply_action(PPSettings *settings) {
     pp_settings_command(settings, settings->pending_command);
     break;
   case PP_PROJECT_ACTION_REMOVE:
-    settings->remove_confirmation = true;
+    if (settings->remove_generation == pp_app_generation(settings->app) &&
+        pp_project_item(pp_app_project(settings->app), settings->remove_item))
+      settings->remove_confirmation = true;
     break;
   default:
     break;
@@ -162,15 +176,50 @@ void pp_project_actions(PPSettings *settings) {
   struct nk_context *ctx = &ui->context;
   bool enabled = !settings->dialog_pending &&
                  !pp_app_ui(settings->app)->transition_pending &&
-                 !settings->remove_confirmation;
-  nk_layout_row_dynamic(ctx, 24, 1);
-  nk_label(ctx,
-           pp_app_dirty(settings->app) ? "Project name  /  Unsaved changes"
-           : *pp_app_path(settings->app)
-               ? "Project name  /  Saved"
-               : "Project name  /  Not saved to a file",
-           NK_TEXT_LEFT);
-  nk_layout_row_dynamic(ctx, 32, 1);
+                 !settings->remove_confirmation && !ui->composing;
+  float width = nk_window_get_content_region(ctx).w;
+  bool wrapped = width < 780;
+  float group_width = fminf(wrapped ? 520 : 760, width - 228);
+  float group_x = (width - group_width) / 2;
+  float row_height = pp_ui_theme.row_height;
+  float padding = pp_ui_theme.control;
+  float spacing = pp_ui_theme.compact;
+  const struct nk_user_font *font = ctx->style.font;
+  const char *label = "Preset";
+  float label_width = ceilf(font->width(font->userdata, font->height, label,
+                                      (int)strlen(label))) + 2 * ctx->style.text.padding.x;
+  bool dirty = pp_app_dirty(settings->app);
+  float marker_width = dirty ? ceilf(font->width(font->userdata, font->height, "*", 1)) +
+                                  2 * ctx->style.text.padding.x : 0;
+  float marker_space = dirty ? spacing + marker_width : 0;
+  float actions_width = 4 * 44 + 3 * spacing;
+  float group_height = row_height + (wrapped ? row_height + spacing : 0);
+  nk_layout_space_begin(ctx, NK_STATIC, group_height + 2 * padding, 8);
+  float origin_y = nk_layout_space_to_screen(ctx, nk_vec2(0, 0)).y;
+  float toolbar_height = origin_y + group_height + 2 * padding;
+  /* The painted header starts at the window edge, above the layout's inset.
+   * Center in that entire header rather than adding the inset twice. */
+  float group_y = (toolbar_height - group_height) / 2 - origin_y;
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  struct nk_rect clip = canvas->clip;
+  nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
+  nk_fill_rect(canvas, nk_rect(0, 0, ui->width, toolbar_height),
+                0, pp_ui_theme.surface);
+  nk_stroke_line(canvas, 0, toolbar_height, ui->width,
+                  toolbar_height, 1, pp_ui_theme.border);
+  nk_push_scissor(canvas, clip);
+  nk_layout_space_push(ctx, nk_rect(0, group_y + (group_height - row_height) / 2,
+                                    100, row_height));
+  nk_style_push_font(ctx, &ui->heading_font->handle);
+  nk_label_colored(ctx, "Yoink", NK_TEXT_LEFT, pp_ui_theme.accent);
+  nk_style_pop_font(ctx);
+  nk_layout_space_push(ctx, nk_rect(group_x, group_y, label_width, row_height));
+  nk_label_colored(ctx, label, NK_TEXT_LEFT, pp_ui_theme.muted);
+  float name_width = group_width - label_width - spacing - marker_space -
+                     (wrapped ? 0 : spacing + actions_width);
+  float name_x = group_x + label_width + spacing;
+  nk_layout_space_push(ctx, nk_rect(name_x, group_y, name_width, row_height));
+  struct nk_rect name_bounds = nk_widget_bounds(ctx);
   if (pp_ui_edit(ui, "project-name", settings->project_name,
                  sizeof(settings->project_name), false, enabled)) {
     PPError error;
@@ -183,26 +232,44 @@ void pp_project_actions(PPSettings *settings) {
     else
       settings->name_error[0] = 0;
   }
-  bool actions_enabled = enabled && !pp_settings_invalid(settings);
-  nk_layout_row_dynamic(ctx, 32, 4);
-  if (pp_ui_button(ui, "new", "New", actions_enabled))
+  if (dirty) {
+    nk_layout_space_push(ctx, nk_rect(name_x + name_width + spacing, group_y,
+                                    marker_width, row_height));
+    nk_label_colored(ctx, "*", NK_TEXT_LEFT, pp_ui_theme.accent);
+  }
+  pp_ui_tooltip(ui, name_bounds, "project-name",
+                pp_app_dirty(settings->app) ? "Unsaved changes"
+                : *pp_app_path(settings->app) ? "Project saved"
+                                             : "Not saved to a file; no unsaved edits");
+  bool actions_enabled = pp_settings_action_enabled(settings);
+  float actions_x = wrapped ? (width - actions_width) / 2
+                            : group_x + group_width - actions_width;
+  float actions_y = group_y + (wrapped ? row_height + spacing : 0);
+  nk_layout_space_push(ctx, nk_rect(actions_x, actions_y, 44, row_height));
+  if (pp_ui_icon_button(ui, "new", PP_UI_ICON_NEW, "New", "New (Ctrl+N)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_NEW);
-  if (pp_ui_button(ui, "open", "Open", actions_enabled))
+  nk_layout_space_push(ctx, nk_rect(actions_x + 44 + spacing, actions_y, 44, row_height));
+  if (pp_ui_icon_button(ui, "open", PP_UI_ICON_OPEN, "Open", "Open (Ctrl+O)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_OPEN);
-  if (pp_ui_button(ui, "save", "Save", actions_enabled))
+  nk_layout_space_push(ctx, nk_rect(actions_x + 2 * (44 + spacing), actions_y, 44, row_height));
+  if (pp_ui_icon_button(ui, "save", PP_UI_ICON_SAVE, "Save", "Save (Ctrl+S)",
+                        actions_enabled, true))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE);
-  if (pp_ui_button(ui, "save-as", "Save As", actions_enabled))
+  nk_layout_space_push(ctx, nk_rect(actions_x + 3 * (44 + spacing), actions_y, 44, row_height));
+  if (pp_ui_icon_button(ui, "save-as", PP_UI_ICON_SAVE_AS, "Save as", "Save as (Ctrl+Shift+S)",
+                        actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE_AS);
+  nk_layout_space_end(ctx);
   char unicode_notice[256];
   pp_ui_unicode_notice(ui, settings->project_name, unicode_notice,
                        sizeof(unicode_notice));
-  nk_layout_row_dynamic(ctx, 38, 1);
-  nk_label_wrap(
-      ctx,
-      settings->name_error[0] ? settings->name_error
-      : unicode_notice[0]
-          ? unicode_notice
-          : "Ctrl+N New   Ctrl+O Open   Ctrl+S Save   Ctrl+Shift+S Save As");
+  pp_ui_error(ui, settings->name_error);
+  if (unicode_notice[0]) {
+    nk_layout_row_dynamic(ctx, 38, 1);
+    nk_label_wrap(ctx, unicode_notice);
+  }
 }
 void pp_project_confirmation(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
@@ -255,11 +322,12 @@ void pp_project_confirmation(PPSettings *settings) {
         }
       }
     } else if (pp_ui_button(ui, "remove-confirm", "Remove item", true)) {
-      pp_settings_command(
-          settings,
-          (PPCommand){.kind = PP_COMMAND_REMOVE_ITEM,
-                      .anchor = pp_app_ui(settings->app)->anchor,
-                      .item_id = pp_app_ui(settings->app)->selected_item});
+      if (settings->remove_generation == pp_app_generation(settings->app))
+        pp_settings_command(
+            settings,
+            (PPCommand){.kind = PP_COMMAND_REMOVE_ITEM,
+                        .anchor = settings->remove_anchor,
+                        .item_id = settings->remove_item});
       settings->remove_confirmation = false;
     }
     nk_layout_row_dynamic(ctx, 48, 1);

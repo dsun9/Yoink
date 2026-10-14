@@ -114,9 +114,15 @@ static void configure(PPUIBackend *ui, PPUIShapedEdit *e, const char *draft) {
 static bool contains(struct nk_rect r, double x, double y) {
   return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
 }
+void pp_ui_shaped_suspend(PPUIBackend *ui) {
+  if (ui->shaped) {
+    ui->shaped->enabled = false;
+    ui->shaped->dragging = false;
+  }
+}
 bool pp_ui_shaped_event(PPUIBackend *ui, const PPPlatformEvent *event) {
   PPUIShapedEdit *e = ui->shaped;
-  if (!e)
+  if (!e || !e->enabled)
     return false;
   bool focused = pp_ui_focused(ui, "item-text");
   bool cancel =
@@ -273,9 +279,9 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   struct nk_rect allocated;
   nk_widget(&allocated, &ui->context);
   struct nk_command_buffer *canvas = nk_window_get_canvas(&ui->context);
-  nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius, pp_ui_theme.surface);
+  nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius, pp_ui_theme.field);
   nk_stroke_rect(canvas, bounds, pp_ui_theme.control_radius, 1,
-                 focused ? pp_ui_theme.accent : pp_ui_theme.muted);
+                 focused ? pp_ui_theme.accent : pp_ui_theme.border);
   size_t marked_first, marked_last, display_caret;
   bool changed = false;
   bool reveal = false;

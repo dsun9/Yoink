@@ -127,8 +127,11 @@ void pp_drawer_layout(PPDrawer *d, const PPDisplay *displays, size_t count) {
   d->scale = (float)scale;
   d->raster_scale = (float)display->drawable_pixels_per_dip;
   PPRect b = display->bounds;
+  size_t choices = pp_drawer_count(d);
+  double list_height = choices ? 24 + choices * 62 - 6 : 72;
+  double height = 66 + list_height + (d->diagnostic[0] ? 44 : 0);
   d->bounds.w = fmin(340 * scale, b.w);
-  d->bounds.h = fmin(360 * scale, b.h);
+  d->bounds.h = fmin(fmin(360, height) * scale, b.h);
   d->bounds.x = fmax(
       b.x, fmin(instance->pose.center.x + 16 * scale, b.x + b.w - d->bounds.w));
   d->bounds.y = fmax(
@@ -201,6 +204,90 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
   pp_item_snapshot_release(snapshot);
   return ok;
 }
+static void row_label(PPUIBackend *ui, const PPItem *item, size_t index,
+                      char *label, size_t capacity) {
+  if (item->kind != PP_ITEM_TEXT) {
+    snprintf(label, capacity, "Image %zu", index + 1);
+    return;
+  }
+  pp_ui_label_text(ui->body_font, item->text, PP_UI_LABEL_PRESERVE_WHITESPACE,
+                    label, capacity);
+  if (!label[0]) snprintf(label, capacity, "Text %zu", index + 1);
+}
+static bool drawer_row(PPDrawer *d, const PPItem *item, size_t index,
+                       size_t *slot, PPError *error) {
+  PPUIBackend *ui = d->backend;
+  struct nk_context *ctx = &ui->context;
+  char id[48], label[160];
+  snprintf(id, sizeof(id), "drawer-item-%llu", (unsigned long long)item->id);
+  row_label(ui, item, index, label, sizeof(label));
+  nk_layout_row_dynamic(ctx, 56, 1);
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  bool clicked = pp_ui_select(ui, id, "", pp_ui_focused(ui, id), true);
+  if (ui->control_count)
+    snprintf(ui->controls[ui->control_count - 1].label,
+             sizeof(ui->controls[0].label), "%s", label);
+  struct nk_rect clip = ctx->current->layout->clip;
+  if (bounds.y + bounds.h > clip.y && bounds.y < clip.y + clip.h && *slot < 8) {
+    if (!thumbnail(d, item, (*slot)++,
+        nk_rect(bounds.x + 6, bounds.y + 4, 48, 48), error))
+      snprintf(d->diagnostic, sizeof(d->diagnostic), "%s", error->message);
+  }
+  struct nk_rect text_bounds = nk_rect(bounds.x + 64, bounds.y + 8,
+                                       fmaxf(0, bounds.w - 72), 22);
+  const struct nk_user_font *font = &ui->body_font->handle;
+  size_t length = pp_ui_fit_label(font, label, sizeof(label), text_bounds.w);
+  bool pressed = nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT) &&
+      nk_input_is_mouse_hovering_rect(&ctx->input, bounds) &&
+      nk_input_is_mouse_hovering_rect(&ctx->input, clip);
+  struct nk_color background = pressed ? pp_ui_theme.accent :
+      pp_ui_focused(ui, id) || nk_input_is_mouse_hovering_rect(&ctx->input, bounds)
+          ? pp_ui_theme.selection : pp_ui_theme.field;
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  nk_draw_text(canvas, text_bounds, label, (int)length, font,
+      background, pressed ? pp_ui_theme.surface : pp_ui_theme.ink);
+  nk_draw_text(canvas, nk_rect(text_bounds.x, bounds.y + 31, text_bounds.w, 18),
+      item->kind == PP_ITEM_TEXT ? "Text" : "Image",
+      item->kind == PP_ITEM_TEXT ? 4 : 5, &ui->utility_font->handle,
+      background, pressed ? pp_ui_theme.surface : pp_ui_theme.muted);
+  return clicked;
+}
+static void navigate_rows(PPDrawer *d) {
+  PPUIBackend *ui = d->backend;
+  const PPAnchorList *list = pp_project_anchor(pp_app_project(d->app), d->anchor);
+  if (!list->count) return;
+  size_t focused = list->count;
+  char id[48];
+  for (size_t i = 0; i < list->count; i++) {
+    snprintf(id, sizeof(id), "drawer-item-%llu", (unsigned long long)list->item_ids[i]);
+    if (pp_ui_focused(ui, id)) { focused = i; break; }
+  }
+  if (focused == list->count && ui->focus_id &&
+      !pp_ui_focused(ui, "drawer-close")) {
+    /* A queued activation belonged to the removed item. Moving focus to a
+     * remaining choice must not turn that activation into a replacement. */
+    ui->activate = false;
+    snprintf(d->diagnostic, sizeof(d->diagnostic),
+             "This item was removed. Choose another item.");
+  }
+  size_t next = focused;
+  switch (ui->navigation) {
+  case PP_KEY_DOWN: next = focused < list->count - 1 ? focused + 1 :
+      focused == list->count ? 0 : focused; break;
+  case PP_KEY_UP: next = focused == list->count ? list->count - 1 :
+      focused ? focused - 1 : 0; break;
+  case PP_KEY_HOME: next = 0; break;
+  case PP_KEY_END: next = list->count - 1; break;
+  default:
+    if (!ui->focus_id || (focused == list->count &&
+        !pp_ui_focused(ui, "drawer-close"))) next = 0;
+    break;
+  }
+  if (next < list->count && next != focused) {
+    snprintf(id, sizeof(id), "drawer-item-%llu", (unsigned long long)list->item_ids[next]);
+    pp_ui_focus(ui, id);
+  }
+}
 bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
   if (!pp_drawer_valid(d) || d->dismissed) {
     release_thumbnails(d);
@@ -224,49 +311,41 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
   if(!ui->content_sources)return false;
   if (!pp_ui_begin(ui, error))
     return false;
+  navigate_rows(d);
   struct nk_context *ctx = &ui->context;
   size_t slot=0;
   if (nk_begin(ctx, "Replace sprite", nk_rect(0, 0, ui->width, ui->height),
                NK_WINDOW_NO_SCROLLBAR)) {
-    pp_ui_heading(ui, "Replace sprite");
-    nk_layout_row_dynamic(ctx, 38, 1);
-    nk_label_wrap(ctx, "Choose from this position's current list.");
-    nk_layout_row_dynamic(ctx, fmaxf(40, ui->height - 202), 1);
+    float header_widths[] = {
+        fmaxf(40, nk_window_get_content_region(ctx).w - 78), 72};
+    nk_layout_row(ctx, NK_STATIC, pp_ui_theme.row_height, 2, header_widths);
+    nk_style_push_font(ctx, &ui->heading_font->handle);
+    nk_label(ctx, "Replace sprite", NK_TEXT_LEFT);
+    nk_style_pop_font(ctx);
+    if (pp_ui_button(ui, "drawer-close", "Close", true))
+      d->dismissed = true;
+    nk_layout_row_dynamic(ctx,
+        fmaxf(40, ui->height - 66 - (d->diagnostic[0] ? 44 : 0)), 1);
     struct nk_rect viewport = nk_widget_bounds(ctx);
     size_t first = ui->control_count;
-    if (nk_group_begin(ctx, "drawer-items", 0)) {
+    size_t choices = pp_drawer_count(d);
+    double list_height = choices ? 24 + choices * 62 - 6 : 72;
+    bool overflow = list_height > viewport.h;
+    if (!overflow)
+      nk_group_set_scroll(ctx, "drawer-items", 0, 0);
+    if (nk_group_begin(ctx, "drawer-items",
+        overflow ? 0 : NK_WINDOW_NO_SCROLLBAR)) {
       const PPAnchorList *list =
           pp_project_anchor(pp_app_project(d->app), d->anchor);
       if (!list->count) {
-        nk_layout_row_dynamic(ctx, 80, 1);
+        nk_layout_row_dynamic(ctx, 48, 1);
         nk_label_wrap(ctx, "No items at this position. Add items in Settings "
                            "to choose a replacement.");
       }
       for (size_t i = 0; i < list->count; i++) {
         const PPItem *item =
             pp_project_item(pp_app_project(d->app), list->item_ids[i]);
-        char id[48], label[160];
-        snprintf(id, sizeof(id), "drawer-item-%llu",
-                 (unsigned long long)item->id);
-        char notice[256];
-        if (item->kind == PP_ITEM_TEXT &&
-            !pp_ui_unicode_notice(ui, item->text, notice, sizeof(notice)))
-          snprintf(label, sizeof(label), "%s", item->text);
-        else if (item->kind == PP_ITEM_TEXT)
-          snprintf(label, sizeof(label), "Text %zu", i + 1);
-        else
-          snprintf(label, sizeof(label), "Image %zu", i + 1);
-        float widths[] = {52,
-                          fmaxf(40, nk_window_get_content_region(ctx).w - 64)};
-        nk_layout_row(ctx, NK_STATIC, 56, 2, widths);
-        struct nk_rect image_bounds;
-        enum nk_widget_layout_states visible = nk_widget(&image_bounds, ctx);
-        if (visible != NK_WIDGET_INVALID && slot < 8) {
-          if (!thumbnail(d, item, slot++, image_bounds, error))
-            snprintf(d->diagnostic, sizeof(d->diagnostic), "%s",
-                     error->message);
-        }
-        if (pp_ui_button(ui, id, label, true)) {
+        if (drawer_row(d, item, i, &slot, error)) {
           if (!pp_drawer_select(d, item->id, now, error))
             snprintf(d->diagnostic, sizeof(d->diagnostic), "%s",
                      error->message);
@@ -275,11 +354,9 @@ bool pp_drawer_draw(PPDrawer *d, double now, PPError *error) {
       }
       nk_group_end(ctx);
     }
-    pp_ui_reveal_focus(ui, "drawer-items", viewport, first);
+    if (overflow)
+      pp_ui_reveal_focus(ui, "drawer-items", viewport, first);
     pp_ui_error(ui, d->diagnostic);
-    nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-    if (pp_ui_button(ui, "drawer-close", "Close", true))
-      d->dismissed = true;
   }
   nk_end(ctx);
   for(size_t i=slot;i<8;i++) {

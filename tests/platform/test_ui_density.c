@@ -101,11 +101,14 @@ int main(void) {
   CHECK(SDL_GetWindowPosition(window, &x, &y));
   CHECK(SDL_GetWindowSize(window, &width, &height));
   int initial_preview_width = settings->editor.preview_width;
+  PPRect toolbar_save;
+  CHECK(pp_ui_control_rect(ui, "save", &toolbar_save));
+  CHECK(toolbar_save.w == 44 && toolbar_save.h == 36);
   CHECK(initial_preview_width > 0 && ui->body_font->info.height == 16);
-  const float densities[] = {2, 1};
-  const float font_pixels[] = {32, 16};
-  const int preview_factors[] = {2, 1};
-  for (size_t i = 0; i < 2; i++) {
+  const float densities[] = {1.5f, 2, 1};
+  const float font_pixels[] = {24, 32, 16};
+  const float preview_factors[] = {1.5f, 2, 1};
+  for (size_t i = 0; i < 3; i++) {
     GLuint old_texture = ui->font_texture;
     density = densities[i];
     pp_settings_event(
@@ -115,7 +118,8 @@ int main(void) {
     draw();
     /* A deleted atlas name may already be reused by a field image. Verify
      * that it no longer holds an atlas: any reused dimensions must match a
-     * current field row, whose pixels are covered in shaped_editor. */
+     * current field row, editor preview or item thumbnail. Their rendered
+     * content is covered by shaped_editor and Settings acceptance. */
     if (glIsTexture(old_texture)) {
       GLint reused_width = 0, reused_height = 0;
       glBindTexture(GL_TEXTURE_2D, old_texture);
@@ -132,7 +136,14 @@ int main(void) {
       const PPUIContentPreview *retained=&settings->editor.retained;
       bool preview_texture=(reused_width==retained->width&&reused_height==retained->height)||
         (reused_width==retained->source_width&&reused_height==retained->source_height);
-      CHECK(row_texture||preview_texture);
+      bool thumbnail_texture = false;
+      for (size_t thumbnail = 0; thumbnail < 8; thumbnail++) {
+        retained = &settings->row_thumbnails[thumbnail];
+        thumbnail_texture = thumbnail_texture ||
+            (reused_width == retained->width && reused_height == retained->height) ||
+            (reused_width == retained->source_width && reused_height == retained->source_height);
+      }
+      CHECK(row_texture||preview_texture||thumbnail_texture);
     }
     GLint atlas_width = 0, atlas_height = 0;
     glBindTexture(GL_TEXTURE_2D, ui->font_texture);
@@ -152,8 +163,12 @@ int main(void) {
      * reuse the deleted GL name; only the new atlas identity is stable. */
     CHECK(ui->font_texture != old_texture);
     CHECK(glIsTexture(ui->font_texture));
-    CHECK(settings->editor.preview_width ==
-          initial_preview_width * preview_factors[i]);
+    CHECK(fabs(settings->editor.preview_width -
+          initial_preview_width * preview_factors[i]) <= 1);
+    PPRect save;
+    CHECK(pp_ui_control_rect(ui, "save", &save));
+    CHECK(save.x == toolbar_save.x && save.y == toolbar_save.y &&
+          save.w == 44 && save.h == 36);
     CHECK(settings->backend == ui && ui->window == window);
     CHECK(!strcmp(settings->editor.size, "0") &&
           settings->editor.appearance_error[0]);
@@ -194,7 +209,7 @@ int main(void) {
   free(pixels);pp_content_consumer_destroy(consumer);pp_item_snapshot_release(independent);
   puts("PASS hidden Settings project epoch cancels obsolete preview work and keeps an independent source consumer's owned pixels");
   puts("PASS Settings artwork clock changes only on content commit, rename/opacity reuse sources, closure releases its consumer; hidden density 1->2->1: real font/preview rasters "
-       "refresh, old texture released; drafts, selection, focus, window and "
+       "refresh at 1->1.5->2->1, old texture released; toolbar logical targets, drafts, selection, focus, window and "
        "geometry preserved");
   /* Join private source work before CRT exit callbacks acquire the onexit
    * lock; HarfBuzz may register its own finalizer during that work. */

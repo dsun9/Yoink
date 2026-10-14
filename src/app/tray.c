@@ -22,7 +22,7 @@ bool pp_tray_native_create(PPTray **out, PPApp *app, PPError *error) {
       Uint8 *p=(Uint8 *)icon->pixels+y*icon->pitch+x*4;
       p[0]=255;p[1]=190;p[2]=45;p[3]=255;
     }
-    tray->native = SDL_CreateTray(icon,"PointyPointer");
+    tray->native = SDL_CreateTray(icon,"Yoink");
     SDL_DestroySurface(icon);
   }
   SDL_TrayMenu *menu = tray->native ? SDL_CreateTrayMenu(tray->native) : NULL;

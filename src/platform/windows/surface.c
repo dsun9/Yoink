@@ -43,7 +43,7 @@ bool pp_surface_create(PPSurface **out, PPError *error) {
     /* Declare topmost at creation: background promotion with SetWindowPos can
      * be denied after the user has clicked another process's window. */
     surface->window = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
-        surface_class, L"PointyPointer overlay", WS_POPUP, 0, 0, 1, 1, NULL, NULL, instance, surface);
+        surface_class, L"Yoink overlay", WS_POPUP, 0, 0, 1, 1, NULL, NULL, instance, surface);
     if (!surface->dc || !surface->window) {
         fail(surface, error, PP_ERROR_PLATFORM, "Cannot create overlay"); pp_surface_destroy(surface); return false;
     }

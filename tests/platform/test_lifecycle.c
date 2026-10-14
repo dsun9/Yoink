@@ -5,6 +5,7 @@
 #undef pp_platform_poll_dialogs
 #undef pp_surface_present
 #undef pp_platform_displays
+#undef SDL_GetPrefPath
 #include "../../src/app/lifecycle.h"
 #include "../../src/app/tray.h"
 #include "../../src/app/runtime_internal.h"
@@ -24,6 +25,15 @@ static bool recovery_save_expected;
 static PPDialogCallback recovery_file_callback;
 static void *recovery_file_userdata;
 static const char *recovery_file_result;
+static const char *legacy_preferences_directory;
+char *pp_test_GetPrefPath(const char *organization, const char *application) {
+  if (!legacy_preferences_directory)
+    return SDL_GetPrefPath(organization, application);
+  /* Replace only the OS directory lookup, leaving the legacy file reader real. */
+  CHECK(!strcmp(organization, "PointyPointer"));
+  CHECK(!strcmp(application, "PointyPointer"));
+  return SDL_strdup(legacy_preferences_directory);
+}
 void pp_test_file_dialog(PPDialogKind kind, const char *suggested,
                          PPDialogCallback callback, void *userdata) {
   (void)suggested;
@@ -40,6 +50,7 @@ void pp_test_poll_dialogs(void) {
 }
 bool pp_test_ShowMessageBox(const SDL_MessageBoxData *box, int *choice) {
   CHECK(recovery_choice>=0);
+  CHECK(!strcmp(box->title,"Yoink Settings recovery"));
   CHECK(strstr(box->message,"Injected Settings context failure"));
   CHECK(strstr(box->message,"AND pending editor drafts"));
   CHECK(box->numbuttons == (recovery_save_expected ? 4 : 3));
@@ -119,6 +130,43 @@ static void test_failed_settings(void) {
     pp_lifecycle_stop(&life);
   }
   puts("PASS failed Settings retry retains instance; clean Quit and dirty Cancel reachable");
+}
+static void settings_key(PPSettings *settings, PPKey key, unsigned modifiers) {
+  PPPlatformEvent event = {.kind = PP_EVENT_KEY_DOWN,
+      .window_id = pp_settings_window_id(settings), .key = key, .modifiers = modifiers};
+  pp_settings_event(settings, &event);
+  event.kind = PP_EVENT_KEY_UP; pp_settings_event(settings, &event);
+}
+static void test_failed_font_disclosure(void) {
+  PPError error = {0}; PPLifecycle life = {0};
+  CHECK(pp_lifecycle_start(&life, &(PPAppOptions){.preferences_directory=""}, &error));
+  CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+  PPSettings *retained = life.settings;
+  retained->render_hidden = true; pp_settings_draw(retained);
+  pp_ui_focus(retained->backend, "font-details");
+  settings_key(retained, PP_KEY_ENTER, 0); pp_settings_draw(retained);
+  CHECK(retained->editor.font_details_open);
+  pp_ui_focus(retained->backend, "font-face"); pp_settings_draw(retained);
+  settings_key(retained, PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(retained);
+  for (const char *p = "120"; *p; p++) {
+    PPPlatformEvent text = {.kind = PP_EVENT_TEXT,
+        .window_id = pp_settings_window_id(retained), .codepoint = (unsigned char)*p};
+    pp_settings_event(retained, &text);
+  }
+  settings_key(retained, PP_KEY_TAB, PP_MOD_SHIFT);
+  settings_key(retained, PP_KEY_ENTER, 0);
+  failed_settings_window = retained->backend->window;
+  pp_settings_draw(retained); CHECK(retained->failed);
+  failed_settings_window = NULL;
+  CHECK(pp_lifecycle_action(&life, PP_COMMAND_SHOW_SETTINGS, &error));
+  CHECK(life.settings == retained && !retained->failed);
+  CHECK(!strcmp(retained->editor.face, "120"));
+  CHECK(!strcmp(retained->editor.size, "96"));
+  CHECK(retained->editor.font_error[0] && pp_settings_invalid(retained));
+  CHECK(!retained->editor.font_details_open);
+  CHECK(pp_project_item(pp_app_project(life.app), retained->editor.id)->text_style.font_size_dip == 96);
+  pp_lifecycle_stop(&life);
+  puts("PASS Settings retry retains queued collection edit, Tab focus and disclosure activation.");
 }
 static void test_persistent_settings_failure(void) {
   for(int dirty=0;dirty<2;dirty++) for(int invalid=0;invalid<2;invalid++) {
@@ -275,6 +323,44 @@ static void test_last_project(void) {
   CHECK(SDL_RemovePath(prefs)); CHECK(SDL_RemovePath(directory));
   puts("PASS saved project/name restore; corrupt and missing project fall back without overwriting source");
 }
+static void test_public_identity(void) {
+  char directory[256], preferences[300], saved[300];
+  snprintf(directory,sizeof(directory),"legacy-preferences-%llu",(unsigned long long)SDL_GetPerformanceCounter());
+  CHECK(SDL_CreateDirectory(directory));
+  snprintf(preferences,sizeof(preferences),"%s/preferences.json",directory);
+  snprintf(saved,sizeof(saved),"%s/renamed-project.pointy",directory);
+  FILE *file=pp_platform_open_file(preferences,"wb",NULL); CHECK(file);
+  fprintf(file,"{\"last_project\":\"%s\",\"geometry\":[120,140,960,720]}",PP_EXAMPLE_PROJECT);
+  CHECK(!fclose(file));
+  legacy_preferences_directory=directory;
+  PPError error={0}; PPLifecycle life={0};
+  CHECK(pp_lifecycle_start(&life,NULL,&error));
+  CHECK(!strcmp(pp_app_path(life.app),PP_EXAMPLE_PROJECT));
+  CHECK(!strcmp(pp_app_name(life.app),"Twemoji scalable emoji example"));
+  const PPRect *geometry=&pp_app_ui(life.app)->geometry;
+  CHECK(geometry->x==120 && geometry->y==140 && geometry->w==960 && geometry->h==720);
+  int entries=0;
+  const SDL_TrayEntry **menu=SDL_GetTrayEntries(SDL_GetTrayMenu(life.tray->native),&entries);
+  CHECK(entries==2 && !strcmp(SDL_GetTrayEntryLabel((SDL_TrayEntry *)menu[0]),"Settings"));
+  SDL_ClickTrayEntry((SDL_TrayEntry *)menu[0]);
+  PPCommandKind queued; CHECK(pp_tray_take(life.tray,&queued) && queued==PP_COMMAND_SHOW_SETTINGS);
+  CHECK(pp_lifecycle_action(&life,queued,&error));
+  life.settings->render_hidden=true;
+  CHECK(!strcmp(SDL_GetWindowTitle(life.settings->backend->window),"Yoink Settings"));
+  pp_settings_draw(life.settings);
+  CHECK(life.settings->backend->width==960 && life.settings->backend->height==720);
+  CHECK(!life.settings->failed && !(SDL_GetWindowFlags(life.settings->backend->window)&SDL_WINDOW_INPUT_FOCUS));
+  CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_RENAME_PROJECT,.name="Renamed \xc3\xa9 project"},&error));
+  CHECK(pp_app_command(life.app,&(PPCommand){.kind=PP_COMMAND_SAVE_AS,.path=saved},&error));
+  pp_lifecycle_stop(&life);
+  CHECK(pp_lifecycle_start(&life,NULL,&error));
+  CHECK(!strcmp(pp_app_name(life.app),"Renamed \xc3\xa9 project") && !strcmp(pp_app_path(life.app),saved));
+  CHECK(pp_app_ui(life.app)->geometry.w==960 && pp_app_ui(life.app)->geometry.h==720);
+  pp_lifecycle_stop(&life);
+  legacy_preferences_directory=NULL;
+  CHECK(SDL_RemovePath(saved)); CHECK(SDL_RemovePath(preferences)); CHECK(SDL_RemovePath(directory));
+  puts("PASS Yoink Settings via tray; legacy preference identity, stored geometry and existing .pointy fixture restore; Unicode project-name save/reopen");
+}
 static double monotonic(void) { return (double)SDL_GetPerformanceCounter()/SDL_GetPerformanceFrequency(); }
 static double cpu_seconds(void) {
 #ifdef _WIN32
@@ -326,8 +412,10 @@ static void benchmark(const char *mode) {
   pp_lifecycle_stop(&life); offscreen=false;
 }
 int main(int argc,char **argv) {
+  if(argc==2 && !strcmp(argv[1],"--font-disclosure-recovery")) { test_failed_font_disclosure(); return 0; }
+  if(argc==2 && !strcmp(argv[1],"--public-identity")) { test_public_identity(); return 0; }
   if(argc==2 && !strcmp(argv[1],"--benchmark")) { benchmark("empty");benchmark("static");benchmark("gif");return 0; }
-  test_gl_failure(); test_failed_settings(); test_persistent_settings_failure();
+  test_gl_failure(); test_failed_settings(); test_persistent_settings_failure(); test_failed_font_disclosure();
   test_failed_settings_save(); test_failed_settings_save_dialog();
   test_lifecycle(); test_last_project(); return 0;
 }

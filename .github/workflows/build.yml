@@ -18,8 +18,8 @@ jobs:
         run: cpack -C Release
       - uses: actions/upload-artifact@v4
         with:
-          name: PointyPointer-Windows
-          path: build/windows-release/PointyPointer-*.zip
+          name: Yoink-Windows
+          path: build/windows-release/Yoink-*.zip
   macos:
     runs-on: macos-14
     steps:
@@ -35,6 +35,6 @@ jobs:
         run: cpack -C Release
       - uses: actions/upload-artifact@v4
         with:
-          name: PointyPointer-macOS-unsigned
-          path: build/macos-dev/PointyPointer-*.zip
+          name: Yoink-macOS-unsigned
+          path: build/macos-dev/Yoink-*.zip
 # Hosted CI intentionally excludes native input routing and physical display gates.
