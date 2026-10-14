@@ -179,8 +179,15 @@ void pp_project_actions(PPSettings *settings) {
                  !settings->remove_confirmation && !ui->composing;
   float width = nk_window_get_content_region(ctx).w;
   bool wrapped = width < 780;
-  float toolbar_top = nk_widget_bounds(ctx).y;
-  float toolbar_height = toolbar_top + 36 + (wrapped ? 42 : 0) + 4;
+  float group_width = fminf(wrapped ? 520 : 760, width - 228);
+  float group_x = (width - group_width) / 2;
+  float row_height = pp_ui_theme.row_height;
+  float padding = pp_ui_theme.control;
+  float spacing = pp_ui_theme.compact;
+  float group_height = row_height + (wrapped ? row_height + spacing : 0);
+  nk_layout_space_begin(ctx, NK_STATIC, group_height + 2 * padding, 8);
+  float toolbar_height = nk_layout_space_to_screen(ctx, nk_vec2(0, 0)).y +
+                         group_height + 2 * padding;
   struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
   struct nk_rect clip = canvas->clip;
   nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
@@ -189,13 +196,16 @@ void pp_project_actions(PPSettings *settings) {
   nk_stroke_line(canvas, 0, toolbar_height, ui->width,
                   toolbar_height, 1, pp_ui_theme.border);
   nk_push_scissor(canvas, clip);
-  float widths[] = {100, 60, width - (wrapped ? 194 : 394), 16,
-                    44, 44, 44, 44};
-  nk_layout_row(ctx, NK_STATIC, 36, wrapped ? 4 : 8, widths);
+  nk_layout_space_push(ctx, nk_rect(0, padding + (group_height - row_height) / 2,
+                                    100, row_height));
   nk_style_push_font(ctx, &ui->heading_font->handle);
   nk_label_colored(ctx, "Yoink", NK_TEXT_LEFT, pp_ui_theme.accent);
   nk_style_pop_font(ctx);
+  nk_layout_space_push(ctx, nk_rect(group_x, padding, 60, row_height));
   nk_label_colored(ctx, "Project", NK_TEXT_LEFT, pp_ui_theme.muted);
+  float name_width = group_width - (wrapped ? 88 : 294);
+  float name_x = group_x + 60 + spacing;
+  nk_layout_space_push(ctx, nk_rect(name_x, padding, name_width, row_height));
   struct nk_rect name_bounds = nk_widget_bounds(ctx);
   if (pp_ui_edit(ui, "project-name", settings->project_name,
                  sizeof(settings->project_name), false, enabled)) {
@@ -209,6 +219,8 @@ void pp_project_actions(PPSettings *settings) {
     else
       settings->name_error[0] = 0;
   }
+  nk_layout_space_push(ctx, nk_rect(name_x + name_width + spacing, padding,
+                                    16, row_height));
   nk_label_colored(ctx, pp_app_dirty(settings->app) ? "*" : "",
                    NK_TEXT_LEFT, pp_ui_theme.accent);
   pp_ui_tooltip(ui, name_bounds, "project-name",
@@ -216,22 +228,27 @@ void pp_project_actions(PPSettings *settings) {
                 : *pp_app_path(settings->app) ? "Project saved"
                                              : "Not saved to a file; no unsaved edits");
   bool actions_enabled = pp_settings_action_enabled(settings);
-  if (wrapped) {
-    float actions[] = {44, 44, 44, 44};
-    nk_layout_row(ctx, NK_STATIC, 36, 4, actions);
-  }
+  float actions_width = 4 * 44 + 3 * spacing;
+  float actions_x = wrapped ? (width - actions_width) / 2
+                            : group_x + group_width - actions_width;
+  float actions_y = padding + (wrapped ? row_height + spacing : 0);
+  nk_layout_space_push(ctx, nk_rect(actions_x, actions_y, 44, row_height));
   if (pp_ui_icon_button(ui, "new", PP_UI_ICON_NEW, "New", "New (Ctrl+N)",
                         actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_NEW);
+  nk_layout_space_push(ctx, nk_rect(actions_x + 44 + spacing, actions_y, 44, row_height));
   if (pp_ui_icon_button(ui, "open", PP_UI_ICON_OPEN, "Open", "Open (Ctrl+O)",
                         actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_OPEN);
+  nk_layout_space_push(ctx, nk_rect(actions_x + 2 * (44 + spacing), actions_y, 44, row_height));
   if (pp_ui_icon_button(ui, "save", PP_UI_ICON_SAVE, "Save", "Save (Ctrl+S)",
                         actions_enabled, true))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE);
+  nk_layout_space_push(ctx, nk_rect(actions_x + 3 * (44 + spacing), actions_y, 44, row_height));
   if (pp_ui_icon_button(ui, "save-as", PP_UI_ICON_SAVE_AS, "Save as", "Save as (Ctrl+Shift+S)",
                         actions_enabled, false))
     pp_project_request_action(settings, PP_PROJECT_ACTION_SAVE_AS);
+  nk_layout_space_end(ctx);
   char unicode_notice[256];
   pp_ui_unicode_notice(ui, settings->project_name, unicode_notice,
                        sizeof(unicode_notice));

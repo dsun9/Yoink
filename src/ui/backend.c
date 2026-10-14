@@ -717,13 +717,19 @@ void pp_ui_reveal_focus(PPUIBackend *ui, const char *group,
       struct nk_rect bounds = ui->controls[i].bounds;
       nk_uint x, y;
       nk_group_get_scroll(&ui->context, group, &x, &y);
-      if (bounds.y < viewport.y + 24)
+      /* Diagnostic rows can leave less than a field plus the normal reveal
+       * margins. Shrink those margins so successive frames have one stable
+       * target; oversized controls align their visible portion to the top. */
+      float visible_height = fminf(bounds.h, viewport.h);
+      float margin_scale = fminf(1, fmaxf(0, (viewport.h - visible_height - 2) / 56));
+      float top_margin = 24 * margin_scale, bottom_margin = 32 * margin_scale;
+      if (bounds.y < viewport.y + top_margin)
         nk_group_set_scroll(&ui->context, group, x,
-                            (nk_uint)fmax(0, y + bounds.y - viewport.y - 24));
-      else if (bounds.y + bounds.h > viewport.y + viewport.h - 32)
+                            (nk_uint)fmax(0, y + bounds.y - viewport.y - top_margin));
+      else if (bounds.y + visible_height > viewport.y + viewport.h - bottom_margin)
         nk_group_set_scroll(
             &ui->context, group, x,
-            y + (nk_uint)(bounds.y + bounds.h - viewport.y - viewport.h + 32));
+            y + (nk_uint)(bounds.y + visible_height - viewport.y - viewport.h + bottom_margin));
       break;
     }
 }
@@ -847,6 +853,26 @@ bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
   }
   bool clicked = pp_ui_button(ui, id, label, enabled);
   ui->context.style.button = saved;
+  return clicked;
+}
+bool pp_ui_tab(PPUIBackend *ui, const char *id, const char *label,
+               bool selected, bool enabled) {
+  struct nk_context *ctx = &ui->context;
+  struct nk_rect bounds = nk_widget_bounds(ctx);
+  struct nk_style_button saved = ctx->style.button;
+  ctx->style.button.border = 0;
+  ctx->style.button.normal = nk_style_item_color(selected ? pp_ui_theme.selection
+                                                         : pp_ui_theme.canvas);
+  ctx->style.button.hover = nk_style_item_color(pp_ui_theme.selection);
+  ctx->style.button.active = nk_style_item_color(pp_ui_theme.selection);
+  ctx->style.button.text_normal = selected ? pp_ui_theme.accent_hover : pp_ui_theme.muted;
+  ctx->style.button.text_hover = ctx->style.button.text_active = pp_ui_theme.accent_hover;
+  bool clicked = pp_ui_button(ui, id, label, enabled);
+  ctx->style.button = saved;
+  if (selected)
+    nk_fill_rect(nk_window_get_canvas(ctx),
+                 nk_rect(bounds.x + 8, bounds.y + bounds.h - 3, bounds.w - 16, 3),
+                 1, enabled ? pp_ui_theme.accent : pp_ui_theme.muted);
   return clicked;
 }
 bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,

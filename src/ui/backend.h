@@ -113,6 +113,8 @@ bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
                   bool *value, bool enabled);
 bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
                   bool selected, bool enabled);
+bool pp_ui_tab(PPUIBackend *ui, const char *id, const char *label,
+               bool selected, bool enabled);
 bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
                 bool multiline, bool enabled);
 bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,

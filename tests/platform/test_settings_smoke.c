@@ -4,6 +4,7 @@
 #include "../../src/ui/shaped_edit.h"
 #include "../test.h"
 #include "pointy/project_store.h"
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1938,6 +1939,146 @@ static void hidden_batched_interaction_save(void) {
   CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
   puts("PASS batched Interaction edit reaches saved package; hidden invalid draft survives blocked Save.");
 }
+static void hidden_chrome_diagnostics(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  for (int density = 0; density < 3; density++) {
+    create_settings(scales[density], true);
+    CHECK(SDL_SetWindowSize(settings->backend->window,
+                            (int)(640 * scales[density]), (int)(480 * scales[density])));
+    pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    hidden_text("0"); hidden_settle();
+    CHECK(settings->editor.appearance_error[0]);
+    pp_ui_focus(settings->backend, "project-name"); hidden_settle();
+    hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+    pp_settings_event(settings, &(PPPlatformEvent){.kind = PP_EVENT_TEXT,
+        .window_id = pp_settings_window_id(settings), .codepoint = 0x3000});
+    hidden_settle();
+    CHECK(settings->name_error[0]);
+    char notice[256];
+    CHECK(pp_ui_unicode_notice(settings->backend, settings->project_name, notice, sizeof(notice)));
+    for (int page = 0; page < 2; page++) {
+      hidden_click(page ? "tab-interaction" : "tab-items"); hidden_settle();
+      char name[96];
+      snprintf(name, sizeof(name), "settings-chrome-diagnostics-%s-%d",
+               page ? "interaction" : "items", (int)(scales[density] * 100));
+      capture(name);
+      const char *footer_ids[] = {"project-github", "revert-fields", "close-settings", "quit"};
+      for (int control = 0; control < 4; control++) {
+        PPRect bounds;
+        CHECK(pp_ui_control_rect(settings->backend, footer_ids[control], &bounds));
+        printf("Diagnostics footer %s: bottom=%.0f, viewport bottom=%.0f\n",
+               footer_ids[control], bounds.y + bounds.h, settings->backend->height - 12);
+        CHECK(bounds.y + bounds.h <= settings->backend->height - 12);
+      }
+    }
+    hidden_click("tab-items"); hidden_settle();
+    pp_ui_focus(settings->backend, "item-size"); hidden_settle();
+    PPRect focused;
+    CHECK(pp_ui_control_rect(settings->backend, "item-size", &focused));
+    for (int frame = 0; frame < 8; frame++) {
+      pp_settings_draw(settings);
+      PPRect next;
+      CHECK(pp_ui_control_rect(settings->backend, "item-size", &next));
+      printf("Diagnostics focus y=%.0f -> %.0f\n", focused.y, next.y);
+      CHECK(fabs(next.y - focused.y) <= 1);
+      focused = next;
+    }
+    hidden_click("revert-fields"); hidden_settle();
+    CHECK(!pp_settings_invalid(settings));
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS footer remains visible and draft recovery clickable with name error, Unicode notice and page errors at minimum size across three scales.");
+}
+static void hidden_settings_chrome(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  const int sizes[][2] = {{1040, 780}, {640, 480}, {700, 600}, {1600, 900}};
+  const char *size_names[] = {"ordinary", "minimum", "narrow", "wide"};
+  for (int density = 0; density < 3; density++) {
+  create_settings(scales[density], true);
+  for (int size = 0; size < 4; size++) {
+    CHECK(SDL_SetWindowSize(settings->backend->window,
+        (int)(sizes[size][0] * scales[density]), (int)(sizes[size][1] * scales[density])));
+    hidden_settle();
+    for (int page = 0; page < 2; page++) {
+      hidden_click(page ? "tab-interaction" : "tab-items"); hidden_settle();
+      char name[96];
+      snprintf(name, sizeof(name), "settings-chrome-%s-%s-%d", size_names[size],
+               page ? "interaction" : "items", (int)(scales[density] * 100));
+      capture(name);
+      PPRect project, first, last, items, interaction, revert, close, quit, credit;
+      CHECK(pp_ui_control_rect(settings->backend, "project-name", &project));
+      CHECK(pp_ui_control_rect(settings->backend, "new", &first));
+      CHECK(pp_ui_control_rect(settings->backend, "save-as", &last));
+      CHECK(pp_ui_control_rect(settings->backend, "tab-items", &items));
+      CHECK(pp_ui_control_rect(settings->backend, "tab-interaction", &interaction));
+      CHECK(pp_ui_control_rect(settings->backend, "revert-fields", &revert));
+      CHECK(pp_ui_control_rect(settings->backend, "close-settings", &close));
+      CHECK(pp_ui_control_rect(settings->backend, "quit", &quit));
+      printf("Chrome %s: project y=%.0f, tabs w=%.0f/%.0f, footer w=%.0f/%.0f/%.0f\n",
+             size_names[size], project.y, items.w, interaction.w, revert.w, close.w, quit.w);
+      CHECK(project.y >= 20);
+      /* Include the visible Project prefix and dirty-marker space in the
+       * top-row extent. Wrapped icons must share that row's center. */
+      double group_left = project.x - 66;
+      double group_right = first.y == project.y ? last.x + last.w
+                                               : project.x + project.w + 22;
+      CHECK(fabs((group_left + group_right) / 2 - sizes[size][0] / 2.0) <= 2);
+      CHECK(project.w <= 550);
+      if (first.y > project.y)
+        CHECK(fabs((first.x + last.x + last.w) / 2 - sizes[size][0] / 2.0) <= 2);
+      CHECK(items.y >= fmax(project.y + project.h, last.y + last.h) + 12);
+      CHECK(items.w <= 180 && interaction.w <= 180);
+      CHECK(interaction.x >= items.x + items.w);
+      CHECK(revert.w + close.w + quit.w < sizes[size][0] * .6);
+      CHECK(quit.x + quit.w >= sizes[size][0] - 24);
+      CHECK(revert.x + revert.w <= close.x && close.x + close.w <= quit.x);
+      CHECK(pp_ui_control_rect(settings->backend, "project-github", &credit));
+      CHECK(credit.x + credit.w + 12 <= revert.x);
+      CHECK(credit.y + credit.h <= settings->backend->height - 6);
+      char path[MAX_PATH];
+      snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", name);
+      SDL_Surface *surface = SDL_LoadBMP(path);
+      CHECK(surface);
+      /* The selected tab has a blue lower edge. The inactive tab blends
+       * into the strip rather than drawing an ordinary button border. */
+      PPRect selected = page ? interaction : items;
+      PPRect inactive = page ? items : interaction;
+      Uint8 r, g, b, a;
+      CHECK(SDL_ReadSurfacePixel(surface,
+          (int)((selected.x + selected.w / 2) * surface->w / settings->backend->width),
+          (int)((selected.y + selected.h - 2) * surface->h / settings->backend->height), &r, &g, &b, &a));
+      CHECK(b > r + 80 && g > r + 40);
+      CHECK(SDL_ReadSurfacePixel(surface,
+          (int)((inactive.x + 2) * surface->w / settings->backend->width),
+          (int)((inactive.y + inactive.h / 2) * surface->h / settings->backend->height), &r, &g, &b, &a));
+      CHECK(r == 240 && g == 244 && b == 249);
+      /* Ink at the URL's right edge proves the final characters fit in the
+       * rendered control, including Nuklear's own content inset. */
+      bool trailing_ink = false;
+      for (int y = (int)(credit.y * surface->h / settings->backend->height);
+           y < (credit.y + credit.h) * surface->h / settings->backend->height; y++)
+        for (int x = (int)((credit.x + credit.w - 8) * surface->w / settings->backend->width);
+             x < (credit.x + credit.w) * surface->w / settings->backend->width; x++) {
+          CHECK(SDL_ReadSurfacePixel(surface, x, y, &r, &g, &b, &a));
+          trailing_ink |= b > r + 40 && g > r + 20;
+        }
+      CHECK(trailing_ink);
+      SDL_DestroySurface(surface);
+      pp_ui_focus(settings->backend, page ? "tab-items" : "tab-interaction");
+      hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+      CHECK(settings->page == (page ? PP_SETTINGS_ITEMS : PP_SETTINGS_INTERACTION));
+      CHECK(!settings->failed);
+    }
+  }
+  pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS centered padded project group, tab appearance/keyboard switching and complete linked credit beside right-aligned footer at four sizes and three scales.");
+}
 static void hidden_compact_toolbar(void) {
   CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
   create_settings(1, true);
@@ -3001,6 +3142,8 @@ static void hidden_editor_suite(void) {
   hidden_editor_responsive();
 }
 static void render_only(void) {
+  hidden_chrome_diagnostics();
+  hidden_settings_chrome();
   hidden_complete_item_labels();
   hidden_label_overflow();
   hidden_distinguishing_labels();
@@ -3350,7 +3493,7 @@ int main(int argc, char **argv) {
          !strcmp(argv[1], "--items-only") || !strcmp(argv[1], "--editor-only") ||
          !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
          !strcmp(argv[1], "--font-disclosure-only") ||
-         !strcmp(argv[1], "--labels-only")));
+         !strcmp(argv[1], "--labels-only") || !strcmp(argv[1], "--chrome-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -3358,6 +3501,16 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--chrome-only")) {
+    hidden_chrome_diagnostics();
+    hidden_settings_chrome();
+    hidden_compact_toolbar();
+    hidden_toolbar_name_roundtrip();
+    hidden_batched_tab_edit();
+    hidden_suspended_editor();
+    hidden_content_scroll();
+    hidden_responsive_pages();
+  }
   else if (!strcmp(argv[1], "--font-disclosure-only")) {
     hidden_font_disclosure_batch();
     hidden_font_disclosure_guards();

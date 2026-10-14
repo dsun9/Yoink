@@ -171,7 +171,8 @@ Items                 Interaction
 | Enabled / ordered list |                                    |
 | Add / order / default  |                                    |
 +-------------------------+------------------------------------+
-Persistent outcome or diagnostic                 Settings / Quit
+Persistent outcome or diagnostic
+Project by Bowen / GitHub           Revert fields / Close settings / Quit
 ```
 
 The prebuild critique removed decorative display numbers and a separate
@@ -204,8 +205,10 @@ requiring hover to discover full information.
 | Dialog | `src/ui/project_actions.c` | Save/Discard/Cancel policy | App confirmation; required OS file chooser | settings_smoke Escape, focus, actual file chooser |
 
 Project actions use equal-width 44 by 36 logical-unit drawn icon buttons.
-They share the project-name field's vertical alignment and wrap onto the next
-row when the content width is below 780 logical units. Save uses the blue
+The Project label, name field, dirty marker and actions form one centered group,
+capped at 760 logical units. The header adds 12 units of vertical padding above
+and below the group. Actions share the project-name field's vertical alignment
+and wrap into a centered second row below 780 units of content width. Save uses the blue
 primary style with a contrasting inset focus marker. Hover, pressed, disabled
 and keyboard focus states come from the
 shared backend. Full action names and shortcuts appear on pointer hover or
@@ -213,6 +216,16 @@ keyboard focus. Keyboard focus takes precedence over a stationary pointer;
 moving the pointer restores hover help. Tooltips draw in Nuklear's overlay and
 cannot change text-input ownership. The asterisk is display decoration outside
 the editable value; project name and filename remain independent.
+
+Items and Interaction use compact tabs aligned to the left of a shared baseline.
+The selected tab has a pale blue fill and blue lower edge; inactive tabs blend
+into the canvas. The existing keyboard focus, error markers and input ordering
+apply to both tabs.
+
+The white footer places Revert fields, Close settings and Quit in a compact
+group on the right. On the left, Project by Bowen appears above the complete
+`https://github.com/dsun9/Yoink` link. The link supports pointer and keyboard
+activation through the shared control registry and opens the system browser.
 
 `src/ui/icons.c` draws the shared action, direction, monitor, star, deletion,
 close and drag icons. `pp_ui_icon_button`, `pp_ui_switch` and `pp_ui_tooltip`

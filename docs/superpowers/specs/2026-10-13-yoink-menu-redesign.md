@@ -154,6 +154,12 @@ short lists and stays within its existing 340 by 360 logical-unit maximum.
 
 ### Project toolbar and Settings navigation
 
+- The 2026-10-13 layout follow-up centers the Project label, editable name,
+  dirty marker and action icons as one bounded group, with vertical padding.
+  Narrow windows keep the wrapped action row centered below the name row.
+  Items and Interaction use compact tab styling instead of full-width buttons.
+  Footer actions form a compact right-aligned group; the left side credits
+  Project by Bowen and links to `https://github.com/dsun9/Yoink`.
 - New, Open, Save and Save as have equal-width icon buttons, approximately
   44 logical units wide, aligned vertically with the project-name field. The
   asterisk is display decoration and never an edit to portable project data.

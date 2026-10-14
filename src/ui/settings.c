@@ -625,22 +625,76 @@ static void validate_interaction(PPSettings *settings) {
 static void navigation(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   bool enabled = !settings->dialog_pending && !ui->composing;
-  nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 2);
+  float widths[] = {100, 152};
+  nk_layout_row(&ui->context, NK_STATIC, 40, 2, widths);
+  struct nk_rect strip = nk_widget_bounds(&ui->context);
   bool item_errors = settings->editor.content_error[0] ||
                      settings->editor.appearance_error[0] ||
                      settings->editor.font_error[0];
-  if (pp_ui_select(ui, "tab-items", item_errors ? "Items !" : "Items",
+  if (pp_ui_tab(ui, "tab-items", item_errors ? "Items !" : "Items",
                    settings->page == PP_SETTINGS_ITEMS,
                    enabled)) {
     settings->requested_page = PP_SETTINGS_ITEMS;
     settings->page_pending = true;
   }
-  if (pp_ui_select(ui, "tab-interaction", settings->interaction_error[0]
+  if (pp_ui_tab(ui, "tab-interaction", settings->interaction_error[0]
                                              ? "Interaction !" : "Interaction",
                    settings->page == PP_SETTINGS_INTERACTION, enabled)) {
     settings->requested_page = PP_SETTINGS_INTERACTION;
     settings->page_pending = true;
   }
+  nk_stroke_line(nk_window_get_canvas(&ui->context),
+                  nk_window_get_content_region(&ui->context).x, strip.y + strip.h,
+                  nk_window_get_content_region(&ui->context).x +
+                      nk_window_get_content_region(&ui->context).w,
+                  strip.y + strip.h, 1, pp_ui_theme.border);
+}
+static void footer(PPSettings *settings) {
+  PPUIBackend *ui = settings->backend;
+  struct nk_context *ctx = &ui->context;
+  float width = nk_window_get_content_region(ctx).w;
+  float spacing = pp_ui_theme.compact;
+  float action_x = width - (108 + 126 + 64 + 2 * spacing);
+  nk_layout_space_begin(ctx, NK_STATIC, pp_ui_theme.row_height, 5);
+  struct nk_vec2 origin = nk_layout_space_to_screen(ctx, nk_vec2(0, 0));
+  struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
+  struct nk_rect clip = canvas->clip;
+  nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
+  nk_fill_rect(canvas, nk_rect(0, origin.y - 8, ui->width, ui->height - origin.y + 8),
+                0, pp_ui_theme.surface);
+  nk_stroke_line(canvas, 0, origin.y - 8, ui->width, origin.y - 8, 1, pp_ui_theme.border);
+  nk_push_scissor(canvas, clip);
+  nk_style_push_font(ctx, &ui->utility_font->handle);
+  nk_layout_space_push(ctx, nk_rect(0, 0, action_x - 12, 18));
+  nk_label_colored(ctx, "Project by Bowen", NK_TEXT_LEFT, pp_ui_theme.muted);
+  const char *github = "https://github.com/dsun9/Yoink";
+  const struct nk_user_font *font = ctx->style.font;
+  float link_width = font->width(font->userdata, font->height, github, (int)strlen(github)) + 2;
+  nk_layout_space_push(ctx, nk_rect(0, 18, link_width, 18));
+  struct nk_style_button saved = ctx->style.button;
+  ctx->style.button.normal = ctx->style.button.hover = ctx->style.button.active =
+      nk_style_item_color(pp_ui_theme.surface);
+  ctx->style.button.border = 0;
+  ctx->style.button.rounding = 0;
+  ctx->style.button.padding = nk_vec2(0, 0);
+  ctx->style.button.text_normal = ctx->style.button.text_hover = pp_ui_theme.accent;
+  ctx->style.button.text_active = pp_ui_theme.accent_pressed;
+  ctx->style.button.text_alignment = NK_TEXT_LEFT;
+  if (pp_ui_button(ui, "project-github", github, !settings->dialog_pending) && !SDL_OpenURL(github))
+    snprintf(settings->status, sizeof(settings->status), "Cannot open the project link: %.450s", SDL_GetError());
+  ctx->style.button = saved;
+  nk_style_pop_font(ctx);
+  nk_layout_space_push(ctx, nk_rect(action_x, 0, 108, pp_ui_theme.row_height));
+  if (pp_ui_button(ui, "revert-fields", "Revert fields",
+                   pp_settings_invalid(settings) && !settings->dialog_pending && !ui->composing))
+    settings->revert_pending = true;
+  nk_layout_space_push(ctx, nk_rect(action_x + 108 + spacing, 0, 126, pp_ui_theme.row_height));
+  if (pp_ui_button(ui, "close-settings", "Close settings", !settings->dialog_pending))
+    pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
+  nk_layout_space_push(ctx, nk_rect(width - 64, 0, 64, pp_ui_theme.row_height));
+  if (pp_ui_button(ui, "quit", "Quit", pp_settings_action_enabled(settings)))
+    pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
+  nk_layout_space_end(ctx);
 }
 bool pp_settings_can_transition(PPSettings *settings) {
   if (!settings) return true;
@@ -774,8 +828,14 @@ void pp_settings_draw(PPSettings *settings) {
     bool page_errors = item_errors || settings->interaction_error[0];
     struct nk_panel *panel = nk_window_get_panel(ctx);
     float body_top = panel->at_y + panel->row.height;
-    float body_height = fmaxf(100, ui->height - body_top - 104 -
-                                     (page_errors ? 38 : 0));
+    /* Header diagnostics can consume two rows at minimum size. Reserve all
+     * footer rows and the window's bottom padding before sizing the scroller. */
+    float spacing = ctx->style.window.spacing.y;
+    float footer_height = 42 + pp_ui_theme.row_height + 2 * spacing +
+                          (page_errors ? pp_ui_theme.row_height + spacing : 0);
+    struct nk_rect content = nk_window_get_content_region(ctx);
+    float body_height = fmaxf(24, content.y + content.h - ctx->style.window.padding.y -
+                                    body_top - footer_height);
     nk_layout_row_dynamic(ctx, body_height, 1);
     struct nk_rect content_viewport = nk_widget_bounds(ctx);
     size_t first_control = ui->control_count;
@@ -842,16 +902,7 @@ void pp_settings_draw(PPSettings *settings) {
         settings->page_pending = true;
       }
     }
-    nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 3);
-    if (pp_ui_button(ui, "revert-fields", "Revert fields",
-                     pp_settings_invalid(settings) &&
-                         !settings->dialog_pending && !ui->composing))
-      settings->revert_pending = true;
-    if (pp_ui_button(ui, "close-settings", "Close settings",
-                     !settings->dialog_pending))
-      pp_project_request_action(settings, PP_PROJECT_ACTION_CLOSE);
-    if (pp_ui_button(ui, "quit", "Quit", pp_settings_action_enabled(settings)))
-      pp_settings_command(settings, (PPCommand){.kind = PP_COMMAND_QUIT});
+    footer(settings);
     if ((settings->font_details_pending ||
          (settings->page_pending && settings->page != settings->requested_page)) &&
         !modal && !settings->dialog_pending &&
