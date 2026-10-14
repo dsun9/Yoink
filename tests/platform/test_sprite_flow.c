@@ -55,6 +55,37 @@ static void hidden_key(PPDrawer *drawer, PPKey key) {
   CHECK(pp_drawer_draw(drawer, 2, &error));
   CHECK(pp_drawer_draw(drawer, 2, &error));
 }
+static void hidden_custom_labels(void) {
+  PPApp *app = NULL; PPError error = {0};
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory=""}, &error));
+  uint64_t item = pp_project_anchor(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->default_id;
+  uint64_t instance = 0;
+  CHECK(pp_scene_spawn(pp_app_scene(app), pp_app_project(app), PP_ANCHOR_TOP_LEFT,
+                       (PPVec2){400,300}, 1, &instance, &error));
+  const char *labels[] = {"Presentation hand", "   "};
+  const char *expected[] = {"Presentation hand", "U+1F449"};
+  for (int i = 0; i < 2; i++) {
+    PPItem edited = *pp_project_item(pp_app_project(app), item);
+    edited.label = labels[i];
+    CHECK(pp_app_command(app, &(PPCommand){.kind=PP_COMMAND_EDIT_ITEM,
+        .item_id=item, .item=&edited}, &error));
+    PPDrawer *drawer = NULL;
+    CHECK(pp_drawer_open(&drawer, app, instance, &error));
+    drawer->render_hidden = true;
+    PPDisplay display = {1,{0,0,800,600},1,1};
+    pp_drawer_layout(drawer, &display, 1);
+    CHECK(pp_drawer_draw(drawer, 2, &error));
+    bool found = false;
+    for (size_t row = 0; row < drawer->backend->control_count; row++)
+      found = found || !strcmp(drawer->backend->controls[row].label, expected[i]);
+    CHECK(found);
+    char *settings_label = pp_ui_item_label(drawer->backend->body_font,
+        pp_project_item(pp_app_project(app), item));
+    CHECK(settings_label && !strcmp(settings_label, expected[i])); free(settings_label);
+    pp_drawer_close(drawer);
+  }
+  pp_app_destroy(app);
+}
 static void hidden_whole_row(void) {
   PPApp *app = NULL;
   PPError error = {0};
@@ -1289,6 +1320,7 @@ static void desktop_main(const char *receiver_path) {
 }
 int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--hidden")) {
+    hidden_custom_labels();
     hidden_retained_ownership();
     hidden_drawer();
     hidden_whole_row();

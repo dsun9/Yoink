@@ -291,6 +291,10 @@ bool pp_anchor_presenter_update(PPAnchorPresenter *p, const PPDisplay *d,
         item ? pp_project_snapshot(p->project, item->id) : NULL;
     PPVec2 size = pp_item_snapshot_size(snapshot);
     previews[a] = snapshot ? fmin(4096, fmax(1, fmax(size.x, size.y))) : 96;
+    double factor=snapshot?previews[a]/fmax(size.x,size.y):1;
+    double angle=item?item->angle_deg*3.14159265358979323846/180:0;
+    double c=fabs(cos(angle)),s=fabs(sin(angle));
+    p->runtime.preview_size[a]=(PPVec2){factor*(size.x*c+size.y*s),factor*(size.x*s+size.y*c)};
     pp_item_snapshot_release(snapshot);
   }
   pp_anchors_layout(&p->runtime, settings->activation_dip, previews,

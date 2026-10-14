@@ -100,13 +100,20 @@ bool pp_item_snapshot_create(PPAssets *assets, const PPItem *item, PPItemSnapsho
         return item_error(error, PP_ERROR_ARGUMENT, "Invalid item content kind");
     if (!valid_size(item->kind == PP_ITEM_IMAGE ? item->image_longest_dip : item->text_style.font_size_dip))
         return item_error(error, PP_ERROR_ARGUMENT, "Image longest side and font size must be within 1–4096 DIP");
+    if (item->label && strlen(item->label) > PP_ITEM_LABEL_MAX)
+        return item_error(error, PP_ERROR_ARGUMENT, "Item label exceeds 1024 UTF-8 bytes");
     PPItemSnapshot *snapshot = calloc(1, sizeof(*snapshot));
     if (!snapshot) return item_error(error, PP_ERROR_MEMORY, "Cannot allocate item snapshot");
     snapshot->assets = assets;
     snapshot->references = 1;
     snapshot->item = *item;
     snapshot->item.text = NULL;
+    snapshot->item.label = copy_string(item->label ? item->label : "");
     snapshot->item.text_style.requested_family = NULL;
+    if (!snapshot->item.label) {
+        item_error(error, PP_ERROR_MEMORY, "Cannot own item label");
+        goto failed;
+    }
     if (item->kind == PP_ITEM_IMAGE) {
         snapshot->image = pp_asset_retain(assets, item->image_asset);
         if (!snapshot->image || pp_asset_kind(snapshot->image) == PP_ASSET_FONT) {
@@ -150,11 +157,13 @@ bool pp_item_snapshot_update(PPItemSnapshot *previous,const PPItem *item,PPItemS
         item->text_style.requested_family&&old->text_style.requested_family&&!strcmp(item->text_style.requested_family,old->text_style.requested_family)&&
         item->text_style.default_emoji_fallback==old->text_style.default_emoji_fallback;
     if(!same)return pp_item_snapshot_create(previous->assets,item,out,error);
-    if(!isfinite(item->angle_deg)||!isfinite(item->opacity)||item->opacity<0||item->opacity>1||
+    if((item->label&&strlen(item->label)>PP_ITEM_LABEL_MAX)||!isfinite(item->angle_deg)||!isfinite(item->opacity)||item->opacity<0||item->opacity>1||
         !valid_size(item->kind==PP_ITEM_IMAGE?item->image_longest_dip:item->text_style.font_size_dip))return item_error(error,PP_ERROR_ARGUMENT,"Invalid item appearance");
     PPItemSnapshot *snapshot=calloc(1,sizeof(*snapshot));if(!snapshot)return item_error(error,PP_ERROR_MEMORY,"Cannot retain item appearance");
     PPItemSnapshot *owner=content_owner(previous);snapshot->assets=previous->assets;snapshot->references=1;
     snapshot->parent=pp_item_snapshot_retain(owner);snapshot->item=*item;snapshot->artwork=identity;snapshot->revision=++next_revision;
+    snapshot->item.label=copy_string(item->label?item->label:"");
+    if(!snapshot->item.label){pp_item_snapshot_release(snapshot);return item_error(error,PP_ERROR_MEMORY,"Cannot own item label");}
     snapshot->item.text=owner->item.text;snapshot->item.text_style.requested_family=owner->item.text_style.requested_family;snapshot->size=previous->size;
     if(item->kind==PP_ITEM_IMAGE){PPVec2 intrinsic=pp_asset_intrinsic_size(owner->image);double factor=item->image_longest_dip/fmax(intrinsic.x,intrinsic.y);snapshot->size=(PPVec2){intrinsic.x*factor,intrinsic.y*factor};}
     *out=snapshot;return true;
@@ -167,6 +176,7 @@ PPItemSnapshot *pp_item_snapshot_retain(PPItemSnapshot *snapshot) {
 
 void pp_item_snapshot_release(PPItemSnapshot *snapshot) {
     if (!snapshot || --snapshot->references) return;
+    free((void *)snapshot->item.label);
     if(snapshot->parent){pp_item_snapshot_release(snapshot->parent);free(snapshot);return;}
     pp_frame_destroy(&snapshot->text_result.frame);
     pp_frame_destroy(&snapshot->compatibility.frame);

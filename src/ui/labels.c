@@ -46,13 +46,18 @@ void pp_ui_label_text(const struct nk_font *font, const char *text,
   derive_label(font, text, whitespace, label, capacity);
 }
 char *pp_ui_item_label(const struct nk_font *font, const PPItem *item) {
-  size_t length = item->kind == PP_ITEM_TEXT
-      ? derive_label(font, item->text, PP_UI_LABEL_COLLAPSE_WHITESPACE, NULL, 0) : 0;
+  const char *text = item->label && *item->label ? item->label
+      : item->kind == PP_ITEM_TEXT ? item->text : "";
+  size_t length = derive_label(font, text, PP_UI_LABEL_COLLAPSE_WHITESPACE, NULL, 0);
+  if (!length && item->kind == PP_ITEM_TEXT) {
+    text = item->text;
+    length = derive_label(font, text, PP_UI_LABEL_COLLAPSE_WHITESPACE, NULL, 0);
+  }
   size_t capacity = length ? length + 1 : 32;
   char *label = malloc(capacity);
   if (!label) return NULL;
   if (length)
-    pp_ui_label_text(font, item->text, PP_UI_LABEL_COLLAPSE_WHITESPACE, label, capacity);
+    pp_ui_label_text(font, text, PP_UI_LABEL_COLLAPSE_WHITESPACE, label, capacity);
   else
     snprintf(label, capacity, "%s %llu", item->kind == PP_ITEM_IMAGE ? "Image" : "Text",
              (unsigned long long)item->id);

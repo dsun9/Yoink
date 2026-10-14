@@ -498,7 +498,7 @@ static void ordered_items(PPSettings *settings) {
       if (content.y >= ctx->current->layout->clip.y &&
           content.y + content.h <= ctx->current->layout->clip.y + ctx->current->layout->clip.h &&
           pp_ui_tooltip(ui, content, id, label))
-        ui->tooltip_more = "Select item, then Full label to read all text.";
+        ui->tooltip_more = "Select item to edit its label or read the full text.";
       free(label);
       if (actions) {
         bool action_enabled = enabled && !settings->drag.consuming && !settings->drag.suppress_release;
@@ -993,5 +993,7 @@ void pp_settings_destroy(PPSettings *settings) {
   pp_item_editor_destroy(settings);
   release_row_thumbnails(settings, true);
   pp_ui_backend_destroy(settings->backend);
+  free(settings->font_options);
+  pp_blob_destroy(&settings->font_families);
   free(settings);
 }

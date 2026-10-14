@@ -543,7 +543,7 @@ static void draw_tooltip(PPUIBackend *ui) {
       end += bytes; lines++;
     }
   }
-  float height = fmaxf(36, (lines + hint_lines) * line_height + 14);
+  float height = (lines + hint_lines) * line_height - 4 + 14;
   float x = fmaxf(12, fminf(ui->tooltip_anchor.x, ui->width - width - 12));
   float y = ui->tooltip_anchor.y + ui->tooltip_anchor.h + 6;
   if (y + height > ui->height - 12)
@@ -843,8 +843,9 @@ bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
                                                  : pp_ui_theme.muted);
   nk_fill_circle(canvas, nk_rect(track.x + (*value ? 24 : 3), track.y + 3, 18, 18),
                  pp_ui_theme.surface);
-  struct nk_rect text = nk_rect(bounds.x + 8, bounds.y,
-                                fmaxf(0, bounds.w - 66), bounds.h);
+  struct nk_rect text = nk_rect(bounds.x + 8,
+                                bounds.y + (bounds.h - ctx->style.font->height) / 2,
+                                fmaxf(0, bounds.w - 66), ctx->style.font->height);
   nk_draw_text(canvas, text, label, (int)strlen(label), ctx->style.font,
                pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
   return activated;
@@ -980,6 +981,8 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
   nk_push_scissor(canvas, nk_rect(clip_left, clip_top,
       fmaxf(0, fminf(clip.x + clip.w, text_bounds.x + text_bounds.w) - clip_left),
       fmaxf(0, fminf(clip.y + clip.h, text_bounds.y + text_bounds.h) - clip_top)));
+  text_bounds.y += (trigger.h - ctx->style.font->height) / 2;
+  text_bounds.h = ctx->style.font->height;
   nk_draw_text(canvas, text_bounds, label, (int)strlen(label), ctx->style.font,
                  pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
   nk_push_scissor(canvas, clip);

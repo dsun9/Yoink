@@ -1320,7 +1320,7 @@ static void test_scalable_anchor_pull_reuses_prepared_content(void) {
     event(p,preview,PP_EVENT_BUTTON_UP,400,300,1.03);
     CHECK(pp_sprites_update(p,1.04,&error));
     CHECK(pp_scene_count(p->scene)==1);const PPSceneInstance *sprite=pp_scene_at(p->scene,0);
-    CHECK(sprite->pose.center.x==440&&sprite->pose.center.y==324&&sprite->pose.longest_dip==96);
+    CHECK(sprite->pose.center.x==440&&fabs(sprite->pose.center.y-302.666666667)<1e-6&&sprite->pose.longest_dip==96);
     CHECK(sprite->snapshot==pressed);pp_item_snapshot_release(pressed);
     CHECK(surface_for(sprite->id)->shown&&surface_for(sprite->id)->bounds.w==96&&surface_for(sprite->id)->bounds.h==54);
     CHECK(pp_anchor_presenter_metrics(p).worker_requests==prepared.worker_requests&&pp_anchor_presenter_metrics(p).worker_source_builds==1);
@@ -1454,7 +1454,29 @@ static void test_bitmap_consumers_recover_after_shared_rejection(void) {
   }
   puts("PASS fresh bitmap consumers recover after shared rejection and rejecting-owner teardown, with local suppression and bounded snapshot ownership");
 }
+static void test_rectangular_anchor_preview(void) {
+    PPError error = {0}; PPAssets *assets = NULL; PPProject *project = NULL;
+    CHECK(pp_assets_create(&assets, &error));
+    CHECK(pp_project_default(assets, &project, &error));
+    PPItem item = *pp_project_target(project, PP_ANCHOR_BOTTOM_LEFT);
+    item.text = "\xf0\x9f\x91\x89\xf0\x9f\x91\x89" "aaaaaaa";
+    CHECK(pp_project_edit_item(project, item.id, &item, &error));
+    PPItemSnapshot *snapshot = pp_project_snapshot(project, item.id);
+    PPVec2 size = pp_item_snapshot_size(snapshot);
+    PPAnchorPresenter *p = NULL;
+    CHECK(pp_anchor_presenter_create(&p, (PPRenderer *)1, project, &error));
+    PPDisplay display = {1, {0, 0, 1600, 1200}, 1, 1};
+    CHECK(pp_anchor_presenter_update(p, &display, 1, (PPVec2){1, 1199}, 1, &error));
+    PPRect bounds = pp_anchor_presenter_reveals(p)->entries[PP_ANCHOR_BOTTOM_LEFT].preview;
+    fprintf(stderr, "Mixed text canonical size=%.1fx%.1f, corner preview=%.1fx%.1f\n", size.x, size.y, bounds.w, bounds.h);
+    CHECK(fabs(bounds.w - size.x) <= 1 && fabs(bounds.h - size.y) <= 1);
+    CHECK(bounds.x == 0 && bounds.y + bounds.h == 1200);
+    CHECK(fabs(p->anchors[PP_ANCHOR_BOTTOM_LEFT].preview->bounds.y + p->anchors[PP_ANCHOR_BOTTOM_LEFT].preview->bounds.h - 1200) <= 1);
+    pp_anchor_presenter_destroy(p); pp_item_snapshot_release(snapshot);
+    pp_project_destroy(project); pp_assets_destroy(assets);
+}
 int main(void) {
+    test_rectangular_anchor_preview();
     test_bitmap_consumers_recover_after_shared_rejection();
     test_bitmap_replacement_matches_fresh_canonical_source();
     test_hidden_obsolete_source_releases_its_reference();

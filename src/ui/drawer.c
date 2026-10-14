@@ -206,6 +206,20 @@ static bool thumbnail(PPDrawer *d, const PPItem *item, size_t slot,
 }
 static void row_label(PPUIBackend *ui, const PPItem *item, size_t index,
                       char *label, size_t capacity) {
+  if (item->label && *item->label) {
+    char *derived = pp_ui_item_label(ui->body_font, item);
+    if (!derived) { ui->failed = true; label[0] = 0; return; }
+    /* Preserve a complete UTF-8 prefix in the drawer's compact row buffer. */
+    size_t length = strlen(derived), end = 0;
+    while (end < length) {
+      nk_rune rune;
+      int bytes = nk_utf_decode(derived + end, &rune, (int)(length - end));
+      if (bytes <= 0 || end + (size_t)bytes >= capacity) break;
+      end += (size_t)bytes;
+    }
+    memcpy(label, derived, end); label[end] = 0; free(derived);
+    return;
+  }
   if (item->kind != PP_ITEM_TEXT) {
     snprintf(label, capacity, "Image %zu", index + 1);
     return;

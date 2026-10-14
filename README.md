@@ -76,8 +76,11 @@ example described in [Optional scalable emoji](resources/optional-fonts/README.m
 It is an explicit choice; installed Segoe UI Emoji remains the default artwork.
 
 Settings provides eight shared ordered lists, default selection, enable/disable,
-text/emoji appearance, permitted font import, and PNG/GIF/SVG import. Ctrl+N,
-Ctrl+O, Ctrl+S and Ctrl+Shift+S select New, Open, Save and Save As. Invalid drafts
+text/emoji appearance, permitted font import, and PNG/GIF/SVG import.
+Each item has an editable menu label shared by its Settings row and replacement
+drawer row. An empty label uses the content description. Text items have an
+installed-font dropdown and an import action for portable font files.
+Ctrl+N, Ctrl+O, Ctrl+S and Ctrl+Shift+S select New, Open, Save and Save As. Invalid drafts
 must be corrected or reverted before project transitions; hiding Settings
 retains them. Import and replacement choosers open only after queued edits have
 been consumed and validated; cancellation preserves those edits. Dialog results

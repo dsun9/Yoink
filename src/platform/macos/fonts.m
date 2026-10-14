@@ -2,6 +2,23 @@
 #import <CoreText/CoreText.h>
 #include <stdlib.h>
 #include <string.h>
+bool pp_platform_font_families(PPBlob *out,PPError *error) {
+    if(!out||out->data||out->size)return false;
+    @autoreleasepool {
+        CFArrayRef families=CTFontManagerCopyAvailableFontFamilyNames();
+        if(!families)return pp_mac_error(error,PP_ERROR_PLATFORM,"Cannot list installed fonts");
+        PPBlob list={0};
+        for(NSString *family in (NSArray *)families) {
+            const char *name=family.UTF8String;
+            if(!name)continue;
+            size_t bytes=strlen(name)+1;
+            uint8_t *grown=realloc(list.data,list.size+bytes);
+            if(!grown){free(list.data);CFRelease(families);return pp_mac_error(error,PP_ERROR_MEMORY,"Cannot list installed fonts");}
+            list.data=grown;memcpy(grown+list.size,name,bytes);list.size+=bytes;
+        }
+        CFRelease(families);*out=list;return true;
+    }
+}
 bool pp_platform_find_font(const char *family,PPBlob *out,PPError *error) {
     if(out)*out=(PPBlob){0};
     if(!family||!out)return pp_mac_error(error,PP_ERROR_ARGUMENT,"Missing font family or output");

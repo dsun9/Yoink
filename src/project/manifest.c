@@ -247,6 +247,10 @@ bool pp_manifest_write(const PPProject *project, char **json, size_t *size, PPMa
                                        item->kind == PP_ITEM_IMAGE ? "image" : "text"));
             ADD(yyjson_mut_obj_add_real(doc, value, "angle", item->angle_deg));
             ADD(yyjson_mut_obj_add_real(doc, value, "opacity", item->opacity));
+            if (item->label && *item->label) {
+                if (!count_manifest_text(item->label, &text_bytes, error)) goto done;
+                ADD(yyjson_mut_obj_add_str(doc, value, "label", item->label));
+            }
             if (item->kind == PP_ITEM_IMAGE) {
                 if (!collect_resource(project, manifest, item->image_asset, &total, error))
                     goto done;
@@ -523,6 +527,9 @@ bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out
         yyjson_val *value;
         yyjson_arr_foreach(items, i, n, value) {
             PPItem item = {0};
+            yyjson_val *label = yyjson_obj_get(value, "label");
+            item.label = label ? string_value(label) : NULL;
+            if (label && (!item.label || strlen(item.label) > PP_ITEM_LABEL_MAX)) goto invalid;
             const char *kind = string_value(yyjson_obj_get(value, "kind"));
             yyjson_val *id = yyjson_obj_get(value, "id");
             if (++item_count > 4096 || !kind || !yyjson_is_uint(id) ||
@@ -531,7 +538,7 @@ bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out
                 goto invalid;
             if (!strcmp(kind, "image")) {
                 item.kind = PP_ITEM_IMAGE;
-                if (yyjson_obj_size(value) != 6 ||
+                if (yyjson_obj_size(value) != (label ? 7 : 6) ||
                     !number(value, "image_longest_dip", &item.image_longest_dip) ||
                     !reference(manifest, yyjson_obj_get(value, "resource"), &item.image_asset,
                                PP_ASSET_PNG, used))
@@ -544,7 +551,7 @@ bool pp_manifest_project(PPManifest *manifest, PPAssets *assets, PPProject **out
                 yyjson_val *default_fallback = yyjson_obj_get(value, "default_emoji_fallback");
                 style->default_emoji_fallback = yyjson_get_bool(default_fallback);
                 yyjson_val *color = yyjson_obj_get(value, "color");
-                if (yyjson_obj_size(value) != (default_fallback ? 11 : 10) ||
+                if (yyjson_obj_size(value) != (default_fallback ? 11 : 10) + (label ? 1 : 0) ||
                     (default_fallback && !yyjson_is_bool(default_fallback)) ||
                     !item.text || !style->requested_family ||
                     !number(value, "font_size_dip", &style->font_size_dip) ||

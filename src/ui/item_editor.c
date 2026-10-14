@@ -71,10 +71,6 @@ void pp_item_editor_sync(PPSettings *settings) {
   bool selection_changed=editor->id!=id||editor->generation!=pp_app_generation(settings->app);
   PPAssetId previous=pp_item_snapshot_artwork_id(editor->preview),current=pp_item_snapshot_artwork_id(snapshot);
   bool content_changed=selection_changed||memcmp(&previous,&current,sizeof(current));
-  if (content_changed) {
-    editor->label_open = false;
-    editor->label_page = editor->label_begin = editor->label_end = 0;
-  }
   if(content_changed&&!pp_ui_shaped_reset(settings->backend)) {
     pp_item_snapshot_release(snapshot);
     snprintf(editor->content_error,sizeof(editor->content_error),"Cannot bind editor context; retry selection.");
@@ -125,6 +121,8 @@ void pp_item_editor_sync(PPSettings *settings) {
   snprintf(editor->face, sizeof(editor->face), "%d",
            editor->draft.text_style.primary_face);
   editor->draft.text = editor->text;
+  snprintf(editor->label, sizeof(editor->label), "%s", editor->draft.label ? editor->draft.label : "");
+  editor->draft.label = editor->label;
   editor->draft.text_style.requested_family = editor->family;
   text_diagnostics(settings);
 }
@@ -148,6 +146,7 @@ void pp_item_editor_validate(PPSettings *settings) {
   if (editor->appearance_error[0])
     return;
   PPItem item = editor->draft;
+  item.label = editor->label;
   item.angle_deg = angle;
   item.opacity = opacity / 100;
   if (item.kind == PP_ITEM_IMAGE)
@@ -316,49 +315,71 @@ preview_ready:
         &image, pp_ui_theme.surface);
   }
 }
-static void full_label(PPSettings *settings) {
+static int compare_families(const void *a, const void *b) {
+  return SDL_strcasecmp(*(const char *const *)a, *(const char *const *)b);
+}
+static void font_choice(PPSettings *settings, bool *changed) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
-  struct nk_context *ctx = &ui->context;
-  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-  if (pp_ui_button(ui, "full-item-label", editor->label_open ? "Hide full label" : "Full label",
-                   !settings->dialog_pending && !ui->composing))
-    editor->label_open = !editor->label_open;
-  if (!editor->label_open) return;
-  char *label = pp_ui_item_label(ui->body_font, &editor->draft);
-  if (!label) { ui->failed = true; return; }
-  const struct nk_user_font *font = &ui->utility_font->handle;
-  float line_height = font->height + 4;
-  nk_layout_row_dynamic(ctx, 4 * line_height, 1);
-  struct nk_rect bounds;
-  nk_widget(&bounds, ctx);
-  size_t length = strlen(label), begin = 0, page = 0;
-  /* Recompute pages with the current drawing font and available width so
-   * resize and density changes cannot split a codepoint or leave gaps. */
-  while (begin < length && page < editor->label_page) {
-    size_t end = begin;
-    for (int line = 0; line < 4 && end < length; line++) {
-      size_t bytes = pp_ui_label_line(font, label + end, length - end, bounds.w);
-      if (!bytes) break;
-      end += bytes;
+  if (!settings->font_options) {
+    pp_platform_font_families(&settings->font_families, NULL);
+    int count = 1;
+    for (size_t offset = 0; offset < settings->font_families.size;)
+      { count++; offset += strlen((const char *)settings->font_families.data + offset) + 1; }
+    settings->font_options = calloc((size_t)count, sizeof(*settings->font_options));
+    if (!settings->font_options) { ui->failed = true; return; }
+    settings->font_count = count;
+    int index = 1;
+    for (size_t offset = 0; offset < settings->font_families.size;) {
+      const char *name = (const char *)settings->font_families.data + offset;
+      settings->font_options[index++] = name;
+      offset += strlen(name) + 1;
     }
-    if (end == begin || end == length) break;
-    begin = end; page++;
+    qsort(settings->font_options + 1, (size_t)count - 1, sizeof(*settings->font_options), compare_families);
   }
-  editor->label_page = page;
-  editor->label_begin = begin;
-  editor->label_end = begin + pp_ui_label_draw(nk_window_get_canvas(ctx), bounds,
-      font, label + begin, length - begin, pp_ui_theme.canvas, pp_ui_theme.ink);
-  nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 3);
-  bool enabled = !settings->dialog_pending && !ui->composing;
-  if (pp_ui_button(ui, "previous-label-page", "Previous", enabled && page > 0))
-    editor->label_page--;
-  char status[48];
-  snprintf(status, sizeof(status), "Label page %zu", page + 1);
-  nk_label(ctx, status, NK_TEXT_CENTERED);
-  if (pp_ui_button(ui, "next-label-page", "Next", enabled && editor->label_end < length))
-    editor->label_page++;
-  free(label);
+  settings->font_options[0] = editor->family;
+  int selected = 0;
+  for (int i = 1; i < settings->font_count; i++)
+    if (!SDL_strcasecmp(editor->family, settings->font_options[i])) { selected = i; break; }
+  if (!pp_ui_choice(ui, "font-family-choice", settings->font_options, settings->font_count,
+                    &selected, !settings->dialog_pending) || selected == 0)
+    return;
+  const char *family = settings->font_options[selected];
+  PPBlob bytes = {0}; PPError error = {0}; PPFontInfo info = {0};
+  bool ok = pp_platform_find_font(family, &bytes, &error) &&
+            pp_font_inspect((PPBytes){bytes.data, bytes.size}, 0, &info, &error);
+  int face = -1;
+  size_t faces = info.face_count;
+  for (size_t i = 0; ok && i < faces; i++) {
+    ok = pp_font_inspect((PPBytes){bytes.data, bytes.size}, (int)i, &info, &error);
+    char styled[256];
+    snprintf(styled, sizeof(styled), "%s %s", info.family, info.style);
+    if (ok && (!SDL_strcasecmp(info.family, family) || !SDL_strcasecmp(styled, family)) && face < 0) face = (int)i;
+    if (ok && !info.embeddable) {
+      ok = false;
+      snprintf(error.message, sizeof(error.message), "This font does not permit portable editable embedding.");
+    }
+  }
+  PPAssetId asset;
+  char chosen_family[sizeof(editor->family)] = {0};
+  if (ok && face >= 0) {
+    ok = pp_font_inspect((PPBytes){bytes.data, bytes.size}, face, &info, &error);
+    if (ok) snprintf(chosen_family, sizeof(chosen_family), "%s", info.family);
+  }
+  if (ok && face >= 0)
+    ok = pp_asset_import(pp_app_assets(settings->app), (PPBytes){bytes.data, bytes.size}, PP_ASSET_FONT, &asset, &error);
+  else ok = false;
+  pp_blob_destroy(&bytes);
+  if (!ok) {
+    snprintf(editor->font_error, sizeof(editor->font_error), "Font: %.490s",
+             error.message[0] ? error.message : "Selected family is unavailable.");
+    return;
+  }
+  editor->draft.text_style.primary_asset = asset;
+  editor->draft.text_style.primary_face = face;
+  snprintf(editor->family, sizeof(editor->family), "%s", chosen_family);
+  snprintf(editor->face, sizeof(editor->face), "%d", face);
+  *changed = true;
 }
 void pp_item_editor(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
@@ -382,21 +403,25 @@ void pp_item_editor(PPSettings *settings) {
   }
   bool changed = false;
   pp_ui_heading(ui, "Content");
+  field(settings, "Label", "item-label", editor->label, sizeof(editor->label), &changed);
+  pp_ui_secondary(ui, "Used in the item list and drawer. Leave empty to use the content.");
   if (editor->draft.kind == PP_ITEM_TEXT && editor->text) {
     ui->text_assets=pp_app_assets(settings->app);
     nk_layout_row_dynamic(&ui->context, 20, 1);
     nk_label(&ui->context, "Text / emoji (Unicode, multiline)", NK_TEXT_LEFT);
     nk_layout_row_dynamic(&ui->context, 78, 1);
     changed = pp_ui_edit(ui, "item-text", editor->text, editor->text_capacity,
-                         true, !settings->dialog_pending);
+                         true, !settings->dialog_pending) || changed;
     pp_ui_error(ui, editor->content_error);
-    full_label(settings);
     for (size_t i = 0; i < 4; i++)
       pp_ui_error(ui, editor->font_warnings[i]);
-    char font[300];
-    snprintf(font, sizeof(font), "Font: %s", editor->family);
-    nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 2);
-    nk_label_wrap(&ui->context, font);
+    nk_layout_row_dynamic(&ui->context, 20, 1);
+    nk_label(&ui->context, "Font", NK_TEXT_LEFT);
+    float font_widths[] = {
+        fmaxf(1, nk_widget_width(&ui->context) - 112 - ui->context.style.window.spacing.x),
+        112};
+    nk_layout_row(&ui->context, NK_STATIC, pp_ui_theme.row_height, 2, font_widths);
+    font_choice(settings, &changed);
     struct nk_rect import_bounds = nk_widget_bounds(&ui->context);
     if (pp_ui_button(ui, "import-font", "Import font",
                      pp_settings_action_enabled(settings)))

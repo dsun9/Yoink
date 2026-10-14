@@ -7,6 +7,7 @@ typedef struct PPItemEditor {
   char *text;
   int text_capacity;
   char family[256], size[32], angle[32], opacity[32], color[16], face[32];
+  char label[PP_ITEM_LABEL_MAX + 1];
   char content_error[512], appearance_error[512], font_error[512],
       diagnostics[512];
   char font_warnings[4][256];
@@ -17,8 +18,7 @@ typedef struct PPItemEditor {
   GLuint preview_texture;
   int preview_width, preview_height;
   double animation_start, next_frame;
-  bool changed, preview_dirty, font_details_open, label_open;
-  size_t label_page, label_begin, label_end;
+  bool changed, preview_dirty, font_details_open;
 } PPItemEditor;
 typedef enum PPProjectAction {
   PP_PROJECT_ACTION_NONE,
@@ -49,6 +49,9 @@ struct PPSettings {
   PPApp *app; /* Borrowed, must outlive settings. */
   PPUIBackend *backend;
   PPItemEditor editor;
+  PPBlob font_families;
+  const char **font_options;
+  int font_count;
   char project_name[PP_PROJECT_NAME_MAX + 5], name_error[512];
   char activation[32], rotation[32], resize[32], easing[32],
       interaction_error[512];

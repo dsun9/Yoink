@@ -9,14 +9,16 @@ regression failed on insufficient tooltip height for 80 uppercase W
 characters followed by END_MARKER at 640 by 480. A second regression failed
 because overflow had no Full label disclosure.
 
-The backend now owns the complete derived label. Row fitting changes a
-separate copy. Help and the disclosure wrap by measured utility-font width
-at complete UTF-8 codepoints. Help stays within 12-unit window margins and
-uses at most 200 logical units of height. Overflow help gives the instruction
-"Select item, then Full label to read all text." The selected item's
-disclosure uses four measured lines per page and keyboard-accessible
-Previous/Next controls. Its state stays in the editor and resets when content
-or selection changes.
+The backend owns the complete derived label. Row fitting changes a separate
+copy. Help wraps by measured utility-font width at complete UTF-8 codepoints,
+stays within 12-unit window margins, and uses at most 200 logical units of
+height. Overflow help points to the selected item's editor.
+
+The post-PR #28 regression correction replaces the read-only Full label
+disclosure with an editable Label field. Settings rows and replacement drawer
+rows use that label. Empty or whitespace-only labels use the content description.
+The Unicode content field remains available for reading and editing the full
+text. Labels survive save/reopen and do not trigger artwork regeneration.
 
 `ui_events` checks preserved pending input and focus, independently owned
 tooltip text beyond 255 bytes, popup/modal suppression, measured whole-rune
@@ -33,19 +35,17 @@ renderer. It checks:
   Covered multibyte letters remain Unicode, whitespace collapses, and an
   unsupported pointing-hand glyph remains U+1F449 in the derived label.
   Original multiline Unicode content remains unchanged.
-- A 2113-byte derived label has an explicit overflow instruction. Keyboard
-  paging reaches TAIL_COMPLETE without gaps or split codepoints, and Previous
-  returns to the preceding page. Project revision and selected preview remain
-  unchanged. Pointer help also preserves queued editing with its original
-  owner and does not change selection or the default item.
+- A 2113-byte derived label has an explicit overflow instruction. Giving the
+  item a shorter menu label updates its row and tooltip while preserving the
+  complete original multiline content. Pointer help preserves queued editing
+  with its original owner and does not change selection or the default item.
 - The shared help renderer fits complete text near right/bottom window edges
   in all nine controlled size/scale layouts, drawing above the anchor when
   there is insufficient space below it.
 
 Fresh BMP captures are saved in the selected build directory with the prefix
-`issue30-label-`. Inspected all 18 row focus/hover captures, nine edge captures
-and three overflow captures, including the final page. END_MARKER and
-TAIL_COMPLETE are readable within their window bounds. The tests use
+`issue30-label-`. The row focus/hover and edge captures check complete text
+within its window bounds. The tests use
 normalized events and hidden windows, without injecting OS desktop input.
 
 Reproduction on Windows:

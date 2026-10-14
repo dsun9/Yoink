@@ -283,8 +283,17 @@ void pp_project_confirmation(PPSettings *settings) {
    * NK_WINDOW_NO_INPUT while this modal is present. Registry is modal-only. */
   ui->control_count = 0;
   float width = fminf(500, ui->width - 32);
+  const char *message = settings->dialog_pending
+      ? "Choose a project file to continue." : settings->status;
+  bool has_message = message[0] != 0;
+  float header = ctx->style.font->height + 2 * ctx->style.window.header.padding.y +
+                 2 * ctx->style.window.header.label_padding.y;
+  float height = header + 2 * ctx->style.window.padding.y +
+                 64 + ctx->style.window.spacing.y + 32 +
+                 2 * ctx->style.window.border;
+  if (has_message) height += ctx->style.window.spacing.y + 48;
   struct nk_rect bounds = nk_rect(
-      (ui->width - width) / 2, fmaxf(16, (ui->height - 220) / 2), width, 220);
+      (ui->width - width) / 2, fmaxf(16, (ui->height - height) / 2), width, height);
   if (nk_begin(ctx, "Confirm changes", bounds,
                NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_NO_SCROLLBAR)) {
     nk_layout_row_dynamic(ctx, 64, 1);
@@ -330,10 +339,10 @@ void pp_project_confirmation(PPSettings *settings) {
                         .item_id = settings->remove_item});
       settings->remove_confirmation = false;
     }
-    nk_layout_row_dynamic(ctx, 48, 1);
-    nk_label_wrap(ctx, settings->dialog_pending
-                           ? "Choose a project file to continue."
-                           : settings->status);
+    if (has_message) {
+      nk_layout_row_dynamic(ctx, 48, 1);
+      nk_label_wrap(ctx, message);
+    }
   }
   nk_end(ctx);
 }

@@ -6,6 +6,7 @@
 #define PP_ITEM_MIN_SIZE 1.0
 #define PP_ITEM_MAX_SIZE 4096.0
 #define PP_PROJECT_NAME_MAX 255
+#define PP_ITEM_LABEL_MAX 1024
 typedef enum PPItemKind { PP_ITEM_IMAGE, PP_ITEM_TEXT } PPItemKind;
 /* Input strings are borrowed for a call; projects/snapshots copy them. Project
  * item IDs are stable and nonzero. Ad-hoc snapshot inputs may use zero.
@@ -17,6 +18,7 @@ typedef struct PPItem {
     PPItemKind kind;
     PPAssetId image_asset;
     const char *text;
+    const char *label; /* Optional menu label; empty uses text/image fallback. */
     PPTextStyle text_style;
     double image_longest_dip, angle_deg, opacity;
 } PPItem;

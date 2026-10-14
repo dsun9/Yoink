@@ -19,6 +19,8 @@ typedef struct PPBlob { uint8_t *data; size_t size; } PPBlob;
 /* Owned bytes; import into PPAssets before freeing. Explicit font import uses
  * pp_asset_import(PP_ASSET_FONT) + pp_font_inspect for portable project bytes. */
 bool pp_platform_find_font(const char *family, PPBlob *out, PPError *error);
+/* Owned list of installed UTF-8 family names, each terminated by NUL. */
+bool pp_platform_font_families(PPBlob *out, PPError *error);
 void pp_blob_destroy(PPBlob *blob);
 typedef struct PPSurface PPSurface;
 typedef enum PPPlatformEventKind {

@@ -765,37 +765,17 @@ static void hidden_label_overflow(void) {
   CHECK(!strcmp(settings->backend->tooltip_text, label));
   CHECK(settings->backend->tooltip_more && settings->backend->tooltip_end < strlen(label));
   capture("issue30-label-overflow-help");
-  pp_ui_focus(settings->backend, "full-item-label"); hidden_settle();
-  PPRect bounds;
-  CHECK(pp_ui_control_rect(settings->backend, "full-item-label", &bounds));
-  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
-  CHECK(pp_ui_control_rect(settings->backend, "next-label-page", &bounds));
-  size_t length = strlen(label), previous_end = settings->editor.label_end;
-  CHECK(settings->editor.label_open && settings->editor.label_begin == 0 && previous_end > 0);
-  uint64_t revision = pp_project_revision(pp_app_project(app));
-  PPItemSnapshot *preview = settings->editor.preview;
-  for (int page = 0; page < 100 && settings->editor.label_end < length; page++) {
-    pp_ui_focus(settings->backend, "next-label-page"); hidden_settle();
-    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
-    CHECK(settings->editor.label_begin == previous_end);
-    CHECK(settings->editor.label_end > previous_end);
-    CHECK(((unsigned char)label[settings->editor.label_begin] & 0xc0) != 0x80);
-    CHECK(((unsigned char)label[settings->editor.label_end] & 0xc0) != 0x80);
-    previous_end = settings->editor.label_end;
-  }
-  CHECK(settings->editor.label_end == length);
-  CHECK(strstr(label + settings->editor.label_begin, "TAIL_COMPLETE"));
-  CHECK(pp_project_revision(pp_app_project(app)) == revision && settings->editor.preview == preview);
-  CHECK(!strcmp(pp_project_item(pp_app_project(app), item)->text, source));
-  size_t final_begin = settings->editor.label_begin;
-  capture("issue30-label-overflow-final");
-  pp_ui_focus(settings->backend, "previous-label-page"); hidden_settle();
-  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
-  CHECK(settings->editor.label_end == final_begin);
-  capture("issue30-label-overflow-page");
+  pp_ui_focus(settings->backend, "item-label"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("Long presentation text"); hidden_settle();
+  const PPItem *renamed = pp_project_item(pp_app_project(app), item);
+  CHECK(!strcmp(renamed->label, "Long presentation text"));
+  CHECK(!strcmp(renamed->text, source));
+  pp_ui_focus(settings->backend, row); hidden_settle();
+  CHECK(pp_ui_tooltip_visible(settings->backend, "Long presentation text"));
   pp_settings_destroy(settings); settings = NULL;
   pp_app_destroy(app); app = NULL;
-  puts("PASS overflow instruction and complete keyboard paging without item or preview mutation.");
+  puts("PASS long text can use an editable menu label without changing its artwork.");
 }
 static void hidden_distinguishing_labels(void) {
   CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
@@ -3539,6 +3519,71 @@ static void manual_font_smoke(void) {
   puts("PASS manual native font-picker selection; imported bytes exactly match "
        "PointyFixture.ttc.");
 }
+static void hidden_popup_spacing(bool tooltip) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  create_settings(1, true);
+  pp_ui_focus(settings->backend, "save"); hidden_settle();
+  PPUIBackend *ui = settings->backend;
+  fprintf(stderr, "Tooltip height=%.1f, text height=%.1f\n", ui->tooltip_bounds.h, ui->utility_font->handle.height);
+  capture("regression-tooltip");
+  CHECK(pp_ui_tooltip_visible(ui, "Save (Ctrl+S)"));
+  if (tooltip) CHECK(ui->tooltip_bounds.h <= ui->utility_font->handle.height + 16);
+  uint64_t item = pp_app_ui(app)->selected_item;
+  char row[48], remove[48];
+  snprintf(row, sizeof(row), "item-%llu", (unsigned long long)item);
+  snprintf(remove, sizeof(remove), "item-delete-%llu", (unsigned long long)item);
+  pp_ui_focus(ui, row); hidden_settle();
+  pp_ui_focus(ui, remove); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  PPRect button;
+  CHECK(pp_ui_control_rect(ui, "remove-confirm", &button));
+  struct nk_window *dialog = nk_window_find(&ui->context, "Confirm changes");
+  CHECK(dialog);
+  double margin = dialog->bounds.y + dialog->bounds.h - button.y - button.h;
+  fprintf(stderr, "Deletion dialog bottom margin=%.1f\n", margin);
+  capture("regression-delete-dialog");
+  CHECK(margin >= 10 && margin <= 18);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+}
+static void hidden_item_controls(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  create_settings(1, true);
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(settings->backend, "font-family-choice", &bounds));
+  CHECK(pp_ui_control_rect(settings->backend, "item-label", &bounds));
+  CHECK(!pp_ui_control_rect(settings->backend, "full-item-label", &bounds));
+  uint64_t item = pp_app_ui(app)->selected_item;
+  PPItemSnapshot *before = pp_project_snapshot(pp_app_project(app), item);
+  uint64_t content = pp_item_snapshot_content_id(before);
+  pp_ui_focus(settings->backend, "item-label"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("Presentation hand"); hidden_settle();
+  const PPItem *edited = pp_project_item(pp_app_project(app), item);
+  CHECK(edited->label && !strcmp(edited->label, "Presentation hand"));
+  char *label = pp_ui_item_label(settings->backend->body_font, edited);
+  CHECK(label && !strcmp(label, "Presentation hand")); free(label);
+  PPItemSnapshot *after = pp_project_snapshot(pp_app_project(app), item);
+  CHECK(pp_item_snapshot_content_id(after) == content);
+  pp_item_snapshot_release(before); pp_item_snapshot_release(after);
+  int font = -1;
+  for (int i = 1; i < settings->font_count; i++)
+    if (!strcmp(settings->font_options[i], "Arial")) font = i;
+  CHECK(font > 0);
+  pp_ui_focus(settings->backend, "font-family-choice"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->backend->popup_id);
+  hidden_key(PP_KEY_HOME, 0); pp_settings_draw(settings);
+  for (int i = 0; i < font; i++) { hidden_key(PP_KEY_DOWN, 0); pp_settings_draw(settings); }
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(!settings->backend->popup_id);
+  edited = pp_project_item(pp_app_project(app), item);
+  CHECK(!strcmp(edited->text_style.requested_family, "Arial"));
+  CHECK(!strcmp(edited->label, "Presentation hand"));
+  capture("regression-item-controls");
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+}
 int main(int argc, char **argv) {
   manual_font = argc == 2 && !strcmp(argv[1], "--manual-font");
   dialog_diagnostic = argc == 2 && !strcmp(argv[1], "--dialog-diagnostic");
@@ -3551,7 +3596,8 @@ int main(int argc, char **argv) {
          !strcmp(argv[1], "--items-only") || !strcmp(argv[1], "--editor-only") ||
          !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
          !strcmp(argv[1], "--font-disclosure-only") ||
-         !strcmp(argv[1], "--labels-only") || !strcmp(argv[1], "--chrome-only")));
+         !strcmp(argv[1], "--labels-only") || !strcmp(argv[1], "--chrome-only") ||
+         !strcmp(argv[1], "--popup-spacing-only") || !strcmp(argv[1], "--delete-spacing-only") || !strcmp(argv[1], "--item-controls-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -3559,6 +3605,12 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--popup-spacing-only"))
+    hidden_popup_spacing(true);
+  else if (!strcmp(argv[1], "--delete-spacing-only"))
+    hidden_popup_spacing(false);
+  else if (!strcmp(argv[1], "--item-controls-only"))
+    hidden_item_controls();
   else if (!strcmp(argv[1], "--chrome-only")) {
     hidden_chrome_diagnostics();
     hidden_settings_chrome();

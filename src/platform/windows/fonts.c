@@ -10,6 +10,44 @@
 #define PP_FONT_PATH 32768
 #define PP_FONT_BYTES ((size_t)256 * 1024 * 1024)
 
+typedef struct FontFamilies { PPBlob blob; bool failed; } FontFamilies;
+static int CALLBACK collect_family(const LOGFONTW *font, const TEXTMETRICW *metrics,
+                                  DWORD type, LPARAM userdata) {
+    (void)metrics; (void)type;
+    FontFamilies *families = (FontFamilies *)userdata;
+    if (font->lfFaceName[0] == L'@') return 1;
+    char name[LF_FACESIZE * 4];
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, font->lfFaceName, -1, name, sizeof(name), NULL, NULL);
+    if (!bytes) return 1;
+    for (size_t offset = 0; offset < families->blob.size;) {
+        const char *previous = (const char *)families->blob.data + offset;
+        if (!strcmp(previous, name)) return 1;
+        offset += strlen(previous) + 1;
+    }
+    uint8_t *grown = realloc(families->blob.data, families->blob.size + (size_t)bytes);
+    if (!grown) { families->failed = true; return 0; }
+    families->blob.data = grown;
+    memcpy(grown + families->blob.size, name, (size_t)bytes);
+    families->blob.size += (size_t)bytes;
+    return 1;
+}
+bool pp_platform_font_families(PPBlob *out, PPError *error) {
+    if (!out || out->data || out->size) return false;
+    FontFamilies families = {0};
+    HDC dc = CreateCompatibleDC(NULL);
+    if (!dc) return false;
+    LOGFONTW query = {0}; query.lfCharSet = DEFAULT_CHARSET;
+    EnumFontFamiliesExW(dc, &query, collect_family, (LPARAM)&families, 0);
+    DeleteDC(dc);
+    if (families.failed) {
+        free(families.blob.data);
+        if (error) *error = (PPError){PP_ERROR_MEMORY, "Cannot list installed fonts"};
+        return false;
+    }
+    *out = families.blob;
+    return true;
+}
+
 static bool font_error(PPError *error, int code, const char *message) {
     if (error) {
         error->code = code;

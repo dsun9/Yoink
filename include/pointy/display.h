@@ -26,6 +26,7 @@ typedef struct PPAnchorRuntime {
     size_t count;
     bool enabled[PP_ANCHOR_COUNT], configured, failed;
     double activation_dip, preview_dip[PP_ANCHOR_COUNT], easing_seconds;
+    PPVec2 preview_size[PP_ANCHOR_COUNT]; /* Rotated item extents in DIP. */
     bool layout_configured;
 } PPAnchorRuntime;
 PPRect pp_anchor_bounds(const PPDisplay *display, PPAnchor anchor, double size_dip);

@@ -39,6 +39,14 @@ void pp_anchors_update(PPAnchorRuntime *r,const PPDisplay *d,size_t count,PPVec2
         PPAnchorReveal *e=r->entries+i;
         e->target=pp_anchor_bounds(d+i/8,e->anchor,r->layout_configured?r->activation_dip:16);
         e->preview=pp_anchor_preview_bounds(d+i/8,e->anchor,r->layout_configured?r->preview_dip[e->anchor]:96);
+        PPVec2 size=r->preview_size[e->anchor];
+        if(size.x>0 && size.y>0) {
+            const PPDisplay *display=d+i/8;
+            double w=fmin(display->bounds.w,size.x*display->desktop_units_per_dip);
+            double h=fmin(display->bounds.h,size.y*display->desktop_units_per_dip);
+            e->preview=(PPRect){display->bounds.x+(display->bounds.w-w)*positions[e->anchor][0]*.5,
+                display->bounds.y+(display->bounds.h-h)*positions[e->anchor][1]*.5,w,h};
+        }
         if(!r->enabled[e->anchor]) {e->revealed=e->leaving=e->held=false;e->opacity=0;continue;}
         if(e->held||contains(e->target,pointer)||(e->revealed&&contains(e->preview,pointer))) {e->revealed=true;e->leaving=false;e->opacity=.35;}
         else if(e->revealed) {

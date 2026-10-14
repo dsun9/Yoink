@@ -24,6 +24,7 @@ static void compare_projects(PPProject *a, PPProject *b) {
             const PPItem *p = pp_project_item(a, x->item_ids[j]),
                          *q = pp_project_item(b, y->item_ids[j]);
             CHECK(p->kind == q->kind && p->angle_deg == q->angle_deg && p->opacity == q->opacity);
+            CHECK(!strcmp(p->label ? p->label : "", q->label ? q->label : ""));
             if (p->kind == PP_ITEM_TEXT) {
                 CHECK(!strcmp(p->text, q->text));
                 CHECK(!strcmp(p->text_style.requested_family, q->text_style.requested_family));
@@ -85,6 +86,7 @@ static void test_portable_round_trip(void) {
     noto = read_bytes(source_path);
     PPItem image = {0}, text = {0};
     image.kind = PP_ITEM_IMAGE;
+    image.label = "Diagram";
     image.image_longest_dip = 75;
     image.opacity = .7;
     image.angle_deg = 20;
@@ -96,6 +98,7 @@ static void test_portable_round_trip(void) {
                           &image.image_asset, &error));
     pp_blob_destroy(&image_bytes);
     text.kind = PP_ITEM_TEXT;
+    text.label = "Presenter hand";
     text.text = "A\xf0\x9f\x91\x89";
     text.opacity = 1;
     text.text_style.font_size_dip = 48;
