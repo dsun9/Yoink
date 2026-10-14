@@ -294,6 +294,11 @@ static void replace_field(const char *id, const wchar_t *text) {
   click_control(id);
   chord(VK_CONTROL, 'A');
   type(text);
+  if (!strcmp(id, "item-size") || !strcmp(id, "item-angle") ||
+      !strcmp(id, "item-opacity") || !strcmp(id, "text-color") ||
+      !strcmp(id, "font-face") || !strcmp(id, "activation") ||
+      !strcmp(id, "rotation") || !strcmp(id, "resize") || !strcmp(id, "easing"))
+    key(VK_RETURN);
   pump(40);
 }
 static void native_pointer(POINT point, DWORD button) {
@@ -1446,12 +1451,12 @@ static void hidden_color_validation(void) {
   memcpy(before, pp_project_item(pp_app_project(app), id)->text_style.color, 4);
   pp_ui_focus(settings->backend, "text-color"); pump(30);
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("#-1FFFF"); pp_settings_draw(settings);
+  hidden_text("#-1FFFF"); hidden_key(PP_KEY_ENTER, 0); pp_settings_draw(settings);
   CHECK(settings->editor.appearance_error[0]);
   CHECK(!memcmp(before, pp_project_item(pp_app_project(app), id)->text_style.color, 4));
   CHECK(!strcmp(settings->editor.color, "#-1FFFF"));
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("#aB19Ef"); pp_settings_draw(settings);
+  hidden_text("#aB19Ef"); hidden_key(PP_KEY_ENTER, 0); pp_settings_draw(settings);
   CHECK(!pp_settings_invalid(settings));
   const uint8_t *color = pp_project_item(pp_app_project(app), id)->text_style.color;
   CHECK(color[0] == 0xab && color[1] == 0x19 && color[2] == 0xef);
@@ -1689,8 +1694,8 @@ static void hidden_navigation_guards(void) {
   hidden_key(PP_KEY_ENTER, 0); pp_settings_draw(settings);
   CHECK(settings->backend->popup_id);
   hidden_click("tab-interaction"); pp_settings_draw(settings);
-  CHECK(pp_ui_control_rect(settings->backend, "item-text", &bounds));
-  hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
+  CHECK(!settings->backend->popup_id && settings->page == PP_SETTINGS_INTERACTION);
+  CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
   hidden_click("new"); pp_settings_draw(settings);
   CHECK(pp_app_ui(app)->transition_pending);
   hidden_key(PP_KEY_TAB, 0); pp_settings_draw(settings);
@@ -1705,7 +1710,7 @@ static void hidden_navigation_guards(void) {
   CHECK(pp_ui_control_rect(settings->backend, "activation", &bounds));
   pp_settings_destroy(settings); settings = NULL;
   pp_app_destroy(app); app = NULL;
-  puts("PASS composition, chooser, dropdown and modal guard Settings navigation.");
+  puts("PASS composition, chooser and modal guard navigation; dropdown dismisses on page change.");
 }
 static void hidden_responsive_pages(void) {
   PPAppOptions options = {"", false};
@@ -1739,7 +1744,7 @@ static void hidden_responsive_pages(void) {
       CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
       CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 90);
       hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-      hidden_text("0"); pump(30);
+      hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); pump(30);
       hidden_settle();
       CHECK(pp_ui_control_rect(settings->backend, "item-size", &bounds));
       CHECK(bounds.y >= tabs.y + tabs.h && bounds.y + bounds.h < settings->backend->height - 135);
@@ -1772,7 +1777,7 @@ static void hidden_corrected_draft_selection(void) {
   CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800)); hidden_settle();
   pp_ui_focus(settings->backend, "item-size"); hidden_settle();
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("0"); hidden_settle();
+  hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
   CHECK(pp_settings_invalid(settings));
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
   char row[48]; snprintf(row, sizeof(row), "item-%llu", (unsigned long long)other);
@@ -1810,7 +1815,7 @@ static void hidden_corrected_draft_mutations(void) {
     if (action == 2 || action == 3) hidden_hover(other_row);
     pp_ui_focus(settings->backend, "item-size"); hidden_settle();
     hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-    hidden_text("0"); hidden_settle();
+    hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
     CHECK(pp_settings_invalid(settings));
     hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
     controlled_dialog = true;
@@ -1859,7 +1864,7 @@ static void hidden_corrected_draft_save(void) {
     uint64_t item = pp_app_ui(app)->selected_item;
     pp_ui_focus(settings->backend, field); hidden_settle();
     hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-    hidden_text("0"); hidden_settle();
+    hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
     CHECK(pp_settings_invalid(settings));
     CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_RENAME_PROJECT,
         .name = "Edited while invalid"}, &error));
@@ -1928,7 +1933,7 @@ static void hidden_chrome_diagnostics(void) {
                             (int)(640 * scales[density]), (int)(480 * scales[density])));
     pp_ui_focus(settings->backend, "item-size"); hidden_settle();
     hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-    hidden_text("0"); hidden_settle();
+    hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
     CHECK(settings->editor.appearance_error[0]);
     pp_ui_focus(settings->backend, "project-name"); hidden_settle();
     hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
@@ -2470,7 +2475,8 @@ static void hidden_font_disclosure_batch_case(bool invalid, int activation) {
   pp_ui_focus(settings->backend, "font-face"); hidden_settle();
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
   hidden_text(invalid ? "120" : "1");
-  if (activation == 1) hidden_click("font-details");
+  if (activation == 0) hidden_key(PP_KEY_ENTER, 0);
+  else if (activation == 1) hidden_click("font-details");
   else if (activation == 2) {
     hidden_key(PP_KEY_TAB, PP_MOD_SHIFT);
     hidden_key(PP_KEY_ENTER, 0);
@@ -2560,7 +2566,7 @@ static void hidden_font_disclosure_batch_case(bool invalid, int activation) {
   /* A later edit reaches only the explicitly focused visible field. */
   pp_ui_focus(settings->backend, "item-angle"); hidden_settle();
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("23"); hidden_settle();
+  hidden_text("23"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
   CHECK(pp_project_item(pp_app_project(app), id)->angle_deg == 23);
   CHECK(!strcmp(settings->editor.face, "1") && !strcmp(settings->editor.size, "96"));
   CHECK(!strcmp(settings->editor.color, "#203547") && !strcmp(settings->editor.opacity, "65"));
@@ -2614,7 +2620,16 @@ static void hidden_font_disclosure_guards(void) {
         hidden_key(PP_KEY_ENTER, 0);
       } else {
         /* Modal registries contain only confirmation controls. Send the
-         * physical location of the underlying disclosure through real events. */
+         * physical location of the underlying disclosure through real events.
+         * The short face dropdown covers this location, so it must receive
+         * the click without toggling the disclosure beneath it. */
+        if (guard == 1) {
+          struct nk_rect popup = settings->backend->popup_bounds;
+          CHECK(details.x + details.w / 2 >= popup.x &&
+                details.x + details.w / 2 < popup.x + popup.w &&
+                details.y + details.h / 2 >= popup.y &&
+                details.y + details.h / 2 < popup.y + popup.h);
+        }
         PPPlatformEvent pointer = {.kind = PP_EVENT_POINTER_MOVE,
             .window_id = pp_settings_window_id(settings), .button = PP_BUTTON_LEFT,
             .window_point = {(details.x + details.w / 2) * settings->backend->window_scale,
@@ -2624,6 +2639,10 @@ static void hidden_font_disclosure_guards(void) {
         pointer.kind = PP_EVENT_BUTTON_UP; pp_settings_event(settings, &pointer);
       }
       hidden_settle();
+      if (guard == 1 && !keyboard) {
+        CHECK(!settings->backend->popup_id);
+        CHECK(pp_ui_focused(settings->backend, "font-face-choice"));
+      }
       CHECK(settings->editor.font_details_open);
       CHECK(!strcmp(settings->editor.face, "0"));
       CHECK(!settings->editor.font_error[0] && !settings->editor.appearance_error[0] &&
@@ -2645,7 +2664,7 @@ static void hidden_font_disclosure_guards(void) {
   pp_settings_destroy(settings); settings = NULL;
   pp_app_destroy(app); app = NULL;
   CHECK(pp_platform_remove_file(package, &error)); package[0] = 0;
-  puts("PASS pointer and keyboard disclosure activation obey composition, popup, unsaved/remove modal and file chooser guards.");
+  puts("PASS disclosure obeys composition, modal and chooser guards; dropdown option clicks do not reach the disclosure beneath it.");
 }
 static void hidden_editor_font_feedback(void) {
   PPAppOptions options = {"", false};
@@ -2690,7 +2709,7 @@ static void hidden_editor_error_recovery(void) {
   double accepted_size = pp_project_item(pp_app_project(app), id)->text_style.font_size_dip;
   pp_ui_focus(settings->backend, "item-size"); hidden_settle();
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("0"); hidden_settle();
+  hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
   CHECK(pp_settings_invalid(settings) && !strcmp(settings->editor.size, "0"));
   CHECK(pp_project_item(pp_app_project(app), id)->text_style.font_size_dip == accepted_size);
   CHECK(!pp_app_dirty(app));
@@ -2766,7 +2785,7 @@ static void hidden_editor_responsive(void) {
       if (size == 0) CHECK(size_bounds.y == color_bounds.y);
       else CHECK(color_bounds.y >= size_bounds.y + size_bounds.h);
       hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-      hidden_text("0"); hidden_settle();
+      hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
       CHECK(pp_settings_invalid(settings) && !strcmp(settings->editor.size, "0"));
       CHECK(pp_ui_control_rect(settings->backend, "item-size", &size_bounds));
       CHECK(pp_ui_control_rect(settings->backend, "tab-items", &tabs));
@@ -3031,7 +3050,7 @@ static void hidden_reorder_drafts_and_roundtrip(void) {
   hidden_click("tab-interaction"); hidden_settle();
   pp_ui_focus(settings->backend, "activation"); hidden_settle();
   hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
-  hidden_text("0"); hidden_settle();
+  hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
   CHECK(settings->interaction_error[0]);
   hidden_click("tab-items"); hidden_settle();
   pp_ui_focus(settings->backend, b); hidden_settle();
@@ -3519,6 +3538,157 @@ static void manual_font_smoke(void) {
   puts("PASS manual native font-picker selection; imported bytes exactly match "
        "PointyFixture.ttc.");
 }
+static void hidden_dropdown_behavior(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  const float scales[] = {1, 1.5f, 2};
+  for (int density = 0; density < 3; density++) {
+    create_settings(scales[density], true);
+    PPUIBackend *ui = settings->backend;
+    PPRect bounds;
+    CHECK(pp_ui_control_rect(ui, "item-label", &bounds));
+    pp_ui_focus(ui, "font-family-choice"); hidden_settle();
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    CHECK(ui->popup_id);
+    char name[80];
+    snprintf(name, sizeof(name), "dropdown-open-%d", (int)(scales[density] * 100));
+    capture(name);
+    for (size_t i = 0; i < ui->control_count; i++)
+      if (!strcmp(ui->controls[i].label, "item-label") ||
+          !strcmp(ui->controls[i].label, "Save")) {
+        CHECK(ui->controls[i].enabled);
+      }
+    CHECK(pp_ui_control_rect(ui, "item-label", &bounds));
+    CHECK(pp_ui_control_rect(ui, "save", &bounds));
+    CHECK(pp_ui_control_rect(ui, "font-family-choice", &bounds));
+    hidden_key(PP_KEY_ESCAPE, 0); hidden_settle();
+    CHECK(!ui->popup_id && pp_ui_focused(ui, "font-family-choice"));
+    hidden_click("font-family-choice"); hidden_settle();
+    CHECK(ui->popup_id);
+    hidden_click("font-family-choice"); hidden_settle();
+    CHECK(!ui->popup_id);
+    hidden_click("font-family-choice"); hidden_settle();
+    CHECK(ui->popup_id);
+    hidden_click("project-name"); hidden_settle();
+    CHECK(!ui->popup_id && pp_ui_focused(ui, "project-name"));
+    pp_ui_focus(ui, "font-family-choice"); hidden_settle();
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    CHECK(ui->popup_id);
+    hidden_key(PP_KEY_TAB, 0); hidden_settle();
+    CHECK(!ui->popup_id && pp_ui_focused(ui, "import-font"));
+    hidden_click("font-family-choice"); hidden_settle();
+    CHECK(ui->popup_id);
+    hidden_key(PP_KEY_END, 0); hidden_settle();
+    CHECK(ui->popup_index == settings->font_count - 1);
+    hidden_key(PP_KEY_HOME, 0); hidden_settle();
+    CHECK(ui->popup_index == 0);
+    /* Pointer selection must use the option layer even when it covers fields. */
+    hidden_click("font-family-choice-option-2"); hidden_settle();
+    CHECK(!ui->popup_id && pp_ui_focused(ui, "font-family-choice"));
+    CHECK(!strcmp(pp_project_item(pp_app_project(app), pp_app_ui(app)->selected_item)
+                      ->text_style.requested_family, settings->font_options[2]));
+    pp_ui_focus(ui, "font-family-choice"); hidden_settle();
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    hidden_key(PP_KEY_TAB, PP_MOD_SHIFT); hidden_settle();
+    CHECK(!ui->popup_id && pp_ui_focused(ui, "item-text"));
+    pp_ui_focus(ui, "font-family-choice"); hidden_settle();
+    hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+    PPPlatformEvent lost = {.kind = PP_EVENT_FOCUS_LOST,
+        .window_id = pp_settings_window_id(settings)};
+    pp_settings_event(settings, &lost); hidden_settle();
+    CHECK(!ui->popup_id);
+    controlled_dialog = true;
+    hidden_click("import-font"); hidden_settle();
+    CHECK(settings->dialog_pending);
+    snprintf(name, sizeof(name), "disabled-controls-%d", (int)(scales[density] * 100));
+    capture(name);
+    pp_ui_focus(ui, "item-label");
+    hidden_text("Do not edit disabled fields"); hidden_settle();
+    CHECK(!settings->editor.label[0]);
+    finish_controlled_dialog(NULL); hidden_settle();
+    controlled_dialog = false;
+    pp_settings_destroy(settings); settings = NULL;
+  }
+  pp_app_destroy(app); app = NULL;
+  puts("PASS dropdown preserves enabled controls, toggles, and dismisses into the clicked field.");
+}
+static void hidden_field_commit(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1200)); hidden_settle();
+  PPUIBackend *ui = settings->backend;
+  uint64_t item = pp_app_ui(app)->selected_item;
+  double original = pp_project_item(pp_app_project(app), item)->text_style.font_size_dip;
+  pp_ui_focus(ui, "item-size"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("1"); hidden_settle();
+  CHECK(!strcmp(settings->editor.size, "1"));
+  CHECK(pp_ui_focused(ui, "item-size"));
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == original);
+  hidden_text("2"); hidden_settle();
+  CHECK(!strcmp(settings->editor.size, "12"));
+  CHECK(pp_ui_focused(ui, "item-size"));
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == original);
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == 12);
+  CHECK(pp_ui_focused(ui, "item-size"));
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("240"); hidden_settle();
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == 12);
+  hidden_key(PP_KEY_TAB, 0); hidden_settle();
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == 240);
+  pp_ui_focus(ui, "item-size"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("-"); hidden_settle();
+  CHECK(!settings->editor.appearance_error[0]);
+  CHECK(pp_ui_focused(ui, "item-size"));
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->editor.appearance_error[0]);
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == 240);
+  CHECK(pp_ui_focused(ui, "item-size"));
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("144"); hidden_settle();
+  hidden_click("item-opacity"); hidden_settle();
+  CHECK(!settings->editor.appearance_error[0]);
+  CHECK(pp_project_item(pp_app_project(app), item)->text_style.font_size_dip == 144);
+  CHECK(pp_ui_focused(ui, "item-opacity"));
+  hidden_click("tab-interaction"); hidden_settle();
+  double activation = pp_project_settings(pp_app_project(app))->activation_dip;
+  pp_ui_focus(ui, "activation"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("42"); hidden_settle();
+  CHECK(pp_project_settings(pp_app_project(app))->activation_dip == activation);
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_project_settings(pp_app_project(app))->activation_dip == 42);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("24"); hidden_settle();
+  PPPlatformEvent lost = {.kind = PP_EVENT_FOCUS_LOST,
+      .window_id = pp_settings_window_id(settings)};
+  pp_settings_event(settings, &lost); hidden_settle();
+  CHECK(pp_project_settings(pp_app_project(app))->activation_dip == 24);
+  hidden_click("tab-items"); hidden_settle();
+  uint64_t original_item = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_TEXT,
+      .anchor = pp_app_ui(app)->anchor}, &error));
+  uint64_t other_item = pp_app_ui(app)->selected_item;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SELECT_ITEM,
+      .item_id = original_item}, &error)); hidden_settle();
+  pp_ui_focus(ui, "item-size"); hidden_settle();
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("0"); hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(settings->editor.appearance_error[0]);
+  hidden_key(PP_KEY_A, PP_MOD_CONTROL); pp_settings_draw(settings);
+  hidden_text("180"); hidden_settle();
+  CHECK(settings->editor.appearance_error[0]);
+  char other_row[48];
+  snprintf(other_row, sizeof(other_row), "item-%llu", (unsigned long long)other_item);
+  hidden_click(other_row); hidden_settle();
+  CHECK(pp_app_ui(app)->selected_item == other_item);
+  CHECK(pp_project_item(pp_app_project(app), original_item)->text_style.font_size_dip == 180);
+  capture("numeric-field-commit");
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS numeric drafts preserve focus and apply only on Enter or blur, with validation at commit.");
+}
 static void hidden_popup_spacing(bool tooltip) {
   CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
   create_settings(1, true);
@@ -3597,7 +3767,7 @@ int main(int argc, char **argv) {
          !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
          !strcmp(argv[1], "--font-disclosure-only") ||
          !strcmp(argv[1], "--labels-only") || !strcmp(argv[1], "--chrome-only") ||
-         !strcmp(argv[1], "--popup-spacing-only") || !strcmp(argv[1], "--delete-spacing-only") || !strcmp(argv[1], "--item-controls-only")));
+         !strcmp(argv[1], "--field-commit-only") || !strcmp(argv[1], "--dropdown-only") || !strcmp(argv[1], "--popup-spacing-only") || !strcmp(argv[1], "--delete-spacing-only") || !strcmp(argv[1], "--item-controls-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -3605,6 +3775,10 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--field-commit-only"))
+    hidden_field_commit();
+  else if (!strcmp(argv[1], "--dropdown-only"))
+    hidden_dropdown_behavior();
   else if (!strcmp(argv[1], "--popup-spacing-only"))
     hidden_popup_spacing(true);
   else if (!strcmp(argv[1], "--delete-spacing-only"))

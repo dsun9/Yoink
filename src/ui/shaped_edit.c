@@ -279,9 +279,11 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   struct nk_rect allocated;
   nk_widget(&allocated, &ui->context);
   struct nk_command_buffer *canvas = nk_window_get_canvas(&ui->context);
-  nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius, pp_ui_theme.field);
+  nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius,
+               enabled ? pp_ui_theme.field : pp_ui_theme.disabled_field);
   nk_stroke_rect(canvas, bounds, pp_ui_theme.control_radius, 1,
-                 focused ? pp_ui_theme.accent : pp_ui_theme.border);
+                 !enabled ? pp_ui_theme.disabled_border
+                 : focused ? pp_ui_theme.accent : pp_ui_theme.border);
   size_t marked_first, marked_last, display_caret;
   bool changed = false;
   bool reveal = false;
@@ -406,7 +408,8 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
                   y + (float)row->y - (float)(row->origin_px.y / v->density),
                   (float)(row->frame.width / v->density),
                   (float)(row->frame.height / v->density)),
-          &image, nk_rgba(255, 255, 255, 255));
+          &image, enabled ? nk_rgba(255, 255, 255, 255)
+                          : nk_rgba(255, 255, 255, 128));
     }
   if (e->state.composing)
     range(canvas, v, e->state.replace_first,

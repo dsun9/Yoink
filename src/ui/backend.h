@@ -8,11 +8,12 @@ typedef struct PPUIControl {
   uint64_t id;
   struct nk_rect bounds;
   char label[96];
-  bool enabled, edit;
+  bool enabled, edit, in_popup;
 } PPUIControl;
 typedef struct PPUITheme {
   struct nk_color canvas, surface, ink, muted, accent, danger;
   struct nk_color field, border, selection, accent_hover, accent_pressed;
+  struct nk_color disabled_field, disabled_border, disabled_ink;
   float compact, control, panel, control_radius, panel_radius;
   float body_size, heading_size, utility_size, row_height;
 } PPUITheme;
@@ -44,13 +45,17 @@ struct PPUIBackend {
   float scale, window_scale, width, height;
   bool input_started, failed, composing, visible, keyboard_focus, activate,
       escape;
+  bool edit_blurred;
   PPKey navigation;
   unsigned modifiers;
   int tab_direction;
   uint64_t focus_id, restore_focus;
+  uint64_t edit_owner;
   PPUIControl *controls;
   size_t control_count, control_capacity;
   uint64_t popup_id;
+  uint64_t dismissed_popup;
+  struct nk_rect popup_bounds;
   int popup_index;
   bool in_popup;
   bool modal, last_modal;

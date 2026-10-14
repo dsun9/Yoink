@@ -130,6 +130,14 @@ void pp_item_editor_validate(PPSettings *settings) {
   PPItemEditor *editor = &settings->editor;
   if (!editor->changed || settings->backend->composing)
     return;
+  PPUIBackend *ui = settings->backend;
+  bool numeric_focus = pp_ui_focused(ui, "item-size") ||
+      pp_ui_focused(ui, "item-angle") || pp_ui_focused(ui, "item-opacity") ||
+      pp_ui_focused(ui, "text-color") || pp_ui_focused(ui, "font-face");
+  if (numeric_focus && ui->focus_id == ui->edit_owner &&
+      !ui->edit_blurred && ui->navigation != PP_KEY_ENTER &&
+      settings->pending_action == PP_PROJECT_ACTION_NONE)
+    return;
   editor->changed = false;
   double size, angle, opacity, face;
   editor->appearance_error[0] = editor->content_error[0] =
@@ -384,10 +392,9 @@ static void font_choice(PPSettings *settings, bool *changed) {
 void pp_item_editor(PPSettings *settings) {
   PPUIBackend *ui = settings->backend;
   PPItemEditor *editor = &settings->editor;
-  /* An outside click may cancel composition or dismiss a popup while drawing
-   * earlier controls. That same click must not also change this disclosure. */
+  /* Composition and dialogs retain ownership of the editor's input. */
   bool disclosure_enabled = !settings->dialog_pending && !ui->composing &&
-                            !ui->popup_id && !ui->modal;
+                            !ui->modal;
   pp_item_editor_sync(settings);
   pp_ui_heading(ui, "Selected item");
   if (!editor->preview) {
@@ -488,7 +495,7 @@ void pp_item_editor(PPSettings *settings) {
                 sizeof(editor->angle), "Opacity (%)", "item-opacity",
                 editor->opacity, sizeof(editor->opacity), &changed);
   editor->changed = editor->changed || changed;
-  pp_ui_secondary(ui, "Valid edits apply to future pulls.");
+  pp_ui_secondary(ui, "Press Enter or leave a field to apply appearance changes.");
 }
 void pp_item_editor_destroy(PPSettings *settings) {
   pp_ui_shaped_destroy(settings->backend);

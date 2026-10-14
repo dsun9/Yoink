@@ -13,6 +13,9 @@ colors:
   accentHover: "#1E6AAA"
   accentPressed: "#18578F"
   danger: "#A42B34"
+  disabledField: "#EDF1F6"
+  disabledBorder: "#E2E8EF"
+  disabledInk: "#86919F"
 typography:
   heading:
     fontFamily: "Segoe UI Semibold, sans-serif"
@@ -96,6 +99,16 @@ design now includes these requirements:
   do not move when actions appear. The current default retains a visible star
   indicator. The only persistent list actions are Add text and Add image.
 - Dropdowns draw a proper downward chevron inside the trigger.
+- Dropdowns use an anchored, scrollable option list with a checkmark on the
+  selected option. Opening a dropdown preserves the surrounding controls'
+  enabled state and styling. Escape cancels, Tab leaves the dropdown, and an
+  outside click dismisses it and acts on the clicked control.
+- Disabled controls use an opaque pale fill, a soft border and muted text or
+  icons. Do not multiply the brightness of the entire control to disable it.
+- Numeric and appearance fields retain drafts while typing. Enter or leaving
+  the field validates and applies the value. Intermediate input does not update
+  the item preview or change the field's layout. Save and other explicit
+  project actions validate pending drafts before proceeding.
 - The replacement drawer has a labeled Close button. Whole-row choices retain
   integrated thumbnails, keyboard focus, immediate selection and dismissal.
 - Wide Settings windows pair the position/list section with the item editor.

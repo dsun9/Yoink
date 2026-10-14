@@ -8,6 +8,9 @@ const PPUITheme pp_ui_theme = {
     .field = {245, 248, 252, 255}, .border = {223, 231, 240, 255},
     .selection = {231, 242, 252, 255}, .accent_hover = {30, 106, 170, 255},
     .accent_pressed = {24, 87, 143, 255},
+    .disabled_field = {237, 241, 246, 255},
+    .disabled_border = {226, 232, 239, 255},
+    .disabled_ink = {134, 145, 159, 255},
     .compact = 6, .control = 12, .panel = 18,
     .control_radius = 8, .panel_radius = 12,
     .body_size = 16, .heading_size = 21, .utility_size = 14, .row_height = 36};

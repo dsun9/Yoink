@@ -332,10 +332,13 @@ bool pp_ui_backend_reset(PPUIBackend *ui, PPError *error) {
   nk_buffer_clear(&ui->elements);
   ui->input_started=ui->failed=ui->composing=ui->keyboard_focus=false;
   ui->activate=ui->escape=ui->in_popup=ui->modal=ui->last_modal=false;
+  ui->edit_blurred=false;
   ui->pointer_target=ui->text_target=false;
   ui->navigation=PP_KEY_NONE;
   ui->modifiers=0; ui->tab_direction=0;
-  ui->focus_id=ui->restore_focus=ui->popup_id=0;
+  ui->focus_id=ui->restore_focus=ui->popup_id=ui->dismissed_popup=0;
+  ui->edit_owner=0;
+  ui->popup_bounds=nk_rect(0,0,0,0);
   ui->popup_index=0; ui->control_count=0; ui->capture_path=NULL;
   /* A retained native window keeps its ID across opens. Discard queued input
    * and focus notifications belonging to the previous drawer session only. */
@@ -400,9 +403,51 @@ static void key(PPUIBackend *ui, PPKey code, bool down, bool control) {
     break;
   }
 }
+static void dismiss_choice(PPUIBackend *ui) {
+  ui->dismissed_popup = ui->popup_id;
+  ui->focus_id = ui->popup_id;
+  ui->popup_id = 0;
+  /* Release the combo before traversing controls so an outside click can
+   * focus or activate its target, including controls drawn before the choice. */
+  for (struct nk_window *win = ui->context.begin; win; win = win->next)
+    if (win->popup.active && win->popup.type == NK_PANEL_COMBO) {
+      win->popup.active = win->popup.buf.active = 0;
+      win->flags &= ~(nk_flags)NK_WINDOW_ROM;
+      if (win->popup.win) win->popup.win->flags |= NK_WINDOW_HIDDEN;
+    }
+}
 void pp_ui_backend_event(PPUIBackend *ui, const PPPlatformEvent *event) {
   if (!ui || !event || event->window_id != pp_ui_backend_window_id(ui))
     return;
+  if (event->kind == PP_EVENT_FOCUS_LOST)
+    ui->edit_blurred = true;
+  if (event->kind == PP_EVENT_BUTTON_DOWN && event->button == PP_BUTTON_LEFT)
+    for (size_t i = 0; i < ui->control_count; i++) {
+      const PPUIControl *field = &ui->controls[i];
+      if (field->edit && field->id == ui->focus_id) {
+        float x = (float)(event->window_point.x / ui->window_scale);
+        float y = (float)(event->window_point.y / ui->window_scale);
+        struct nk_rect b = field->bounds;
+        if (!(x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h))
+          ui->edit_blurred = true;
+        break;
+      }
+    }
+  if (ui->popup_id) {
+    struct nk_rect b = ui->popup_bounds;
+    float x = (float)(event->window_point.x / ui->window_scale);
+    float y = (float)(event->window_point.y / ui->window_scale);
+    bool outside = event->kind == PP_EVENT_BUTTON_DOWN &&
+        event->button == PP_BUTTON_LEFT &&
+        !(x >= b.x && x < b.x + b.w && y >= b.y && y < b.y + b.h);
+    bool keyboard = event->kind == PP_EVENT_KEY_DOWN && !ui->composing &&
+        (event->key == PP_KEY_ESCAPE || event->key == PP_KEY_TAB);
+    if (outside || keyboard || event->kind == PP_EVENT_FOCUS_LOST ||
+        event->kind == PP_EVENT_CANCEL) {
+      dismiss_choice(ui);
+      if (keyboard && event->key == PP_KEY_ESCAPE) return;
+    }
+  }
   if (pp_ui_shaped_event(ui,event)) return;
   if (!ui->input_started) {
     nk_input_begin(&ui->context);
@@ -487,7 +532,8 @@ bool pp_ui_begin(PPUIBackend *ui, PPError *error) {
     for (size_t n = 0; n < ui->control_count; n++) {
       current = (current + ui->tab_direction + (int)ui->control_count) %
                 (int)ui->control_count;
-      if (ui->controls[current].enabled) {
+      if (ui->controls[current].enabled &&
+          ui->controls[current].in_popup == (ui->popup_id != 0)) {
         ui->focus_id = ui->controls[current].id;
         break;
       }
@@ -641,6 +687,8 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error) {
   nk_buffer_clear(&ui->elements);
   glDisable(GL_SCISSOR_TEST);
   ui->activate = ui->escape = false;
+  ui->dismissed_popup = 0;
+  ui->edit_blurred = false;
   ui->navigation = PP_KEY_NONE;
   if (ui->visible && SDL_GetMouseFocus()==ui->window)
     SDL_SetCursor(ui->text_target      ? ui->text_cursor
@@ -688,13 +736,15 @@ static bool control(PPUIBackend *ui, const char *id, const char *label,
   if (ui->control_count < ui->control_capacity) {
     PPUIControl *record = &ui->controls[ui->control_count++];
     *record = (PPUIControl){
-        .id = hash, .bounds = *bounds, .enabled = enabled, .edit = edit};
+        .id = hash, .bounds = *bounds, .enabled = enabled, .edit = edit,
+        .in_popup = ui->in_popup};
     snprintf(record->label, sizeof(record->label), "%s", label);
   }
   /* Scrolled controls retain full layout bounds even behind the toolbar.
    * Match Nuklear's active-panel eligibility and require the pointer itself
    * inside the clip, so a hidden control cannot steal a modal's origin focus. */
-  if (enabled &&
+  bool accepts_input = !ui->popup_id || ui->in_popup;
+  if (enabled && accepts_input &&
       !(ui->context.current->layout->flags & NK_WINDOW_NO_INPUT) &&
       nk_widget_is_hovered(&ui->context) &&
       nk_input_is_mouse_hovering_rect(&ui->context.input,
@@ -705,7 +755,7 @@ static bool control(PPUIBackend *ui, const char *id, const char *label,
         nk_input_is_mouse_released(&ui->context.input, NK_BUTTON_LEFT))
       ui->focus_id = hash;
   }
-  bool focused = enabled && ui->focus_id == hash;
+  bool focused = enabled && accepts_input && ui->focus_id == hash;
   return focused;
 }
 void pp_ui_reveal_focus(PPUIBackend *ui, const char *group,
@@ -745,24 +795,23 @@ static void focus_outline(PPUIBackend *ui, struct nk_rect bounds,
 }
 static bool button(PPUIBackend *ui, const char *id, const char *label,
                     bool enabled, bool outline) {
-  enabled = enabled && (!ui->popup_id || ui->in_popup);
   struct nk_rect bounds;
   bool focused = control(ui, id, label, enabled, false, &bounds);
   struct nk_style_button saved = ui->context.style.button;
+  nk_bool disabled = ui->context.current->widgets_disabled;
   if (!enabled) {
-    ui->context.style.button.normal = nk_style_item_color(pp_ui_theme.field);
-    ui->context.style.button.text_normal = pp_ui_theme.muted;
-    nk_widget_disable_begin(&ui->context);
-    ui->context.style.button.color_factor_background = 1;
-    ui->context.style.button.color_factor_text = 1;
+    ui->context.style.button.normal = nk_style_item_color(pp_ui_theme.disabled_field);
+    ui->context.style.button.border_color = pp_ui_theme.disabled_border;
+    ui->context.style.button.text_normal = pp_ui_theme.disabled_ink;
+    ui->context.current->widgets_disabled = nk_true;
   }
   bool clicked = nk_button_label(&ui->context, label) != 0;
-  if (!enabled)
-    nk_widget_disable_end(&ui->context);
+  ui->context.current->widgets_disabled = disabled;
   ui->context.style.button = saved;
   if (outline)
     focus_outline(ui, bounds, focused);
-  bool activated = enabled && (clicked || (focused && ui->activate));
+  bool activated = enabled && (!ui->popup_id || ui->in_popup) &&
+                   (clicked || (focused && ui->activate));
   if (activated)
     ui->activate = false;
   return activated;
@@ -802,7 +851,7 @@ bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
   struct nk_context *ctx = &ui->context;
   struct nk_rect bounds = nk_widget_bounds(ctx);
   struct nk_style_button saved = ctx->style.button;
-  enabled = enabled && !ui->composing && (!ui->popup_id || ui->in_popup);
+  enabled = enabled && !ui->composing;
   if (primary && enabled) {
     ctx->style.button.normal = nk_style_item_color(pp_ui_theme.accent);
     ctx->style.button.hover = nk_style_item_color(pp_ui_theme.accent_hover);
@@ -814,7 +863,7 @@ bool pp_ui_icon_button(PPUIBackend *ui, const char *id, PPUIIcon icon,
              sizeof(ui->controls[0].label), "%s", action);
   bool pressed = enabled && nk_input_is_mouse_down(&ctx->input, NK_BUTTON_LEFT) &&
                  nk_input_is_mouse_hovering_rect(&ctx->input, bounds);
-  struct nk_color color = !enabled ? pp_ui_theme.muted
+  struct nk_color color = !enabled ? pp_ui_theme.disabled_ink
                            : primary || pressed ? pp_ui_theme.surface
                                                 : pp_ui_theme.ink;
   pp_ui_draw_icon(nk_window_get_canvas(ctx), bounds, icon, color);
@@ -830,7 +879,7 @@ bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
                   bool *value, bool enabled) {
   struct nk_context *ctx = &ui->context;
   struct nk_rect bounds = nk_widget_bounds(ctx);
-  enabled = enabled && !ui->composing && (!ui->popup_id || ui->in_popup);
+  enabled = enabled && !ui->composing;
   bool activated = pp_ui_button(ui, id, "", enabled);
   if (ui->control_count)
     snprintf(ui->controls[ui->control_count - 1].label,
@@ -839,15 +888,17 @@ bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
   struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
   struct nk_rect track = nk_rect(bounds.x + bounds.w - 54,
                                  bounds.y + (bounds.h - 24) / 2, 46, 24);
-  nk_fill_rect(canvas, track, 12, *value && enabled ? pp_ui_theme.accent
-                                                 : pp_ui_theme.muted);
+  struct nk_color track_color = !enabled ? pp_ui_theme.disabled_border
+      : *value ? pp_ui_theme.accent : pp_ui_theme.muted;
+  nk_fill_rect(canvas, track, 12, track_color);
   nk_fill_circle(canvas, nk_rect(track.x + (*value ? 24 : 3), track.y + 3, 18, 18),
                  pp_ui_theme.surface);
   struct nk_rect text = nk_rect(bounds.x + 8,
                                 bounds.y + (bounds.h - ctx->style.font->height) / 2,
                                 fmaxf(0, bounds.w - 66), ctx->style.font->height);
   nk_draw_text(canvas, text, label, (int)strlen(label), ctx->style.font,
-               pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
+               enabled ? pp_ui_theme.field : pp_ui_theme.disabled_field,
+               enabled ? pp_ui_theme.ink : pp_ui_theme.disabled_ink);
   return activated;
 }
 bool pp_ui_select(PPUIBackend *ui, const char *id, const char *label,
@@ -889,12 +940,13 @@ bool pp_ui_tab(PPUIBackend *ui, const char *id, const char *label,
 }
 bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
                 bool multiline, bool enabled) {
-  enabled = enabled && (!ui->popup_id || ui->in_popup);
   struct nk_rect bounds;
   bool focused = control(ui, id, id, enabled, true, &bounds);
   if (!strcmp(id,"item-text")) {
     if (focused) nk_edit_unfocus(&ui->context);
-    return pp_ui_shaped_draw(ui,value,capacity,bounds,focused,enabled);
+    bool changed = pp_ui_shaped_draw(ui,value,capacity,bounds,focused,enabled);
+    if (changed) ui->edit_owner = control_id(id);
+    return changed;
   }
   nk_flags flags = (nk_flags)NK_EDIT_FIELD | NK_EDIT_SELECTABLE |
                    NK_EDIT_CLIPBOARD | NK_EDIT_SIG_ENTER;
@@ -905,8 +957,16 @@ bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
   else if (ui->keyboard_focus && ui->context.current->edit.active &&
            ui->context.current->edit.name == ui->context.current->edit.seq)
     nk_edit_unfocus(&ui->context);
-  if (!enabled)
-    nk_widget_disable_begin(&ui->context);
+  struct nk_style_edit saved = ui->context.style.edit;
+  nk_bool disabled = ui->context.current->widgets_disabled;
+  if (!enabled) {
+    struct nk_style_edit *style = &ui->context.style.edit;
+    style->normal = style->hover = style->active =
+        nk_style_item_color(pp_ui_theme.disabled_field);
+    style->border_color = pp_ui_theme.disabled_border;
+    style->text_normal = style->text_hover = style->text_active = pp_ui_theme.disabled_ink;
+    ui->context.current->widgets_disabled = nk_true;
+  }
   int length = (int)strlen(value);
   /* Nuklear reports active/commit states, not changed. The editor consumes a
    * hash of the bytes so equal edits remain clean at the command boundary. */
@@ -914,15 +974,17 @@ bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
   nk_edit_string(&ui->context, flags, value, &length, capacity - 1,
                  nk_filter_default);
   value[length] = 0;
-  if (!enabled)
-    nk_widget_disable_end(&ui->context);
+  ui->context.current->widgets_disabled = disabled;
+  ui->context.style.edit = saved;
   focus_outline(ui, bounds, focused);
   if (focused) {
     SDL_Rect area = {(int)(bounds.x * ui->window_scale), (int)(bounds.y * ui->window_scale),
                      (int)(bounds.w * ui->window_scale), (int)(bounds.h * ui->window_scale)};
     SDL_SetTextInputArea(ui->window, &area, 0);
   }
-  return enabled && !ui->composing && before != control_id(value);
+  bool changed = enabled && !ui->composing && before != control_id(value);
+  if (changed) ui->edit_owner = control_id(id);
+  return changed;
 }
 bool pp_ui_unicode_notice(const PPUIBackend *ui, const char *text, char *out,
                           size_t capacity) {
@@ -965,6 +1027,10 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
   struct nk_style_button saved = ctx->style.button;
   ctx->style.button.text_alignment = NK_TEXT_LEFT;
   ctx->style.button.padding.x = 12;
+  if (ui->popup_id == hash) {
+    ctx->style.button.normal = nk_style_item_color(pp_ui_theme.selection);
+    ctx->style.button.border_color = pp_ui_theme.accent;
+  }
   /* Draw the trigger through the regular control boundary, then clip its text
    * to the area before the chevron. Long names cannot paint beneath the icon. */
   bool open = pp_ui_button(ui, id, "", enabled);
@@ -984,32 +1050,51 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
   text_bounds.y += (trigger.h - ctx->style.font->height) / 2;
   text_bounds.h = ctx->style.font->height;
   nk_draw_text(canvas, text_bounds, label, (int)strlen(label), ctx->style.font,
-                 pp_ui_theme.field, enabled ? pp_ui_theme.ink : pp_ui_theme.muted);
+                 enabled ? pp_ui_theme.field : pp_ui_theme.disabled_field,
+                 enabled ? pp_ui_theme.ink : pp_ui_theme.disabled_ink);
   nk_push_scissor(canvas, clip);
   struct nk_rect chevron = nk_rect(trigger.x + trigger.w - 30, trigger.y, 24, trigger.h);
   pp_ui_draw_icon(nk_window_get_canvas(ctx), chevron, PP_UI_ICON_CHEVRON_DOWN,
-                  enabled ? pp_ui_theme.muted : pp_ui_theme.border);
-  if (open) {
+                  enabled ? pp_ui_theme.muted : pp_ui_theme.disabled_ink);
+  if (open && ui->dismissed_popup != hash) {
     ui->popup_id = hash;
     ui->popup_index = *selected;
     ui->activate = false;
   }
   if (ui->popup_id != hash)
     return false;
-  /* Nuklear positions a popup relative to the current panel's clipped
-   * content origin, including nested/scrolled groups. */
-  struct nk_rect parent = nk_window_get_content_region(ctx);
-  float height = fminf(220, count * 38.f + 24);
-  float top = trigger.y + trigger.h;
-  if (top + height > ui->height - 12)
-    top = trigger.y - height;
-  struct nk_rect bounds =
-      nk_rect(trigger.x - parent.x, top - parent.y, trigger.w, height);
+  float height = fminf(254, count * 38.f + 12);
+  float below = ui->height - trigger.y - trigger.h - 10;
+  float above = trigger.y - 10;
+  bool upwards = below < height && above > below;
+  height = fminf(height, fmaxf(0, (upwards ? above : below) - 4));
+  float top = upwards ? trigger.y - height - 4 : trigger.y + trigger.h + 4;
+  struct nk_rect bounds = nk_rect(fmaxf(8, fminf(trigger.x, ui->width - trigger.w - 8)),
+                                  top, fminf(trigger.w, ui->width - 16), height);
+  struct nk_window *owner = ctx->current;
+  struct nk_style_window window_style = ctx->style.window;
+  ctx->style.window.fixed_background = nk_style_item_color(pp_ui_theme.surface);
+  ctx->style.window.background = pp_ui_theme.surface;
+  ctx->style.window.rounding = 6;
+  ctx->style.window.combo_padding = nk_vec2(6, 6);
+  ctx->style.window.spacing = nk_vec2(0, 2);
+  /* The native nonblocking combo supplies layering and pointer capture. Its
+   * first frame must not treat the opening trigger click as an outside click. */
+  struct nk_mouse_button opening_click = ctx->input.mouse.buttons[NK_BUTTON_LEFT];
+  if (open) ctx->input.mouse.buttons[NK_BUTTON_LEFT].clicked = 0;
   bool changed = false;
-  if (nk_popup_begin(ctx, NK_POPUP_STATIC, id, NK_WINDOW_BORDER, bounds)) {
+  bool shown = nk_nonblock_begin(ctx, 0, bounds, trigger, NK_PANEL_COMBO) != 0;
+  ctx->input.mouse.buttons[NK_BUTTON_LEFT] = opening_click;
+  if (shown) {
+    owner->popup.type = NK_PANEL_COMBO;
+    owner->popup.name = (nk_hash)hash;
+    ui->popup_bounds = bounds;
     ui->in_popup = true;
     struct nk_rect popup_viewport = nk_window_get_content_region(ctx);
     struct nk_rect focused_option = {0};
+    if (ui->navigation == PP_KEY_UP || ui->navigation == PP_KEY_DOWN ||
+        ui->navigation == PP_KEY_HOME || ui->navigation == PP_KEY_END)
+      ui->keyboard_focus = true;
     if (ui->navigation == PP_KEY_UP)
       ui->popup_index = (ui->popup_index + count - 1) % count;
     if (ui->navigation == PP_KEY_DOWN)
@@ -1028,15 +1113,38 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
       char option_id[100];
       snprintf(option_id, sizeof(option_id), "%s-option-%d", id, i);
       nk_layout_row_dynamic(ctx, pp_ui_theme.row_height, 1);
-      if (ui->keyboard_focus && i == ui->popup_index)
+      if (ui->popup_id && ui->keyboard_focus && i == ui->popup_index)
         ui->focus_id = control_id(option_id);
       if (i == ui->popup_index) focused_option = nk_widget_bounds(ctx);
-      if (pp_ui_select(ui, option_id, options[i], i == *selected, true)) {
+      struct nk_rect row = nk_widget_bounds(ctx);
+      ctx->style.button.border = 0;
+      ctx->style.button.rounding = 4;
+      ctx->style.button.text_alignment = NK_TEXT_LEFT;
+      ctx->style.button.padding.x = 28;
+      ctx->style.button.normal = nk_style_item_color(i == *selected
+          ? pp_ui_theme.selection : pp_ui_theme.surface);
+      ctx->style.button.hover = ctx->style.button.active = nk_style_item_color(pp_ui_theme.selection);
+      ctx->style.button.text_normal = ctx->style.button.text_hover =
+          ctx->style.button.text_active = pp_ui_theme.ink;
+      char option_label[256];
+      snprintf(option_label, sizeof(option_label), "%s", options[i]);
+      pp_ui_fit_label(ctx->style.font, option_label, sizeof(option_label), row.w - 40);
+      bool picked = pp_ui_button(ui, option_id, option_label, true);
+      if (i == *selected) {
+        struct nk_command_buffer *list = nk_window_get_canvas(ctx);
+        float x = row.x + 10, y = row.y + row.h / 2;
+        nk_stroke_line(list, x, y, x + 4, y + 4, 2, pp_ui_theme.accent);
+        nk_stroke_line(list, x + 4, y + 4, x + 12, y - 5, 2, pp_ui_theme.accent);
+      }
+      if (picked) {
         *selected = i;
         changed = true;
         nk_popup_close(ctx);
         ui->popup_id = 0;
         ui->focus_id = hash;
+        /* The option owns this release. Controls drawn after the choice must
+         * not take focus from a click on the list covering them. */
+        ctx->input.mouse.buttons[NK_BUTTON_LEFT].clicked = 0;
       }
     }
     if (ui->keyboard_focus && ui->popup_id) {
@@ -1053,6 +1161,8 @@ bool pp_ui_choice(PPUIBackend *ui, const char *id, const char *const *options,
     ui->popup_id = 0;
     ui->focus_id = hash;
   }
+  ctx->style.button = saved;
+  ctx->style.window = window_style;
   return changed;
 }
 void pp_ui_heading(PPUIBackend *ui, const char *text) {

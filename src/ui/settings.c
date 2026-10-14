@@ -186,11 +186,13 @@ bool pp_settings_invalid(const PPSettings *settings) {
 bool pp_settings_action_enabled(const PPSettings *settings) {
   /* A correction can still belong to the outgoing field when earlier controls
    * draw. Accept its action intent, then decide validity after field traversal.
-   * Without pending field input, invalid drafts keep actions disabled. */
+   * Retained corrections can wait for blur across frames. Validate those
+   * drafts before applying the action; committed errors remain disabled. */
   return !settings->dialog_pending && !settings->remove_confirmation &&
          !pp_app_ui(settings->app)->transition_pending &&
          !settings->backend->composing &&
-         (!pp_settings_invalid(settings) || settings->field_input_pending);
+         (!pp_settings_invalid(settings) || settings->field_input_pending ||
+          settings->editor.changed || settings->interaction_changed);
 }
 void pp_settings_revert(PPSettings *settings) {
   settings->name_error[0] = settings->interaction_error[0] = 0;
@@ -596,6 +598,13 @@ static void interaction(PPSettings *settings) {
   pp_ui_error(ui, settings->interaction_error);
 }
 static void validate_interaction(PPSettings *settings) {
+  PPUIBackend *ui = settings->backend;
+  bool numeric_focus = pp_ui_focused(ui, "activation") || pp_ui_focused(ui, "rotation") ||
+      pp_ui_focused(ui, "resize") || pp_ui_focused(ui, "easing");
+  if (numeric_focus && ui->focus_id == ui->edit_owner &&
+      !ui->edit_blurred && ui->navigation != PP_KEY_ENTER &&
+      settings->pending_action == PP_PROJECT_ACTION_NONE)
+    return;
   if (settings->interaction_changed && !settings->backend->composing) {
     settings->interaction_changed = false;
     PPProjectSettings values;
