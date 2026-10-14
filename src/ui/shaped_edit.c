@@ -281,7 +281,7 @@ bool pp_ui_shaped_draw(PPUIBackend *ui, char *draft, int capacity,
   struct nk_command_buffer *canvas = nk_window_get_canvas(&ui->context);
   nk_fill_rect(canvas, bounds, pp_ui_theme.control_radius,
                enabled ? pp_ui_theme.field : pp_ui_theme.disabled_field);
-  nk_stroke_rect(canvas, bounds, pp_ui_theme.control_radius, 1,
+  pp_ui_control_border(canvas, bounds, pp_ui_theme.control_radius, 1,
                  !enabled ? pp_ui_theme.disabled_border
                  : focused ? pp_ui_theme.accent : pp_ui_theme.border);
   size_t marked_first, marked_last, display_caret;

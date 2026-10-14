@@ -202,6 +202,10 @@ app-owned modal within settings; underlying controls are inert while it is open.
 
 ## Shapes
 
+Control strokes and focus outlines sit inside their bounds so content clips
+retain the full antialiased border. The switch track and thumb use analytic
+capsule/circle coverage with a one-physical-pixel edge transition at every scale.
+
 Eight-unit control corners and twelve-unit panel corners; 1-unit borders and a
 2-unit visible keyboard focus outline. Labels and status wrap instead of
 requiring hover to discover full information.

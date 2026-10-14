@@ -18,6 +18,9 @@ typedef struct PPUITheme {
   float body_size, heading_size, utility_size, row_height;
 } PPUITheme;
 extern const PPUITheme pp_ui_theme;
+/* Keep the stroke and its antialiasing fringe inside the widget's clip. */
+void pp_ui_control_border(struct nk_command_buffer *canvas, struct nk_rect bounds,
+                          float rounding, float thickness, struct nk_color color);
 typedef enum PPUIIcon {
   PP_UI_ICON_NEW, PP_UI_ICON_OPEN, PP_UI_ICON_SAVE, PP_UI_ICON_SAVE_AS,
   PP_UI_ICON_CHEVRON_DOWN, PP_UI_ICON_MONITOR, PP_UI_ICON_STAR, PP_UI_ICON_STAR_OUTLINE,

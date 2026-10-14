@@ -14,6 +14,10 @@ typedef struct PPUIVertex {
   float position[2], uv[2];
   nk_byte color[4];
 } PPUIVertex;
+/* Reserved image commands select analytic switch shapes instead of textures. */
+enum { SWITCH_TRACK_IMAGE = -1, SWITCH_THUMB_IMAGE = -2 };
+static const struct nk_vec2 switch_track_size = {46, 24};
+static const struct nk_vec2 switch_thumb_size = {18, 18};
 typedef struct PPUITextureCharge {struct PPUITextureCharge *next;GLuint texture;size_t bytes;} PPUITextureCharge;
 void pp_ui_premultiplied_texture(PPUIBackend *ui,GLuint previous,GLuint current) {
   for(size_t i=0;i<16;i++)if(previous&&ui->premultiplied_textures[i]==previous)ui->premultiplied_textures[i]=0;
@@ -211,8 +215,12 @@ bool pp_ui_backend_create(PPUIBackend **out, const PPUIWindowOptions *options,
       "main(){UV=TexCoord;Tint=Color;gl_Position=Projection*vec4(Position,0,1);"
       "}";
   const char *fragment =
-      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; uniform int Premultiplied; out "
-      "vec4 color; void main(){vec4 sample_color=texture(Texture,UV);"
+      "#version 150\n in vec2 UV; in vec4 Tint; uniform sampler2D Texture; uniform int Premultiplied; "
+      "uniform vec2 CapsuleSize; out vec4 color; void main(){"
+      "if(CapsuleSize.x>0){vec2 p=(UV-.5)*CapsuleSize;float r=CapsuleSize.y*.5-1;"
+      "float d=length(vec2(max(abs(p.x)-(CapsuleSize.x-CapsuleSize.y)*.5,0),p.y))-r;"
+      "float aa=max(fwidth(d),.0001);float a=1-smoothstep(-aa*.5,aa*.5,d);"
+      "color=vec4(Tint.rgb,Tint.a*a);return;}vec4 sample_color=texture(Texture,UV);"
       "if(Premultiplied!=0){if(sample_color.a>0)sample_color.rgb/=sample_color.a;else sample_color.rgb=vec3(0);}"
       "color=Tint*sample_color;}";
   ui->program = pp_gl_program(&ui->gl, vertex, fragment, error);
@@ -664,10 +672,16 @@ bool pp_ui_end(PPUIBackend *ui, PPError *error) {
   const struct nk_draw_command *command;
   size_t offset = 0;
   float sx = width / ui->width, sy = height / ui->height;
+  GLint capsule_location = ui->gl.GetUniformLocation(ui->program, "CapsuleSize");
   nk_draw_foreach(command, &ui->context, &ui->commands) {
     if (!command->elem_count)
       continue;
-    glBindTexture(GL_TEXTURE_2D, (GLuint)command->texture.id);
+    bool track = command->texture.id == SWITCH_TRACK_IMAGE;
+    bool thumb = command->texture.id == SWITCH_THUMB_IMAGE;
+    struct nk_vec2 shape = track ? switch_track_size : switch_thumb_size;
+    ui->gl.Uniform2f(capsule_location, track || thumb ? shape.x + 2 : 0,
+                    track || thumb ? shape.y + 2 : 0);
+    glBindTexture(GL_TEXTURE_2D, track || thumb ? 0 : (GLuint)command->texture.id);
     bool premultiplied=false;
     for(size_t i=0;i<16;i++)if(ui->premultiplied_textures[i]&&(GLuint)command->texture.id==ui->premultiplied_textures[i])premultiplied=true;
     ui->gl.Uniform1i(ui->gl.GetUniformLocation(ui->program,"Premultiplied"),premultiplied?1:0);
@@ -787,11 +801,20 @@ void pp_ui_focus(PPUIBackend *ui, const char *id) {
   ui->focus_id = control_id(id);
   ui->keyboard_focus = true;
 }
+void pp_ui_control_border(struct nk_command_buffer *canvas, struct nk_rect bounds,
+                          float rounding, float thickness, struct nk_color color) {
+  if (thickness <= 0) return;
+  float inset = ceilf(thickness * .5f + .5f);
+  if (bounds.w <= 2 * inset || bounds.h <= 2 * inset) return;
+  nk_stroke_rect(canvas, nk_rect(bounds.x + inset, bounds.y + inset,
+      bounds.w - 2 * inset, bounds.h - 2 * inset),
+      fmaxf(0, rounding - inset), thickness, color);
+}
 static void focus_outline(PPUIBackend *ui, struct nk_rect bounds,
                           bool focused) {
   if (focused && ui->keyboard_focus)
-    nk_stroke_rect(nk_window_get_canvas(&ui->context), bounds,
-                   pp_ui_theme.control_radius, 2, pp_ui_theme.accent);
+    pp_ui_control_border(nk_window_get_canvas(&ui->context), bounds,
+                          pp_ui_theme.control_radius, 2, pp_ui_theme.accent);
 }
 static bool button(PPUIBackend *ui, const char *id, const char *label,
                     bool enabled, bool outline) {
@@ -805,7 +828,12 @@ static bool button(PPUIBackend *ui, const char *id, const char *label,
     ui->context.style.button.text_normal = pp_ui_theme.disabled_ink;
     ui->context.current->widgets_disabled = nk_true;
   }
+  float border = ui->context.style.button.border;
+  struct nk_color border_color = ui->context.style.button.border_color;
+  ui->context.style.button.border = 0;
   bool clicked = nk_button_label(&ui->context, label) != 0;
+  pp_ui_control_border(nk_window_get_canvas(&ui->context), bounds,
+                        saved.rounding, border, border_color);
   ui->context.current->widgets_disabled = disabled;
   ui->context.style.button = saved;
   if (outline)
@@ -890,9 +918,15 @@ bool pp_ui_switch(PPUIBackend *ui, const char *id, const char *label,
                                  bounds.y + (bounds.h - 24) / 2, 46, 24);
   struct nk_color track_color = !enabled ? pp_ui_theme.disabled_border
       : *value ? pp_ui_theme.accent : pp_ui_theme.muted;
-  nk_fill_rect(canvas, track, 12, track_color);
-  nk_fill_circle(canvas, nk_rect(track.x + (*value ? 24 : 3), track.y + 3, 18, 18),
-                 pp_ui_theme.surface);
+  /* One logical pixel of quad padding contains the one physical pixel AA
+   * fringe. Shader derivatives keep the edge crisp at fractional densities. */
+  struct nk_image track_image = nk_image_id(SWITCH_TRACK_IMAGE);
+  nk_draw_image(canvas, nk_rect(track.x - 1, track.y - 1, 48, 26),
+                 &track_image, track_color);
+  struct nk_image thumb_image = nk_image_id(SWITCH_THUMB_IMAGE);
+  nk_draw_image(canvas, nk_rect(track.x + (*value ? 24 : 3) - 1,
+                               track.y + 2, 20, 20),
+                 &thumb_image, pp_ui_theme.surface);
   struct nk_rect text = nk_rect(bounds.x + 8,
                                 bounds.y + (bounds.h - ctx->style.font->height) / 2,
                                 fmaxf(0, bounds.w - 66), ctx->style.font->height);
@@ -971,11 +1005,17 @@ bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,
   /* Nuklear reports active/commit states, not changed. The editor consumes a
    * hash of the bytes so equal edits remain clean at the command boundary. */
   uint64_t before = control_id(value);
+  struct nk_color border_color = ui->context.style.edit.border_color;
+  ui->context.style.edit.border = 0;
+  ui->context.style.edit.padding.x += saved.border;
+  ui->context.style.edit.padding.y += saved.border;
   nk_edit_string(&ui->context, flags, value, &length, capacity - 1,
                  nk_filter_default);
   value[length] = 0;
   ui->context.current->widgets_disabled = disabled;
   ui->context.style.edit = saved;
+  pp_ui_control_border(nk_window_get_canvas(&ui->context), bounds,
+                        saved.rounding, saved.border, border_color);
   focus_outline(ui, bounds, focused);
   if (focused) {
     SDL_Rect area = {(int)(bounds.x * ui->window_scale), (int)(bounds.y * ui->window_scale),
