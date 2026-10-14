@@ -59,7 +59,6 @@ static void quality(uint64_t id,const PPTextResult *source) {
   PPPose expected_pose=pp_scene_get(scene,id)->pose;
   double drawable_per_desktop=density/display->desktop_units_per_dip,scale=expected_pose.longest_dip*density/fmax(layout.x,layout.y);
   double angle=expected_pose.angle_deg*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
-  SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(sprite->surface));int width,height;CHECK(SDL_GetWindowSizeInPixels(window,&width,&height));
   HDC screen=GetDC(NULL);CHECK(screen);HDC dc=CreateCompatibleDC(screen);CHECK(dc);
   int capture_width=rectangle.right-rectangle.left,capture_height=rectangle.bottom-rectangle.top;
   BITMAPINFO info={0};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=capture_width;info.bmiHeader.biHeight=-capture_height;
@@ -70,7 +69,8 @@ static void quality(uint64_t id,const PPTextResult *source) {
   COLORREF background=GetSysColor(COLOR_WINDOW);int backdrop[3]={GetRValue(background),GetGValue(background),GetBValue(background)};
   int step_x=SDL_max(7,(rectangle.right-rectangle.left+23)/24),step_y=SDL_max(7,(rectangle.bottom-rectangle.top+23)/24);
   for(int py=rectangle.top+2;py<rectangle.bottom-2;py+=step_y) for(int px=rectangle.left+2;px<rectangle.right-2;px+=step_x) {
-    double dx=(px-rectangle.left+.5)*drawable_per_desktop-width*.5,dy=(py-rectangle.top+.5)*drawable_per_desktop-height*.5;
+    double dx=(px+.5-expected_pose.center.x)*drawable_per_desktop;
+    double dy=(py+.5-expected_pose.center.y)*drawable_per_desktop;
     double local_x=(c*dx+s*dy)/scale+layout.x*.5,local_y=(-s*dx+c*dy)/scale+layout.y*.5;
     double sx=(local_x-source_rect.x)/source_rect.w*source->frame.width,sy=(local_y-source_rect.y)/source_rect.h*source->frame.height;
     double rgba[4]={0};

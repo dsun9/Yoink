@@ -27,4 +27,8 @@ bool pp_grab_empty(const PPGrabArea *area);
 bool pp_grab_project(const PPGrabArea *area,PPVec2 layout,PPRect source_rect,
     double longest,double angle,double desktop_density,int width,int height,
     PPGrabRegion *out,PPError *error);
+/* Same projection around an explicit center in native window coordinates. */
+bool pp_grab_project_at(const PPGrabArea *area,PPVec2 layout,PPRect source_rect,
+    double longest,double angle,double desktop_density,int width,int height,
+    PPVec2 center,PPGrabRegion *out,PPError *error);
 #endif

@@ -85,7 +85,7 @@ size_t pp_grab_bytes(const PPGrabArea *a){return a?sizeof(*a)+a->count*sizeof(Gr
 size_t pp_grab_nodes(const PPGrabArea *a){return a?a->count:0;}
 bool pp_grab_empty(const PPGrabArea *a){return !a||a->nodes[0].state==0;}
 
-typedef struct Projection { Grid grid; PPVec2 layout; PPRect rect; double scale,c,s; int w,h; const PPGrabArea *area; } Projection;
+typedef struct Projection { Grid grid; PPVec2 layout,center; PPRect rect; double scale,c,s; int w,h; const PPGrabArea *area; } Projection;
 static void polygon(Projection *p,int x,int y,int side) {
     /* Half a source texel covers linear filtering; two native pixels cover
      * integer region rounding and float shader differences. */
@@ -100,8 +100,8 @@ static void polygon(Projection *p,int x,int y,int side) {
     PPVec2 v[4];int order[4]={0,1,3,2};double low=PP_GRAB_AXIS,high=0;
     for(int i=0;i<4;i++) {
         double sx=order[i]&1?r:l,sy=order[i]&2?b:t;
-        v[i]=(PPVec2){((p->c*sx-p->s*sy)*p->scale+p->w*.5)*PP_GRAB_AXIS/p->w,
-                      ((p->s*sx+p->c*sy)*p->scale+p->h*.5)*PP_GRAB_AXIS/p->h};
+        v[i]=(PPVec2){((p->c*sx-p->s*sy)*p->scale+p->center.x)*PP_GRAB_AXIS/p->w,
+                      ((p->s*sx+p->c*sy)*p->scale+p->center.y)*PP_GRAB_AXIS/p->h};
         low=fmin(low,v[i].y);high=fmax(high,v[i].y);
     }
     int first=(int)fmax(0,floor(low)),last=(int)fmin(PP_GRAB_AXIS,ceil(high));
@@ -141,14 +141,18 @@ static bool rectangles(const Grid *g,int axis,int w,int h,PPGrabRegion *out) {
     return true;
 }
 bool pp_grab_project(const PPGrabArea *a,PPVec2 layout,PPRect rect,double longest,double angle,double density,int w,int h,PPGrabRegion *out,PPError *e) {
+    return pp_grab_project_at(a,layout,rect,longest,angle,density,w,h,(PPVec2){w*.5,h*.5},out,e);
+}
+bool pp_grab_project_at(const PPGrabArea *a,PPVec2 layout,PPRect rect,double longest,double angle,double density,int w,int h,PPVec2 center,PPGrabRegion *out,PPError *e) {
     if(!a||!out||!isfinite(layout.x)||!isfinite(layout.y)||layout.x<=0||layout.y<=0||
        !isfinite(rect.x)||!isfinite(rect.y)||!isfinite(rect.w)||!isfinite(rect.h)||rect.w<=0||rect.h<=0||
-       !isfinite(longest)||longest<=0||!isfinite(angle)||!isfinite(density)||density<=0||w<1||h<1||w>16384||h>16384)
+       !isfinite(longest)||longest<=0||!isfinite(angle)||!isfinite(density)||density<=0||w<1||h<1||w>16384||h>16384||
+       !isfinite(center.x)||!isfinite(center.y)||center.x<0||center.x>w||center.y<0||center.y>h)
         return fail(e,PP_ERROR_ARGUMENT,"Invalid grab projection");
     /* Bound tiny easing updates at the input approximation's precision. The
      * angular envelope above contains every visual pose in the bucket. */
     double radians=round(fmod(angle,360)/PP_GRAB_ANGLE_STEP)*PP_GRAB_ANGLE_STEP*3.14159265358979323846/180;
-    Projection p={0};p.area=a;p.layout=layout;p.rect=rect;p.scale=longest*density/fmax(layout.x,layout.y);p.c=cos(radians);p.s=sin(radians);p.w=w;p.h=h;
+    Projection p={0};p.area=a;p.layout=layout;p.center=center;p.rect=rect;p.scale=longest*density/fmax(layout.x,layout.y);p.c=cos(radians);p.s=sin(radians);p.w=w;p.h=h;
     if(!isfinite(p.scale)||p.scale<=0||!isfinite(2/p.scale))return fail(e,PP_ERROR_ARGUMENT,"Invalid grab scale");
     visit(&p,0,0,0,PP_GRAB_AXIS);
     for(int axis=PP_GRAB_OUTPUT_AXIS;axis>=32;axis/=2)if(rectangles(&p.grid,axis,w,h,out))return true;

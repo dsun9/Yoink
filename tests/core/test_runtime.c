@@ -156,6 +156,10 @@ bool pp_renderer_draw(PPRenderer *r,PPVec2 layout,double size,double angle,doubl
 bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect source_rect,double size,double angle,double opacity,double density,PPError *error) {
   (void)source_rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
 }
+bool pp_renderer_draw_source_at(PPRenderer *r,PPVec2 layout,PPRect source_rect,double size,double angle,double opacity,double density,PPVec2 center,PPError *error) {
+  (void)center;return pp_renderer_draw_source(r,layout,source_rect,size,angle,opacity,density,error);
+}
+bool pp_renderer_supports_fractional_placement(void) {return false;}
 bool pp_renderer_transform(PPRenderer *r, const PPFrame *source, double longest,
                            double angle, double opacity, double scale,
                            PPFrame *out, PPError *error) {

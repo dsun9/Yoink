@@ -5,7 +5,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef struct PPRenderUniforms {GLint image,alpha,destination_size,source_size,rotation,scale,source_offset,opacity;} PPRenderUniforms;
+typedef struct PPRenderUniforms {GLint image,alpha,destination_size,destination_center,source_size,rotation,scale,source_offset,opacity;} PPRenderUniforms;
+/* Artwork stays within 8192 pixels; native placement may add one transparent
+ * pixel per axis to preserve its fractional center after window rounding. */
+enum { NATIVE_OUTPUT_LIMIT = 8193 };
 struct PPRenderer {
     SDL_Window *window; SDL_GLContext context; PPGL gl;
     GLuint program, vao, fbo, textures[4];
@@ -48,30 +51,30 @@ static const char *vertex_shader =
 static const char *fragment_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform sampler2D alpha;"
-    "uniform vec2 destination_size; uniform vec2 source_size;"
+    "uniform vec2 destination_size; uniform vec2 destination_center; uniform vec2 source_size;"
     "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
     "out vec4 color; out vec4 coverage;"
     "void main() {"
-    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
+    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_center;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) { color=vec4(0); coverage=vec4(0); }"
     "else { color=texture(image,uv)*opacity; coverage=vec4(texture(alpha,uv).r,0,0,1); } }";
 static const char *color_shader =
     "#version 150\n"
-    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 source_size;"
+    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 destination_center; uniform vec2 source_size;"
     "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
     "out vec4 color; void main() {"
-    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_size*0.5;"
+    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_center;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "color=(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1))))?vec4(0):texture(image,uv)*opacity; }";
 static const char *preview_shader =
     "#version 150\n"
-    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 source_size;"
+    "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 destination_center; uniform vec2 source_size;"
     "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
     "out vec4 color; void main() {"
-    "vec2 d=gl_FragCoord.xy-destination_size*0.5;"
+    "vec2 d=gl_FragCoord.xy-destination_center;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "if(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1)))) color=vec4(0);"
@@ -166,7 +169,7 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
     renderer->program = pp_gl_program(gl, vertex_shader, window_id?color_shader:fragment_shader, error);
     if (!renderer->program) { pp_renderer_destroy(renderer); return false; }
 #define CACHE(name) renderer->uniforms.name=gl->GetUniformLocation(renderer->program,#name)
-    CACHE(image);CACHE(alpha);CACHE(destination_size);CACHE(source_size);
+    CACHE(image);CACHE(alpha);CACHE(destination_size);CACHE(destination_center);CACHE(source_size);
     CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
 #undef CACHE
     gl->GenVertexArrays(1, &renderer->vao); gl->GenFramebuffers(1, &renderer->fbo);
@@ -313,10 +316,11 @@ bool pp_renderer_draw(PPRenderer *renderer,PPVec2 layout,double longest,
 }
 static void source_mapping(PPGL *gl,const PPRenderUniforms *u,int width,int height,
     int source_width,int source_height,PPVec2 layout,PPRect rect,double longest,
-    double angle,double opacity,double density) {
+    double angle,double opacity,double density,PPVec2 center) {
     double radians=fmod(angle,360)*3.14159265358979323846/180;
     double scale=longest*density/fmax(layout.x,layout.y);
     gl->Uniform1i(u->image,0);gl->Uniform2f(u->destination_size,(float)width,(float)height);
+    gl->Uniform2f(u->destination_center,(float)center.x,(float)center.y);
     gl->Uniform2f(u->source_size,(float)source_width,(float)source_height);
     gl->Uniform2f(u->rotation,(float)cos(radians),(float)sin(radians));
     gl->Uniform2f(u->scale,(float)(scale*rect.w/source_width),(float)(scale*rect.h/source_height));
@@ -351,10 +355,10 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
         glBindTexture(GL_TEXTURE_2D,r->textures[0]);gl->UseProgram(r->preview_program);
         PPRenderUniforms uniforms;
 #define LOCATION(name) uniforms.name=gl->GetUniformLocation(r->preview_program,#name)
-        LOCATION(image);LOCATION(destination_size);LOCATION(source_size);LOCATION(rotation);
+        LOCATION(image);LOCATION(destination_size);LOCATION(destination_center);LOCATION(source_size);LOCATION(rotation);
         LOCATION(scale);LOCATION(source_offset);LOCATION(opacity);
 #undef LOCATION
-        source_mapping(gl,&uniforms,w,h,source->width,source->height,layout,rect,longest,angle,opacity,density);
+        source_mapping(gl,&uniforms,w,h,source->width,source->height,layout,rect,longest,angle,opacity,density,(PPVec2){w*.5,h*.5});
         glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glDisable(GL_CULL_FACE);glDisable(GL_DEPTH_TEST);
         glViewport(0,0,w,h);gl->BindVertexArray(r->vao);glDrawArrays(GL_TRIANGLES,0,3);
         GLenum failure=glGetError();
@@ -379,7 +383,7 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
     return ok;
 }
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int width,int height) {
-    if(width<1||height<1||width>8192||height>8192)return 0;
+    if(width<1||height<1||width>NATIVE_OUTPUT_LIMIT||height>NATIVE_OUTPUT_LIMIT)return 0;
     if(r&&r->output_candidate&&r->candidate_width==width&&r->candidate_height==height)return 0;
     return r&&r->output_texture&&r->output_width==width&&r->output_height==height?0:(size_t)width*height*4;
 }
@@ -419,7 +423,7 @@ static bool allocate_output(PPRenderer *r,int w,int h,GLuint *candidate,PPError 
 }
 bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *source,PPSharedTexture *shared,
     uint64_t id,uint64_t revision,int w,int h,PPError *error) {
-    if(!r||r->owns_window||!id||!revision||w<0||h<0||w>8192||h>8192||((w==0)!=(h==0))||r->output_candidate)
+    if(!r||r->owns_window||!id||!revision||w<0||h<0||w>NATIVE_OUTPUT_LIMIT||h>NATIVE_OUTPUT_LIMIT||((w==0)!=(h==0))||r->output_candidate)
         return error_set(error,PP_ERROR_ARGUMENT,"Invalid native preparation");
     bool changed=r->content_id!=id||r->revision!=revision;
     if(changed&&shared&&r->group!=shared->owner)
@@ -474,8 +478,8 @@ bool pp_renderer_refresh(PPRenderer *r,PPError *error) {
     if(!publish_output(r,w,h,error))return false;
     r->metrics.presentation_refreshes++;return true;
 }
-bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
-    double angle_deg,double opacity,double density,PPError *error) {
+static bool draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
+    double angle_deg,double opacity,double density,const PPVec2 *center,PPError *error) {
     if(!renderer || renderer->owns_window || !renderer->content_id || !isfinite(layout.x) || !isfinite(layout.y) ||
         layout.x<=0 || layout.y<=0 || !isfinite(longest) || longest<=0 || !isfinite(angle_deg) ||
         !isfinite(opacity) || opacity<0 || opacity>1 || !isfinite(density) || density<=0)
@@ -484,7 +488,10 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     if(!pp_geometry_source_extent(layout,rect,longest,angle_deg,density,&extent_w,&extent_h))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct transform exceeds drawable limits");
     if(!current(renderer,error)) return false;
-    int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w!=(int)extent_w || h!=(int)extent_h)
+    int w,h;if(!SDL_GetWindowSizeInPixels(renderer->window,&w,&h) || w>NATIVE_OUTPUT_LIMIT || h>NATIVE_OUTPUT_LIMIT ||
+        (center ? (!isfinite(center->x)||!isfinite(center->y)||
+            center->x<extent_w*.5-1e-7||center->y<extent_h*.5-1e-7||
+            center->x>w-extent_w*.5+1e-7||center->y>h-extent_h*.5+1e-7) : (w!=extent_w||h!=extent_h)))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct window drawable does not match canonical transform bounds");
     PPGL *gl=&renderer->gl;GLuint candidate=renderer->output_candidate,output=renderer->output_texture;
     if(candidate&&(renderer->candidate_width!=w||renderer->candidate_height!=h))
@@ -500,7 +507,7 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     gl->ActiveTexture(GL_TEXTURE0);glBindTexture(GL_TEXTURE_2D,renderer->shared?renderer->shared->name:renderer->textures[0]);
     gl->UseProgram(renderer->program);
     source_mapping(gl,&renderer->uniforms,w,h,renderer->source_width,renderer->source_height,
-        layout,rect,longest,angle_deg,opacity,density);
+        layout,rect,longest,angle_deg,opacity,density,center?*center:(PPVec2){w*.5,h*.5});
     glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glViewport(0,0,w,h);
     if(ok) {
         gl->BindVertexArray(renderer->vao);glDrawArrays(GL_TRIANGLES,0,3);
@@ -516,6 +523,15 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     if(candidate){glDeleteTextures(1,&renderer->output_texture);renderer->output_texture=candidate;}
     renderer->output_width=w;renderer->output_height=h;
     renderer->metrics.transform_draws++;return true;
+}
+bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
+    double angle_deg,double opacity,double density,PPError *error) {
+    return draw_source(renderer,layout,rect,longest,angle_deg,opacity,density,NULL,error);
+}
+bool pp_renderer_supports_fractional_placement(void) {return true;}
+bool pp_renderer_draw_source_at(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,
+    double angle_deg,double opacity,double density,PPVec2 center,PPError *error) {
+    return draw_source(renderer,layout,rect,longest,angle_deg,opacity,density,&center,error);
 }
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest_dip,
     double angle_deg, double opacity, double pixels_per_dip, PPFrame *out, PPError *error) {
@@ -550,7 +566,7 @@ static bool transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 l
         renderer->color_program=pp_gl_program(gl,vertex_shader,color_shader,error);
         if(!renderer->color_program){pp_frame_destroy(&frame);free(readback);return false;}
 #define CACHE(name) renderer->color_uniforms.name=gl->GetUniformLocation(renderer->color_program,#name)
-        CACHE(image);CACHE(destination_size);CACHE(source_size);CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
+        CACHE(image);CACHE(destination_size);CACHE(destination_center);CACHE(source_size);CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
 #undef CACHE
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1); glPixelStorei(GL_PACK_ALIGNMENT, 1);
@@ -571,7 +587,7 @@ static bool transform_source(PPRenderer *renderer,const PPFrame *source,PPVec2 l
     gl->UseProgram(coverage?renderer->program:renderer->color_program);
     const PPRenderUniforms *uniforms=coverage?&renderer->uniforms:&renderer->color_uniforms;
     source_mapping(gl,uniforms,frame.width,frame.height,source->width,source->height,
-        layout,rect,longest_dip,angle_deg,opacity,pixels_per_dip);
+        layout,rect,longest_dip,angle_deg,opacity,pixels_per_dip,(PPVec2){frame.width*.5,frame.height*.5});
     if(coverage)gl->Uniform1i(uniforms->alpha,1);
     glDisable(GL_BLEND); glDisable(GL_DITHER); glViewport(0,0,frame.width,frame.height);
     gl->BindVertexArray(renderer->vao); glDrawArrays(GL_TRIANGLES,0,3);

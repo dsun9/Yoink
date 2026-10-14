@@ -121,6 +121,10 @@ bool pp_renderer_draw_source(PPRenderer *r,PPVec2 layout,PPRect rect,double size
     r->surface->artwork_bounds=(PPRect){(c*x-s*y)*scale-w*.5, (s*x+c*y)*scale-h*.5,w,h};
     drawn_source_rect=rect;return pp_renderer_draw(r,layout,size,angle,opacity,density,error);
 }
+bool pp_renderer_draw_source_at(PPRenderer *r,PPVec2 layout,PPRect rect,double size,double angle,double opacity,double density,PPVec2 center,PPError *error) {
+    (void)center;
+    return pp_renderer_draw_source(r,layout,rect,size,angle,opacity,density,error);
+}
 bool pp_renderer_transform(PPRenderer *r,const PPFrame *source,double longest,double angle,double opacity,double scale,PPFrame *out,PPError *error) {
     cpu_transforms++;
     (void)r;(void)opacity;(void)error;
@@ -1596,6 +1600,7 @@ int main(void) {
 }
 /* These boundary mocks have no GL output storage. Native desktop tests cover
  * retained color allocation and publication. */
+bool pp_renderer_supports_fractional_placement(void) {return false;}
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int w,int h){(void)r;(void)w;(void)h;return 0;}
 size_t pp_renderer_output_bytes(const PPRenderer *r){(void)r;return 0;}
 bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *frame,PPSharedTexture *shared,

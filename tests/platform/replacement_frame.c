@@ -20,7 +20,7 @@ static void APIENTRY allocate(GLenum target,GLint level,GLint internal,GLsizei w
   if(reject_source&&width==8&&height==4&&pixels) {
     candidate_source=(GLuint)bound;allocation_error=GL_OUT_OF_MEMORY;return;
   }
-  if(reject_output&&width==144&&height==72&&!pixels) {
+  if(reject_output&&width==145&&height==73&&!pixels) {
     candidate_output=(GLuint)bound;output_rejections++;allocation_error=GL_OUT_OF_MEMORY;return;
   }
   glTexImage2D(target,level,internal,width,height,border,format,type,pixels);

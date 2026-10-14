@@ -20,6 +20,10 @@ static LRESULT CALLBACK procedure(HWND window,UINT message,WPARAM w,LPARAM l) {
     PPSurface *surface=(PPSurface *)GetPropW(window,property);
     if(!surface) return DefWindowProcW(window,message,w,l);
     if(message==WM_MOUSEACTIVATE) return MA_NOACTIVATE;
+    /* SDL's cursor is shared with Settings and the drawer. Select the normal
+     * pointer before SDL handles sprite hover, including a previous UI hand. */
+    if(message==WM_SETCURSOR && LOWORD(l)==HTCLIENT)
+        SDL_SetCursor(SDL_GetDefaultCursor());
     pp_windows_record(surface,window,message,w,l);
     LRESULT result=CallWindowProcW(surface->gl_procedure,window,message,w,l);
     if(message==WM_NCDESTROY) RemovePropW(window,property);

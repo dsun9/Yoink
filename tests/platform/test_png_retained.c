@@ -133,7 +133,7 @@ int main(int argc,char **argv){
   if(output_exhaustion) {
     CHECK(pp_test_replacement_source_allocations()==1&&pp_test_replacement_output_rejections()==1);
     CHECK(pp_test_replacement_candidate_deletions()==2);
-    CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+144*72*4);
+    CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+145*73*4);
   }
   if(source_exhaustion)CHECK(pp_test_replacement_source_allocations()==0&&pp_test_replacement_output_rejections()==0&&pp_test_replacement_candidate_deletions()==1);
   if(output_exhaustion||source_exhaustion) {

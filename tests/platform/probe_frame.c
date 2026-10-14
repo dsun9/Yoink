@@ -113,6 +113,7 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #define pp_renderer_transform_color_source pp_raw_renderer_transform_color_source
 #define pp_renderer_draw pp_raw_renderer_draw
 #define pp_renderer_draw_source pp_raw_renderer_draw_source
+#define pp_renderer_draw_source_at pp_raw_renderer_draw_source_at
 #define pp_renderer_complete pp_raw_renderer_complete
 #include "../../src/render/frame.c"
 #undef pp_renderer_create
@@ -124,6 +125,7 @@ static void APIENTRY probe_texture(GLenum target, GLint level, GLint internal, G
 #undef pp_renderer_transform_color_source
 #undef pp_renderer_draw
 #undef pp_renderer_draw_source
+#undef pp_renderer_draw_source_at
 #undef pp_renderer_complete
 #undef pp_renderer_upload_source
 bool pp_renderer_upload_source(PPRenderer *renderer,const PPFrame *source,uint64_t identity,uint64_t revision,PPError *error) {
@@ -159,6 +161,12 @@ bool pp_renderer_draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,doub
     pp_probe_printf("DIRECT error_policy=%s actual_context_flags=%d debug_context=%s actual_swap_interval=%d interval_query_ok=%d\n",renderer->error_callback?"synchronous-KHR-debug-callback":"glGetError-fallback",flags,renderer->error_callback?"verified":"optional-unavailable",interval,interval_known);
     reported_context=renderer->context;
   }
+  pp_probe_record(PROBE_TRANSFORM,start);return ok;
+}
+bool pp_renderer_draw_source_at(PPRenderer *renderer,PPVec2 layout,PPRect rect,double longest,double angle,double opacity,double density,PPVec2 center,PPError *error) {
+  double start=pp_probe_clock();measured_draw=true;
+  bool ok=pp_raw_renderer_draw_source_at(renderer,layout,rect,longest,angle,opacity,density,center,error);measured_draw=false;
+  if(ok)ok=complete_measurement(renderer,error);else discard_query();
   pp_probe_record(PROBE_TRANSFORM,start);return ok;
 }
 bool pp_renderer_create(PPRenderer **out, PPError *error) {

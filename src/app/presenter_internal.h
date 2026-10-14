@@ -15,8 +15,10 @@ typedef struct PPRetainedPresentation {
   PPVec2 layout;
   PPPose drawn;
   PPRect bounds;
+  PPVec2 destination_center;
   double density, animation_start;
   bool visible, valid, visual_alpha;
+  bool stabilize_center;
   struct PPGifEntry *gif_entry;
   PPRect source_rect;
   PPGrabArea *grab;

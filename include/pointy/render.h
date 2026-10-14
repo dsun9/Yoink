@@ -49,7 +49,8 @@ bool pp_renderer_upload_source(PPRenderer *renderer, const PPFrame *source,
  * Unchanged sources may omit frame/shared. Zero output dimensions skip output.
  * Caller reserves changed private source and candidate output overlap first,
  * then places the native window and draws. output_bytes includes pending output
- * until drawing publishes it or release/destroy discards it. */
+ * until drawing publishes it or release/destroy discards it. Native outputs
+ * allow 8193 pixels per axis for 8192-pixel artwork plus placement margin. */
 bool pp_renderer_prepare_source_output(PPRenderer *renderer,const PPFrame *source,
     PPSharedTexture *shared,uint64_t content_id,uint64_t revision,
     int output_width,int output_height,PPError *error);
@@ -62,6 +63,13 @@ bool pp_renderer_draw(PPRenderer *renderer, PPVec2 layout_size, double longest_d
  * layout aspect and size fixed. Bounds include overhang beyond that layout. */
 bool pp_renderer_draw_source(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
     double longest_dip, double angle_deg, double opacity, double pixels_per_dip, PPError *error);
+/* Native placement keeps a fractional pose center inside an integer window.
+ * destination_center is in drawable pixels from the window's top-left corner.
+ * The drawable must contain the canonical extent around that center. */
+bool pp_renderer_supports_fractional_placement(void);
+bool pp_renderer_draw_source_at(PPRenderer *renderer, PPVec2 layout_size, PPRect source_rect,
+    double longest_dip, double angle_deg, double opacity, double pixels_per_dip,
+    PPVec2 destination_center, PPError *error);
 /* Reserve candidate bytes before drawing, including overlap with output_bytes.
  * A changed extent replaces the old target only after successful publication.
  * A NULL renderer has no accepted output and needs the full candidate extent. */

@@ -89,7 +89,8 @@ static bool newly_exposed(const PPAnchorPresenter *p,PPRect previous,PPRect next
   }
   return false;
 }
-static bool bounds(PPSourcePresentation source,PPPose pose,const PPDisplay *d,PPRect *out,PPError *error) {
+static bool bounds(PPSourcePresentation source,PPPose pose,const PPDisplay *d,bool stabilize,
+    PPRect *out,int *output_w,int *output_h,PPError *error) {
   if(!isfinite(source.layout.x)||!isfinite(source.layout.y)||source.layout.x<=0||source.layout.y<=0 ||
      !isfinite(d->drawable_pixels_per_dip)||d->drawable_pixels_per_dip<=0 ||
      !isfinite(d->desktop_units_per_dip)||d->desktop_units_per_dip<=0)
@@ -98,13 +99,29 @@ static bool bounds(PPSourcePresentation source,PPPose pose,const PPDisplay *d,PP
   if(!pp_geometry_source_extent(source.layout,source.source_rect,pose.longest_dip,
        pose.angle_deg,d->drawable_pixels_per_dip,&w,&h)||w>8192||h>8192)
     return fail(error,PP_ERROR_RESOURCE_LIMIT,"Presented raster exceeds 8192 pixels per axis");
+  if(stabilize) { w++; h++; }
+  *output_w=w;*output_h=h;
   double native=d->desktop_units_per_dip/d->drawable_pixels_per_dip;
-  *out=(PPRect){round(pose.center.x-w*native*.5),round(pose.center.y-h*native*.5),w*native,h*native};return true;
+  double x=pose.center.x-w*native*.5,y=pose.center.y-h*native*.5;
+  /* Resolve native half-pixel ties in one direction, including negative
+   * desktops, so integer translations preserve the local render center. */
+  *out=(PPRect){stabilize?floor(x+.5):round(x),stabilize?floor(y+.5):round(y),w*native,h*native};return true;
 }
 bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPresentation *r,
     PPSourcePresentation source,PPPose pose,const PPDisplay *display,PPError *error) {
+  /* Placement is a stable backend capability, independent of the currently
+   * retained output dimensions or allocation cost. */
+  r->stabilize_center = pp_surface_window_id(surface) != 0 &&
+      pp_renderer_supports_fractional_placement();
   if(!source.source_rect.w && !source.source_rect.h) source.source_rect=(PPRect){0,0,source.layout.x,source.layout.y};
-  PPRect rectangle;if(!bounds(source,pose,display,&rectangle,error)) return false;
+  int output_w,output_h;
+  PPRect rectangle;if(!bounds(source,pose,display,r->stabilize_center,&rectangle,&output_w,&output_h,error)) return false;
+  double native=display->desktop_units_per_dip/display->drawable_pixels_per_dip;
+  PPVec2 center=r->stabilize_center?
+      (PPVec2){(pose.center.x-rectangle.x)/native,(pose.center.y-rectangle.y)/native}:
+      (PPVec2){output_w*.5,output_h*.5};
+  bool center_changed=r->stabilize_center &&
+      (center.x!=r->destination_center.x||center.y!=r->destination_center.y);
   bool changed=source.content_id!=r->content_id || source.source_revision!=r->source_revision;
   const PPFrame *frame=source.frame;
   if(changed && (!frame || frame->width<=0 || frame->height<=0 || frame->width>8192 || frame->height>8192))
@@ -120,9 +137,10 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   shape=interactive&&(grab!=r->grab||!r->valid||!r->visible||pose.longest_dip!=r->drawn.longest_dip||
     pose.angle_deg!=r->drawn.angle_deg||source.layout.x!=r->layout.x||source.layout.y!=r->layout.y||
     memcmp(&source.source_rect,&r->source_rect,sizeof(source.source_rect))||
-    display->desktop_units_per_dip!=r->grab_density||rectangle.w!=r->bounds.w||rectangle.h!=r->bounds.h);
-  if(shape&&!pp_grab_project(grab,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
-      display->desktop_units_per_dip,(int)llround(rectangle.w),(int)llround(rectangle.h),&region,error))goto grab_rejected;
+    display->desktop_units_per_dip!=r->grab_density||rectangle.w!=r->bounds.w||rectangle.h!=r->bounds.h||center_changed);
+  if(shape&&!pp_grab_project_at(grab,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
+      display->desktop_units_per_dip,(int)llround(rectangle.w),(int)llround(rectangle.h),
+      (PPVec2){center.x*native,center.y*native},&region,error))goto grab_rejected;
   region_changed=shape&&(region.count!=r->grab_count||(region.count&&memcmp(region.rects,r->grab_rects,region.count*sizeof(*r->grab_rects))));
   if(region_changed) {
     grab_count=region.count;size_t bytes=grab_count*sizeof(*grab_rects);
@@ -138,11 +156,8 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
     pose.angle_deg!=r->drawn.angle_deg || pose.opacity!=r->drawn.opacity ||
     display->drawable_pixels_per_dip!=r->density || source.layout.x!=r->layout.x || source.layout.y!=r->layout.y ||
     memcmp(&source.source_rect,&r->source_rect,sizeof(source.source_rect)) ||
-    rectangle.w!=r->bounds.w || rectangle.h!=r->bounds.h;
+    rectangle.w!=r->bounds.w || rectangle.h!=r->bounds.h || center_changed;
   bool place=!r->visible || memcmp(&rectangle,&r->bounds,sizeof(rectangle)) || !interactive;
-  int output_w,output_h;
-  if(!pp_geometry_source_extent(source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
-      display->drawable_pixels_per_dip,&output_w,&output_h))goto grab_rejected;
   bool overlap=changed && !source.shared_texture;
   size_t source_candidate=overlap?(size_t)frame->width*frame->height*4:0;
   size_t candidate=interactive&&redraw?pp_renderer_output_candidate_bytes(r->renderer,output_w,output_h):0;
@@ -179,8 +194,8 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   if(!interactive)pp_retained_hide(p,surface,r);
   if(place && !pp_surface_place_gl(surface,rectangle,interactive,error)) goto native_failure;
   if(region_changed&&!pp_surface_set_grab_region(surface,&region,error))goto native_failure;
-  if(interactive && redraw && !pp_renderer_draw_source(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
-      pose.opacity,display->drawable_pixels_per_dip,error)) goto native_failure;
+  if(interactive && redraw && !pp_renderer_draw_source_at(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
+      pose.opacity,display->drawable_pixels_per_dip,center,error)) goto native_failure;
   if(refresh&&!pp_renderer_refresh(r->renderer,error))goto native_failure;
   size_t output_bytes=pp_renderer_output_bytes(r->renderer);
   pp_presenter_gpu_release(p,r->output_bytes-output_bytes);r->output_bytes=output_bytes;
@@ -189,6 +204,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   if(region_changed){pp_assets_release_grab(p->assets,r->grab_count*sizeof(*r->grab_rects));free(r->grab_rects);r->grab_rects=grab_rects;r->grab_count=grab_count;}
   if(shape)r->grab_axis=region.axis;r->grab_density=display->desktop_units_per_dip;
   r->drawn=pose;r->layout=source.layout;r->source_rect=source.source_rect;r->bounds=rectangle;
+  r->destination_center=center;
   r->density=display->drawable_pixels_per_dip;r->visible=interactive;r->valid=true;
   return true;
 native_failure:

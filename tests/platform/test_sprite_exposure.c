@@ -113,7 +113,7 @@ static void exercise(int side,double size){
   PPSprite *reference_sprite=pp_sprites_find(presenter,reference_id);CHECK(reference_sprite->pose.longest_dip==size);
   int expected_w,expected_h;
   CHECK(pp_geometry_source_extent(reference_sprite->retained.layout,reference_sprite->retained.source_rect,size,0,displays[0].drawable_pixels_per_dip,&expected_w,&expected_h));
-  CHECK(ref.right-ref.left==expected_w&&ref.bottom-ref.top==expected_h);
+  CHECK(ref.right-ref.left==expected_w+1&&ref.bottom-ref.top==expected_h+1);
   if(pp_item_snapshot_item(pp_scene_get(scene,reference_id)->snapshot)->kind==PP_ITEM_IMAGE)
     CHECK(expected_w==(int)round(size*displays[0].drawable_pixels_per_dip));
   printf("REALIZED requested_dip=%.0f actual_dip=%.0f density=%.2f drawable=%dx%d native=%ldx%ld\n",size,reference_sprite->pose.longest_dip,displays[0].drawable_pixels_per_dip,expected_w,expected_h,ref.right-ref.left,ref.bottom-ref.top);
