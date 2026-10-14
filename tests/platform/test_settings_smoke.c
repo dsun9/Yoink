@@ -3754,6 +3754,47 @@ static void hidden_item_controls(void) {
   pp_settings_destroy(settings); settings = NULL;
   pp_app_destroy(app); app = NULL;
 }
+static void hidden_rotation_center(void) {
+  CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
+  create_settings(1, true);
+  CHECK(SDL_SetWindowSize(settings->backend->window, 1040, 1800));
+  hidden_settle();
+  PPUIBackend *ui = settings->backend;
+  uint64_t id = pp_app_ui(app)->selected_item;
+  PPItemSnapshot *before = pp_project_snapshot(pp_app_project(app), id);
+  PPRect bounds;
+  CHECK(pp_ui_control_rect(ui, "item-rotation-center", &bounds));
+  pp_ui_focus(ui, "item-rotation-center"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(ui->popup_id);
+  hidden_key(PP_KEY_DOWN, 0); pp_settings_draw(settings);
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(!ui->popup_id);
+  CHECK(pp_project_item(pp_app_project(app), id)->rotation_center == PP_ROTATION_MOUSE_POSITION);
+  PPItemSnapshot *after = pp_project_snapshot(pp_app_project(app), id);
+  CHECK(pp_item_snapshot_content_id(after) == pp_item_snapshot_content_id(before));
+  pp_item_snapshot_release(before); pp_item_snapshot_release(after);
+  capture("rotation-center-setting");
+  /* Both content kinds expose the same per-item choice. */
+  PPItem image = {.kind = PP_ITEM_IMAGE, .image_longest_dip = 96, .opacity = 1};
+  const char *svg = "<svg width='64' height='32'><rect width='64' height='32' fill='red'/></svg>";
+  CHECK(pp_asset_import(pp_app_assets(app), (PPBytes){(const uint8_t *)svg, strlen(svg)},
+                        PP_ASSET_SVG, &image.image_asset, &error));
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_ADD_ITEM,
+      .anchor = pp_app_ui(app)->anchor, .item = &image}, &error));
+  hidden_settle();
+  CHECK(pp_ui_control_rect(ui, "item-rotation-center", &bounds));
+  pp_ui_focus(ui, "item-rotation-center"); hidden_settle();
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  hidden_key(PP_KEY_DOWN, 0); pp_settings_draw(settings);
+  hidden_key(PP_KEY_ENTER, 0); hidden_settle();
+  CHECK(pp_project_item(pp_app_project(app), pp_app_ui(app)->selected_item)->rotation_center ==
+        PP_ROTATION_MOUSE_POSITION);
+  CHECK(pp_project_item(pp_app_project(app), id)->rotation_center == PP_ROTATION_MOUSE_POSITION);
+  pp_settings_destroy(settings); settings = NULL;
+  pp_app_destroy(app); app = NULL;
+  puts("PASS rotation-center choice for text and image items, immediate commit and artwork reuse.");
+}
 int main(int argc, char **argv) {
   manual_font = argc == 2 && !strcmp(argv[1], "--manual-font");
   dialog_diagnostic = argc == 2 && !strcmp(argv[1], "--dialog-diagnostic");
@@ -3767,7 +3808,7 @@ int main(int argc, char **argv) {
          !strcmp(argv[1], "--reorder-only") || !strcmp(argv[1], "--validation-only") ||
          !strcmp(argv[1], "--font-disclosure-only") ||
          !strcmp(argv[1], "--labels-only") || !strcmp(argv[1], "--chrome-only") ||
-         !strcmp(argv[1], "--field-commit-only") || !strcmp(argv[1], "--dropdown-only") || !strcmp(argv[1], "--popup-spacing-only") || !strcmp(argv[1], "--delete-spacing-only") || !strcmp(argv[1], "--item-controls-only")));
+         !strcmp(argv[1], "--rotation-center-only") || !strcmp(argv[1], "--field-commit-only") || !strcmp(argv[1], "--dropdown-only") || !strcmp(argv[1], "--popup-spacing-only") || !strcmp(argv[1], "--delete-spacing-only") || !strcmp(argv[1], "--item-controls-only")));
   CHECK(GetPhysicalCursorPos(&original_cursor));
   original_foreground = GetForegroundWindow();
   atexit(cleanup);
@@ -3775,6 +3816,8 @@ int main(int argc, char **argv) {
     manual_font_smoke();
   else if (desktop_run)
     desktop_smoke();
+  else if (!strcmp(argv[1], "--rotation-center-only"))
+    hidden_rotation_center();
   else if (!strcmp(argv[1], "--field-commit-only"))
     hidden_field_commit();
   else if (!strcmp(argv[1], "--dropdown-only"))

@@ -86,6 +86,15 @@ collapsing whitespace. Empty labels use the existing text or image description.
 Older packages without labels continue to load. Saving an item with an empty
 label omits the field. Labels change menu text independently of sprite artwork.
 
+Both item kinds may contain an optional `rotation_center` string. Accepted
+values are `"sprite"` and `"mouse"`. Missing fields default to `"sprite"`.
+The writer emits `"mouse"` for mouse-position rotation and omits the default
+sprite-center value. Other values and non-string types are rejected. The
+choice belongs to the item snapshot, so editing it affects future pulls and
+replacing a sprite adopts the replacement item's choice. Mouse-position
+rotation keeps the point under the wheel event's cursor fixed along the eased
+circular path. Sprite-center rotation keeps the sprite's center fixed.
+
 `default_emoji_fallback` records that default-font acquisition selected bundled
 Noto because installed Segoe UI Emoji was unavailable. It preserves the item
 preview diagnostic after reopening, even on a host that has Segoe installed.

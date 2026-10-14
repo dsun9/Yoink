@@ -44,6 +44,7 @@ static void test_declared_limits(void);
 static void test_archive_trailer_agreement(void);
 static void test_named_instance_is_not_collection_face(void);
 static void test_wrong_resource_namespace(void);
+static void test_rotation_metadata(void);
 static void test_project_names(void) {
     const char *names[]={NULL,""," \xc2\xa0","line\nname"};
     for (size_t i=0;i<sizeof(names)/sizeof(*names)+2;i++) {
@@ -80,6 +81,7 @@ int main(void) {
     test_named_instance_is_not_collection_face();
     test_wrong_resource_namespace();
     test_project_names();
+    test_rotation_metadata();
     pp_blob_destroy(&fixture);
     end_test();
     puts("archive rejection cases passed");
@@ -144,6 +146,50 @@ static char *resource_manifest(PPBytes bytes, const char *kind, bool text, int f
     CHECK(result);
     yyjson_mut_doc_free(mut);
     return result;
+}
+static void test_rotation_metadata(void) {
+    const char *svg = "<svg width='20' height='20'><rect width='20' height='20' fill='red'/></svg>";
+    PPBytes source = {(const uint8_t *)svg, strlen(svg)};
+    PPAssetId id;
+    char *base = resource_manifest(source, "svg", false, 0, &id);
+    char hash[65], name[80];
+    hex_id(id, hash);
+    snprintf(name, sizeof(name), "assets/%s", hash);
+    for (int variant = 0; variant < 8; variant++) {
+        yyjson_doc *read = yyjson_read(base, strlen(base), 0);
+        CHECK(read);
+        yyjson_mut_doc *doc = yyjson_doc_mut_copy(read, NULL);
+        yyjson_doc_free(read);
+        CHECK(doc);
+        yyjson_mut_val *list = yyjson_mut_arr_get(
+            yyjson_mut_obj_get(yyjson_mut_doc_get_root(doc), "lists"), 0);
+        yyjson_mut_val *item = yyjson_mut_arr_get(yyjson_mut_obj_get(list, "items"), 0);
+        if (variant >= 1 && variant <= 4)
+            CHECK(yyjson_mut_obj_add_str(doc, item, "rotation_center",
+                variant == 1 ? "sprite" : variant == 2 ? "mouse" : variant == 3 ? "center" : ""));
+        else if (variant == 5)
+            CHECK(yyjson_mut_obj_add_uint(doc, item, "rotation_center", 1));
+        else if (variant == 6)
+            CHECK(yyjson_mut_obj_add_null(doc, item, "rotation_center"));
+        else if (variant == 7)
+            CHECK(yyjson_mut_obj_add_bool(doc, item, "rotation_center", true));
+        char *json = yyjson_mut_write(doc, 0, NULL);
+        CHECK(json);
+        write_zip(json, name, source, false);
+        free(json); yyjson_mut_doc_free(doc);
+        if (variant >= 3) reject_load();
+        else {
+            PPAssets *assets = NULL;
+            PPProject *project = NULL;
+            CHECK(pp_assets_create(&assets, &error));
+            CHECK(pp_project_load(package, assets, &project, &error));
+            CHECK(pp_project_target(project, PP_ANCHOR_TOP_LEFT)->rotation_center ==
+                  (variant == 2 ? PP_ROTATION_MOUSE_POSITION : PP_ROTATION_SPRITE_CENTER));
+            pp_project_destroy(project); pp_assets_destroy(assets);
+        }
+    }
+    free(base);
+    puts("PASS legacy and explicit rotation centers; unknown/non-string centers rejected.");
 }
 static char *changed_metadata(const void *bytes, size_t size, int variant, size_t *out_size) {
     yyjson_doc *source = yyjson_read(bytes, size, 0);

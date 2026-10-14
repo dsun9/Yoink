@@ -26,6 +26,7 @@ static void test_project_defaults(void) {
         CHECK(!strcmp(item->text_style.requested_family, "Aptos"));
         CHECK(item->text_style.font_size_dip == 96.0);
         CHECK(item->angle_deg == 0.0 && item->opacity == 1.0);
+        CHECK(item->rotation_center == PP_ROTATION_SPRITE_CENTER);
         CHECK(item->text_style.color[0] == 0 && item->text_style.color[3] == 255);
         PPAsset *font = pp_asset_retain(assets, item->text_style.fallback_asset);
         PPFontInfo info;
@@ -58,6 +59,9 @@ static void test_project_defaults(void) {
     CHECK(!pp_project_edit_item(project, second, &item, &error));
     item.text_style.font_size_dip = 96;
     PPItem invalid = item;
+    invalid.rotation_center = (PPRotationCenter)42;
+    CHECK(!pp_project_edit_item(project, second, &invalid, &error));
+    invalid = item;
     invalid.text = "\xc0\xaf";
     CHECK(!pp_project_edit_item(project, second, &invalid, &error));
     invalid.text = " \t";

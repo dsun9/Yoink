@@ -94,7 +94,9 @@ static bool render_text(PPItemSnapshot *snapshot, double scale, PPError *error) 
 bool pp_item_snapshot_create(PPAssets *assets, const PPItem *item, PPItemSnapshot **out, PPError *error) {
     if (out) *out = NULL;
     if (!assets || !item || !out || !isfinite(item->angle_deg) ||
-            !isfinite(item->opacity) || item->opacity < 0 || item->opacity > 1)
+            !isfinite(item->opacity) || item->opacity < 0 || item->opacity > 1 ||
+            (item->rotation_center != PP_ROTATION_SPRITE_CENTER &&
+             item->rotation_center != PP_ROTATION_MOUSE_POSITION))
         return item_error(error, PP_ERROR_ARGUMENT, "Invalid item appearance or output");
     if (item->kind != PP_ITEM_IMAGE && item->kind != PP_ITEM_TEXT)
         return item_error(error, PP_ERROR_ARGUMENT, "Invalid item content kind");
@@ -158,6 +160,7 @@ bool pp_item_snapshot_update(PPItemSnapshot *previous,const PPItem *item,PPItemS
         item->text_style.default_emoji_fallback==old->text_style.default_emoji_fallback;
     if(!same)return pp_item_snapshot_create(previous->assets,item,out,error);
     if((item->label&&strlen(item->label)>PP_ITEM_LABEL_MAX)||!isfinite(item->angle_deg)||!isfinite(item->opacity)||item->opacity<0||item->opacity>1||
+        (item->rotation_center!=PP_ROTATION_SPRITE_CENTER&&item->rotation_center!=PP_ROTATION_MOUSE_POSITION)||
         !valid_size(item->kind==PP_ITEM_IMAGE?item->image_longest_dip:item->text_style.font_size_dip))return item_error(error,PP_ERROR_ARGUMENT,"Invalid item appearance");
     PPItemSnapshot *snapshot=calloc(1,sizeof(*snapshot));if(!snapshot)return item_error(error,PP_ERROR_MEMORY,"Cannot retain item appearance");
     PPItemSnapshot *owner=content_owner(previous);snapshot->assets=previous->assets;snapshot->references=1;

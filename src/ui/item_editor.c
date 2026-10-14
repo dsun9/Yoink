@@ -494,6 +494,17 @@ void pp_item_editor(PPSettings *settings) {
   paired_fields(settings, "Angle (degrees)", "item-angle", editor->angle,
                 sizeof(editor->angle), "Opacity (%)", "item-opacity",
                 editor->opacity, sizeof(editor->opacity), &changed);
+  nk_layout_row_dynamic(&ui->context, 20, 1);
+  nk_label(&ui->context, "Rotation center", NK_TEXT_LEFT);
+  nk_layout_row_dynamic(&ui->context, pp_ui_theme.row_height, 1);
+  const char *rotation_centers[] = {"Sprite center", "Mouse position"};
+  int rotation_center = editor->draft.rotation_center;
+  if (pp_ui_choice(ui, "item-rotation-center", rotation_centers, 2,
+                    &rotation_center, !settings->dialog_pending)) {
+    editor->draft.rotation_center = (PPRotationCenter)rotation_center;
+    changed = true;
+  }
+  pp_ui_secondary(ui, "Mouse position keeps the point under the cursor fixed while rotating.");
   editor->changed = editor->changed || changed;
   pp_ui_secondary(ui, "Press Enter or leave a field to apply appearance changes.");
 }

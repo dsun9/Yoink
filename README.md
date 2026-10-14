@@ -42,7 +42,7 @@ installed Segoe UI Emoji or Aptos bytes.
 | Approach one of eight 16×16 logical-pixel edge/corner regions | Reveal a faint inward preview |
 | Left-drag a preview | Create a temporary sprite, preserving the grabbed point |
 | Left-drag a sprite | Move it directly |
-| Wheel | Rotate by 10° per notch with 120 ms easing |
+| Wheel | Rotate by 10° per notch with 120 ms easing around the item's chosen center |
 | Alt+wheel | Resize by 10% per notch, with reciprocal downward steps |
 | Right-click | Delete the sprite |
 | Double-click | Open its originating list in the replacement drawer |
@@ -78,7 +78,13 @@ It is an explicit choice; installed Segoe UI Emoji remains the default artwork.
 Settings provides eight shared ordered lists, default selection, enable/disable,
 text/emoji appearance, permitted font import, and PNG/GIF/SVG import.
 Each item has an editable menu label shared by its Settings row and replacement
-drawer row. An empty label uses the content description. Text items have an
+drawer row. An empty label uses the content description. Each item's Appearance
+section also has a Rotation center choice. Sprite center keeps the sprite's
+center fixed. Mouse position keeps the point under the cursor fixed throughout
+wheel rotation, including easing. Existing projects use Sprite center. The
+choice is saved with the item and applies to future pulls and replacements;
+existing sprites keep their snapshots. Alt+wheel retains its existing resize
+behavior. Text items have an
 installed-font dropdown and an import action for portable font files.
 Ctrl+N, Ctrl+O, Ctrl+S and Ctrl+Shift+S select New, Open, Save and Save As. Invalid drafts
 must be corrected or reverted before project transitions; hiding Settings

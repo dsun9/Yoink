@@ -8,6 +8,10 @@
 #define PP_PROJECT_NAME_MAX 255
 #define PP_ITEM_LABEL_MAX 1024
 typedef enum PPItemKind { PP_ITEM_IMAGE, PP_ITEM_TEXT } PPItemKind;
+typedef enum PPRotationCenter {
+    PP_ROTATION_SPRITE_CENTER,
+    PP_ROTATION_MOUSE_POSITION
+} PPRotationCenter;
 /* Input strings are borrowed for a call; projects/snapshots copy them. Project
  * item IDs are stable and nonzero. Ad-hoc snapshot inputs may use zero.
  * Add assigns an ID for zero, or preserves an unused ID for
@@ -21,6 +25,7 @@ typedef struct PPItem {
     const char *label; /* Optional menu label; empty uses text/image fallback. */
     PPTextStyle text_style;
     double image_longest_dip, angle_deg, opacity;
+    PPRotationCenter rotation_center;
 } PPItem;
 typedef struct PPAnchorList {
     bool enabled;

@@ -34,7 +34,8 @@ static bool same_string(const char *a, const char *b) {
 }
 static bool same_item(const PPItem *a, const PPItem *b) {
   if (!a || !b || a->kind != b->kind || a->angle_deg != b->angle_deg ||
-      a->opacity != b->opacity || !same_string(a->label, b->label))
+      a->opacity != b->opacity || a->rotation_center != b->rotation_center ||
+      !same_string(a->label, b->label))
     return false;
   if (a->kind == PP_ITEM_IMAGE)
     return !memcmp(&a->image_asset, &b->image_asset, sizeof(PPAssetId)) &&

@@ -141,6 +141,18 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
       s->pose.angle_deg =
           pp_ease_value(s->ease_from.angle_deg, s->ease_target.angle_deg,
                         now - s->rotate_start, p->gestures.easing_seconds);
+      /* Evaluate the circular path at the eased angle. Interpolating the
+       * center along a straight line would move the point under the cursor. */
+      double angle = fmod(s->pose.angle_deg - s->ease_from.angle_deg, 360) *
+                     3.14159265358979323846 / 180;
+      double cosine = cos(angle), sine = sin(angle);
+      s->pose.center = (PPVec2){
+          s->rotate_pivot.x + s->rotate_offset.x * cosine - s->rotate_offset.y * sine,
+          s->rotate_pivot.y + s->rotate_offset.x * sine + s->rotate_offset.y * cosine};
+      if (s->interaction.pressed && display)
+        s->grab_dip = (PPVec2){
+            (s->drag_pointer.x - s->pose.center.x) / display->desktop_units_per_dip,
+            (s->drag_pointer.y - s->pose.center.y) / display->desktop_units_per_dip};
       s->rotating = now - s->rotate_start < p->gestures.easing_seconds;
       s->dirty = true;
     }
@@ -150,8 +162,17 @@ bool pp_sprites_update(PPAnchorPresenter *p, double now, PPError *error) {
           pp_ease_value(s->ease_from.longest_dip, s->ease_target.longest_dip,
                         now - s->resize_start, p->gestures.easing_seconds);
       if (s->dragging && previous > 0) {
-        s->grab_dip.x *= s->pose.longest_dip / previous;
-        s->grab_dip.y *= s->pose.longest_dip / previous;
+        double factor = s->pose.longest_dip / previous;
+        s->grab_dip.x *= factor;
+        s->grab_dip.y *= factor;
+        if (s->rotating) {
+          s->rotate_offset.x *= factor;
+          s->rotate_offset.y *= factor;
+          s->rotate_pivot.x = s->drag_pointer.x +
+              (s->rotate_pivot.x - s->drag_pointer.x) * factor;
+          s->rotate_pivot.y = s->drag_pointer.y +
+              (s->rotate_pivot.y - s->drag_pointer.y) * factor;
+        }
         if (display)
           s->pose.center =
               pp_display_drag_center(display, s->drag_pointer, s->grab_dip);
@@ -256,6 +277,7 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     s->grab_dip =
         (PPVec2){(event->desktop_point.x - s->pose.center.x) / s->scale,
                  (event->desktop_point.y - s->pose.center.y) / s->scale};
+    s->drag_pointer = event->desktop_point;
     pp_platform_capture(s->surface, NULL);
   }
   PPInteractionResult result;
@@ -266,8 +288,21 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     const PPDisplay *d =
         pp_display_at(p->displays, p->display_count, event->desktop_point);
     if (d) {
-      s->pose.center =
-          pp_display_drag_center(d, event->desktop_point, s->grab_dip);
+      PPVec2 center = pp_display_drag_center(d, event->desktop_point, s->grab_dip);
+      if (s->rotating) {
+        const PPDisplay *previous = display_by_id(p->displays, p->display_count,
+                                                 s->display_id);
+        double units = previous ? previous->desktop_units_per_dip : s->scale;
+        double factor = units > 0 ? d->desktop_units_per_dip / units : 1;
+        /* Translate and scale the remaining orbit with the grabbed artwork,
+         * including multiple drag moves arriving before the next draw. */
+        s->rotate_pivot = (PPVec2){
+            center.x + (s->rotate_pivot.x - s->pose.center.x) * factor,
+            center.y + (s->rotate_pivot.y - s->pose.center.y) * factor};
+        s->rotate_offset.x *= factor;
+        s->rotate_offset.y *= factor;
+      }
+      s->pose.center = center;
       s->display_id = d->id;
       s->drag_pointer = event->desktop_point;
       s->dragging = result.command != PP_COMMAND_END_DRAG;
@@ -279,6 +314,12 @@ bool pp_sprites_event(PPAnchorPresenter *p, const PPPlatformEvent *event,
     s->sharp_pending = false;
   }
   if (result.command == PP_COMMAND_ROTATE) {
+    const PPSceneInstance *instance = pp_scene_get(p->scene, s->id);
+    const PPItem *item = pp_item_snapshot_item(instance->snapshot);
+    s->rotate_pivot = item->rotation_center == PP_ROTATION_MOUSE_POSITION
+                          ? event->desktop_point : s->pose.center;
+    s->rotate_offset = (PPVec2){s->pose.center.x - s->rotate_pivot.x,
+                               s->pose.center.y - s->rotate_pivot.y};
     s->ease_from.angle_deg = s->pose.angle_deg;
     s->ease_target.angle_deg = result.pose.angle_deg;
     s->rotate_start = event->timestamp;

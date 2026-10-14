@@ -329,6 +329,13 @@ beside the content with a correction action. Complete configured fallback is
 routine information. Image items keep Replace image and their size, angle and
 opacity controls.
 
+Both item kinds have a Rotation center choice under Appearance. Sprite center
+is the default and keeps the sprite center fixed. Mouse position keeps the
+point under the wheel event's cursor fixed along the eased circular path.
+The item snapshot owns the choice; future pulls and replacements use it, and
+existing sprites retain their choice through project edits. Dragging and
+overlapping Alt+wheel resizing preserve the grabbed point.
+
 Wide editor columns pair size with color, then angle with opacity. Narrow
 Settings stacks those fields and uses the existing focus-revealing scroll.
 Appearance errors appear directly after their field or paired group; empty

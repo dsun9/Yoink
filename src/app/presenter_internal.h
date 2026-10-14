@@ -57,6 +57,7 @@ typedef struct PPSprite {
   PPItemSnapshot *seen_snapshot; /* Retained until mapping is synchronized. */
   double seen_animation_start;
   PPPose ease_from, ease_target;
+  PPVec2 rotate_pivot, rotate_offset;
   double rotate_start, resize_start;
   bool rotating, resizing;
   bool sharp_pending;

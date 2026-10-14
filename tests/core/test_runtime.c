@@ -694,7 +694,157 @@ static void test_rejected_source_is_repreparable_by_new_consumer(void) {
   pp_content_sources_destroy(sources);pp_item_snapshot_release(snapshot);CHECK(!pp_assets_external_raster_bytes(assets));pp_assets_destroy(assets);
   puts("PASS a new consumer prepares an equal rejected-empty endpoint while the prior owner suppresses repeated attempts");
 }
+static PPVec2 rotated_center(PPVec2 center, PPVec2 pivot, double degrees) {
+  double radians = degrees * 3.14159265358979323846 / 180;
+  double x = center.x - pivot.x, y = center.y - pivot.y;
+  return (PPVec2){pivot.x + x * cos(radians) - y * sin(radians),
+                  pivot.y + x * sin(radians) + y * cos(radians)};
+}
+static void check_rotation_center(PPRuntime *r, uint64_t id, PPVec2 expected) {
+  PPVec2 actual = pp_scene_get(pp_app_scene(r->app), id)->pose.center;
+  CHECK(fabs(actual.x - expected.x) < .000001);
+  CHECK(fabs(actual.y - expected.y) < .000001);
+}
+static void test_rotation_centers(void) {
+  PPApp *app = NULL;
+  PPRuntime *r = NULL;
+  PPError error = {0};
+  CHECK(pp_app_create(&app, &(PPAppOptions){.preferences_directory = ""}, &error));
+  PPProject *arrows = test_arrow_project(pp_app_assets(app));
+  PPItem item = *pp_project_target(arrows, PP_ANCHOR_TOP_LEFT);
+  item.id = pp_project_target(pp_app_project(app), PP_ANCHOR_TOP_LEFT)->id;
+  item.rotation_center = PP_ROTATION_MOUSE_POSITION;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+      .item_id = item.id, .item = &item}, &error));
+  pp_project_destroy(arrows);
+  CHECK(pp_runtime_create(&r, app, &error));
+  uint64_t id = pull(r, 1);
+  PPPose initial = pp_scene_get(pp_app_scene(app), id)->pose;
+  PPVec2 pivot = {initial.center.x + 15, initial.center.y - 8};
+  PPPlatformEvent wheel = {.surface = sprite(id), .instance_id = id,
+      .kind = PP_EVENT_WHEEL, .wheel_delta = 9, .desktop_point = pivot,
+      .timestamp = 2};
+  pp_runtime_event(r, &wheel);
+  pp_runtime_tick(r, 2.06);
+  PPPose halfway = pp_scene_get(pp_app_scene(app), id)->pose;
+  CHECK(halfway.angle_deg > initial.angle_deg && halfway.angle_deg < initial.angle_deg + 90);
+  check_rotation_center(r, id, rotated_center(initial.center, pivot,
+                                            halfway.angle_deg - initial.angle_deg));
+  /* Wheel bursts accumulate angle while preserving the current eased pose. */
+  wheel.timestamp = 2.06;
+  wheel.wheel_delta = 9;
+  pp_runtime_event(r, &wheel);
+  pp_runtime_tick(r, 2.3);
+  CHECK(pp_scene_get(pp_app_scene(app), id)->pose.angle_deg == initial.angle_deg + 180);
+  check_rotation_center(r, id, rotated_center(initial.center, pivot, 180));
+  /* A new mouse position becomes the pivot without jumping at retarget time. */
+  PPPose before = pp_scene_get(pp_app_scene(app), id)->pose;
+  wheel.desktop_point = (PPVec2){before.center.x - 9, before.center.y + 6};
+  wheel.timestamp = 3; wheel.wheel_delta = -9;
+  pp_runtime_event(r, &wheel);
+  pp_runtime_tick(r, 3);
+  check_rotation_center(r, id, before.center);
+  pp_runtime_tick(r, 3.2);
+  check_rotation_center(r, id, rotated_center(before.center, wheel.desktop_point, -90));
+  /* Editing an item affects future pulls; the old sprite keeps its choice. */
+  item = *pp_project_target(pp_app_project(app), PP_ANCHOR_TOP_LEFT);
+  item.rotation_center = PP_ROTATION_SPRITE_CENTER;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_EDIT_ITEM,
+      .item_id = item.id, .item = &item}, &error));
+  CHECK(pp_item_snapshot_item(pp_scene_get(pp_app_scene(app), id)->snapshot)->rotation_center ==
+        PP_ROTATION_MOUSE_POSITION);
+  uint64_t centered = pull(r, 4);
+  PPVec2 center = pp_scene_get(pp_app_scene(app), centered)->pose.center;
+  wheel.surface = sprite(centered); wheel.instance_id = centered;
+  wheel.timestamp = 5; wheel.wheel_delta = 9;
+  wheel.desktop_point = (PPVec2){center.x + 20, center.y + 10};
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 5.06);
+  check_rotation_center(r, centered, center);
+  pp_runtime_tick(r, 5.2); check_rotation_center(r, centered, center);
+  /* Replacement adopts the replacement item's rotation choice. */
+  item.rotation_center = PP_ROTATION_MOUSE_POSITION;
+  CHECK(pp_scene_replace(pp_app_scene(app), centered, &item, 6, &error));
+  pp_runtime_tick(r, 6);
+  wheel.timestamp = 7;
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 7.2);
+  check_rotation_center(r, centered, rotated_center(center, wheel.desktop_point, 90));
+  /* A held press keeps its grabbed point after a mouse-centered rotation. */
+  before = pp_scene_get(pp_app_scene(app), centered)->pose;
+  pivot = (PPVec2){before.center.x + 7, before.center.y + 3};
+  step(r, sprite(centered), PP_EVENT_BUTTON_DOWN, pivot.x, pivot.y, 8);
+  wheel.desktop_point = pivot; wheel.timestamp = 8.01;
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 8.2);
+  PPVec2 rotated = rotated_center(before.center, pivot, 90);
+  check_rotation_center(r, centered, rotated);
+  step(r, sprite(centered), PP_EVENT_POINTER_MOVE, pivot.x + 20, pivot.y + 10, 8.21);
+  pp_runtime_tick(r, 8.21);
+  check_rotation_center(r, centered, (PPVec2){rotated.x + 20, rotated.y + 10});
+  /* Rotation and Alt+wheel resizing share the held mouse point during drag. */
+  before = pp_scene_get(pp_app_scene(app), centered)->pose;
+  pivot = (PPVec2){pivot.x + 20, pivot.y + 10};
+  wheel.desktop_point = pivot; wheel.timestamp = 8.22;
+  pp_runtime_event(r, &wheel);
+  wheel.modifiers = PP_MOD_ALT; wheel.wheel_delta = 1;
+  pp_runtime_event(r, &wheel);
+  const double times[] = {8.28, 8.5};
+  for (size_t tick = 0; tick < 2; tick++) {
+    pp_runtime_tick(r, times[tick]);
+    PPPose current = pp_scene_get(pp_app_scene(app), centered)->pose;
+    PPVec2 expected = rotated_center(before.center, pivot, current.angle_deg - before.angle_deg);
+    double ratio = current.longest_dip / before.longest_dip;
+    expected = (PPVec2){pivot.x + (expected.x - pivot.x) * ratio,
+                        pivot.y + (expected.y - pivot.y) * ratio};
+    check_rotation_center(r, centered, expected);
+  }
+  wheel.modifiers = 0; wheel.wheel_delta = 9;
+  /* Cross to the 200% display while rotation is still easing. The same local
+   * artwork point must stay at the new cursor as the remaining arc plays. */
+  before = pp_scene_get(pp_app_scene(app), centered)->pose;
+  wheel.timestamp = 8.52;
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 8.56);
+  step(r, sprite(centered), PP_EVENT_POINTER_MOVE, 2400, 500, 8.57);
+  step(r, sprite(centered), PP_EVENT_POINTER_MOVE, 2420, 510, 8.571);
+  pp_runtime_tick(r, 8.58);
+  PPPose cross = pp_scene_get(pp_app_scene(app), centered)->pose;
+  PPVec2 offset = rotated_center(before.center, pivot, cross.angle_deg - before.angle_deg);
+  check_rotation_center(r, centered, (PPVec2){2420 + (offset.x - pivot.x) * 2,
+                                            510 + (offset.y - pivot.y) * 2});
+  /* Two further crossings can arrive before any frame updates s->scale. */
+  step(r, sprite(centered), PP_EVENT_POINTER_MOVE, 800, 500, 8.59);
+  step(r, sprite(centered), PP_EVENT_POINTER_MOVE, 2400, 500, 8.591);
+  pp_runtime_tick(r, 8.6);
+  cross = pp_scene_get(pp_app_scene(app), centered)->pose;
+  offset = rotated_center(before.center, pivot, cross.angle_deg - before.angle_deg);
+  check_rotation_center(r, centered, (PPVec2){2400 + (offset.x - pivot.x) * 2,
+                                            500 + (offset.y - pivot.y) * 2});
+  step(r, sprite(centered), PP_EVENT_BUTTON_UP, 2400, 500, 8.61);
+  pp_runtime_tick(r, 8.7);
+  offset = rotated_center(before.center, pivot, 90);
+  check_rotation_center(r, centered, (PPVec2){2400 + (offset.x - pivot.x) * 2,
+                                            500 + (offset.y - pivot.y) * 2});
+  /* Verify desktop coordinates with zero easing on the second display. */
+  PPProjectSettings gestures = *pp_project_settings(pp_app_project(app));
+  gestures.easing_seconds = 0;
+  CHECK(pp_app_command(app, &(PPCommand){.kind = PP_COMMAND_SET_INTERACTION,
+      .interaction = gestures}, &error));
+  pp_runtime_tick(r, 9);
+  before = pp_scene_get(pp_app_scene(app), centered)->pose;
+  wheel.desktop_point = (PPVec2){before.center.x + 30, before.center.y - 16};
+  wheel.timestamp = 10;
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 10);
+  check_rotation_center(r, centered, rotated_center(before.center, wheel.desktop_point, 90));
+  before = pp_scene_get(pp_app_scene(app), centered)->pose;
+  wheel.modifiers = PP_MOD_ALT; wheel.wheel_delta = 1; wheel.timestamp = 11;
+  pp_runtime_event(r, &wheel); pp_runtime_tick(r, 11);
+  check_rotation_center(r, centered, before.center);
+  CHECK(pp_scene_get(pp_app_scene(app), centered)->pose.longest_dip > before.longest_dip);
+  pp_runtime_destroy(r); pp_app_destroy(app);
+  CHECK(!surfaces);
+  puts("PASS mouse/sprite rotation centers, eased arcs, wheel bursts, new pivots, snapshot isolation and replacement.");
+}
 int main(int argc,char **argv) {
+  if(argc==2&&!strcmp(argv[1],"--rotation-centers")){test_rotation_centers();return 0;}
+  test_rotation_centers();
   if(argc==2&&!strcmp(argv[1],"--failure-isolation")){test_failure_isolation();return 0;}
   test_rejected_source_is_repreparable_by_new_consumer();
   test_app_source_owner_survives_runtime_and_project_epochs();
