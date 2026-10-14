@@ -154,10 +154,12 @@ short lists and stays within its existing 340 by 360 logical-unit maximum.
 
 ### Project toolbar and Settings navigation
 
-- The 2026-10-13 layout follow-up centers the Project label, editable name,
-  dirty marker and action icons as one bounded group, with vertical padding.
+- The 2026-10-13 layout follow-up centers the visible Preset label, editable
+  name, dirty marker and action icons as one bounded group, with balanced
+  vertical padding and compact six-unit gaps around the name field.
   Narrow windows keep the wrapped action row centered below the name row.
-  Items and Interaction use compact tab styling instead of full-width buttons.
+  Items and Interaction use compact tab styling instead of full-width buttons;
+  their keyboard focus cue is a lower indicator with no top or side border.
   Footer actions form a compact right-aligned group; the left side credits
   Project by Bowen and links to `https://github.com/dsun9/Yoink`.
 - New, Open, Save and Save as have equal-width icon buttons, approximately

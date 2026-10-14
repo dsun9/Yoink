@@ -1992,6 +1992,57 @@ static void hidden_chrome_diagnostics(void) {
   pp_app_destroy(app); app = NULL;
   puts("PASS footer remains visible and draft recovery clickable with name error, Unicode notice and page errors at minimum size across three scales.");
 }
+static void check_tab_edges(SDL_Surface *surface, PPRect bounds) {
+  double sx = surface->w / settings->backend->width;
+  double sy = surface->h / settings->backend->height;
+  const PPVec2 probes[] = {
+      {bounds.x + bounds.w / 2, bounds.y + .5},
+      {bounds.x + .5, bounds.y + bounds.h / 2},
+      {bounds.x + bounds.w - .5, bounds.y + bounds.h / 2}};
+  for (int edge = 0; edge < 3; edge++) {
+    Uint8 r, g, b, a;
+    CHECK(SDL_ReadSurfacePixel(surface, (int)(probes[edge].x * sx),
+        (int)(probes[edge].y * sy), &r, &g, &b, &a));
+    printf("Tab edge %d: RGB=%u/%u/%u\n", edge, r, g, b);
+    CHECK(!(b > r + 80 && g > r + 40));
+  }
+}
+static void check_toolbar_alignment(SDL_Surface *surface, PPRect name,
+                                    PPRect first, PPRect last) {
+  double sx = surface->w / settings->backend->width;
+  double sy = surface->h / settings->backend->height;
+  Uint8 r, g, b, a;
+  int header_bottom = (int)(2 * sy);
+  while (header_bottom < surface->h) {
+    CHECK(SDL_ReadSurfacePixel(surface, (int)(8 * sx), header_bottom,
+                              &r, &g, &b, &a));
+    if (r < 252 || g < 252 || b < 252) break;
+    header_bottom++;
+  }
+  /* Measure the visible label's ink, rather than assuming a fixed label box. */
+  int label_left = surface->w, label_right = -1;
+  for (int y = (int)(name.y * sy); y < (name.y + name.h) * sy; y++)
+    for (int x = (int)(120 * sx); x < name.x * sx; x++) {
+      CHECK(SDL_ReadSurfacePixel(surface, x, y, &r, &g, &b, &a));
+      if (r < 180 && g < 190 && b < 210) {
+        if (x < label_left) label_left = x;
+        if (x > label_right) label_right = x;
+      }
+    }
+  CHECK(label_right >= label_left);
+  double top_padding = name.y;
+  double bottom_padding = header_bottom / sy - (last.y + last.h);
+  double label_gap = name.x - (label_right + 1) / sx;
+  double action_gap = first.x - (name.x + name.w);
+  printf("Toolbar: top/bottom padding=%.1f/%.1f, label gap=%.1f, action gap=%.1f\n",
+         top_padding, bottom_padding, label_gap, action_gap);
+  CHECK(fabs(top_padding - bottom_padding) <= 1);
+  CHECK(top_padding >= 12);
+  CHECK(label_gap >= 4 && label_gap <= 10);
+  if (first.y == name.y) CHECK(action_gap >= 4 && action_gap <= 10);
+  double group_right = first.y == name.y ? last.x + last.w : name.x + name.w;
+  CHECK(fabs((label_left / sx + group_right) / 2 - settings->backend->width / 2) <= 2);
+}
 static void hidden_settings_chrome(void) {
   CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));
   const float scales[] = {1, 1.5f, 2};
@@ -2005,6 +2056,8 @@ static void hidden_settings_chrome(void) {
     hidden_settle();
     for (int page = 0; page < 2; page++) {
       hidden_click(page ? "tab-interaction" : "tab-items"); hidden_settle();
+      pp_ui_focus(settings->backend, page ? "tab-interaction" : "tab-items");
+      hidden_settle();
       char name[96];
       snprintf(name, sizeof(name), "settings-chrome-%s-%s-%d", size_names[size],
                page ? "interaction" : "items", (int)(scales[density] * 100));
@@ -2020,13 +2073,6 @@ static void hidden_settings_chrome(void) {
       CHECK(pp_ui_control_rect(settings->backend, "quit", &quit));
       printf("Chrome %s: project y=%.0f, tabs w=%.0f/%.0f, footer w=%.0f/%.0f/%.0f\n",
              size_names[size], project.y, items.w, interaction.w, revert.w, close.w, quit.w);
-      CHECK(project.y >= 20);
-      /* Include the visible Project prefix and dirty-marker space in the
-       * top-row extent. Wrapped icons must share that row's center. */
-      double group_left = project.x - 66;
-      double group_right = first.y == project.y ? last.x + last.w
-                                               : project.x + project.w + 22;
-      CHECK(fabs((group_left + group_right) / 2 - sizes[size][0] / 2.0) <= 2);
       CHECK(project.w <= 550);
       if (first.y > project.y)
         CHECK(fabs((first.x + last.x + last.w) / 2 - sizes[size][0] / 2.0) <= 2);
@@ -2047,6 +2093,9 @@ static void hidden_settings_chrome(void) {
        * into the strip rather than drawing an ordinary button border. */
       PPRect selected = page ? interaction : items;
       PPRect inactive = page ? items : interaction;
+      check_tab_edges(surface, selected);
+      check_tab_edges(surface, inactive);
+      check_toolbar_alignment(surface, project, first, last);
       Uint8 r, g, b, a;
       CHECK(SDL_ReadSurfacePixel(surface,
           (int)((selected.x + selected.w / 2) * surface->w / settings->backend->width),
@@ -2069,6 +2118,15 @@ static void hidden_settings_chrome(void) {
       CHECK(trailing_ink);
       SDL_DestroySurface(surface);
       pp_ui_focus(settings->backend, page ? "tab-items" : "tab-interaction");
+      hidden_settle();
+      char focused_name[112];
+      snprintf(focused_name, sizeof(focused_name), "%s-focused", name);
+      capture(focused_name);
+      snprintf(path, sizeof(path), PP_SMOKE_OUTPUT "/%s.bmp", focused_name);
+      surface = SDL_LoadBMP(path);
+      CHECK(surface);
+      check_tab_edges(surface, inactive);
+      SDL_DestroySurface(surface);
       hidden_key(PP_KEY_ENTER, 0); hidden_settle();
       CHECK(settings->page == (page ? PP_SETTINGS_ITEMS : PP_SETTINGS_INTERACTION));
       CHECK(!settings->failed);
@@ -2077,7 +2135,7 @@ static void hidden_settings_chrome(void) {
   pp_settings_destroy(settings); settings = NULL;
   }
   pp_app_destroy(app); app = NULL;
-  puts("PASS centered padded project group, tab appearance/keyboard switching and complete linked credit beside right-aligned footer at four sizes and three scales.");
+  puts("PASS centered compact preset group, borderless focused tabs/keyboard switching and complete linked credit beside right-aligned footer at four sizes and three scales.");
 }
 static void hidden_compact_toolbar(void) {
   CHECK(pp_app_create(&app, &(PPAppOptions){"", false}, &error));

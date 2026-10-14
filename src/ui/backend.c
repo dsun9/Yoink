@@ -743,8 +743,8 @@ static void focus_outline(PPUIBackend *ui, struct nk_rect bounds,
     nk_stroke_rect(nk_window_get_canvas(&ui->context), bounds,
                    pp_ui_theme.control_radius, 2, pp_ui_theme.accent);
 }
-bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
-                  bool enabled) {
+static bool button(PPUIBackend *ui, const char *id, const char *label,
+                    bool enabled, bool outline) {
   enabled = enabled && (!ui->popup_id || ui->in_popup);
   struct nk_rect bounds;
   bool focused = control(ui, id, label, enabled, false, &bounds);
@@ -760,11 +760,16 @@ bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
   if (!enabled)
     nk_widget_disable_end(&ui->context);
   ui->context.style.button = saved;
-  focus_outline(ui, bounds, focused);
+  if (outline)
+    focus_outline(ui, bounds, focused);
   bool activated = enabled && (clicked || (focused && ui->activate));
   if (activated)
     ui->activate = false;
   return activated;
+}
+bool pp_ui_button(PPUIBackend *ui, const char *id, const char *label,
+                  bool enabled) {
+  return button(ui, id, label, enabled, true);
 }
 bool pp_ui_tooltip(PPUIBackend *ui, struct nk_rect bounds, const char *id,
                    const char *text) {
@@ -867,12 +872,18 @@ bool pp_ui_tab(PPUIBackend *ui, const char *id, const char *label,
   ctx->style.button.active = nk_style_item_color(pp_ui_theme.selection);
   ctx->style.button.text_normal = selected ? pp_ui_theme.accent_hover : pp_ui_theme.muted;
   ctx->style.button.text_hover = ctx->style.button.text_active = pp_ui_theme.accent_hover;
-  bool clicked = pp_ui_button(ui, id, label, enabled);
+  bool clicked = button(ui, id, label, enabled, false);
   ctx->style.button = saved;
-  if (selected)
+  bool focused = enabled && ui->keyboard_focus && pp_ui_focused(ui, id) &&
+                 (!ui->popup_id || ui->in_popup);
+  if (selected || focused) {
+    float thickness = selected ? 3 : 1;
+    if (focused) thickness += 2;
     nk_fill_rect(nk_window_get_canvas(ctx),
-                 nk_rect(bounds.x + 8, bounds.y + bounds.h - 3, bounds.w - 16, 3),
+                 nk_rect(bounds.x + 8, bounds.y + bounds.h - thickness,
+                         bounds.w - 16, thickness),
                  1, enabled ? pp_ui_theme.accent : pp_ui_theme.muted);
+  }
   return clicked;
 }
 bool pp_ui_edit(PPUIBackend *ui, const char *id, char *value, int capacity,

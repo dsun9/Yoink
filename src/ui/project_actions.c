@@ -184,10 +184,22 @@ void pp_project_actions(PPSettings *settings) {
   float row_height = pp_ui_theme.row_height;
   float padding = pp_ui_theme.control;
   float spacing = pp_ui_theme.compact;
+  const struct nk_user_font *font = ctx->style.font;
+  const char *label = "Preset";
+  float label_width = ceilf(font->width(font->userdata, font->height, label,
+                                      (int)strlen(label))) + 2 * ctx->style.text.padding.x;
+  bool dirty = pp_app_dirty(settings->app);
+  float marker_width = dirty ? ceilf(font->width(font->userdata, font->height, "*", 1)) +
+                                  2 * ctx->style.text.padding.x : 0;
+  float marker_space = dirty ? spacing + marker_width : 0;
+  float actions_width = 4 * 44 + 3 * spacing;
   float group_height = row_height + (wrapped ? row_height + spacing : 0);
   nk_layout_space_begin(ctx, NK_STATIC, group_height + 2 * padding, 8);
-  float toolbar_height = nk_layout_space_to_screen(ctx, nk_vec2(0, 0)).y +
-                         group_height + 2 * padding;
+  float origin_y = nk_layout_space_to_screen(ctx, nk_vec2(0, 0)).y;
+  float toolbar_height = origin_y + group_height + 2 * padding;
+  /* The painted header starts at the window edge, above the layout's inset.
+   * Center in that entire header rather than adding the inset twice. */
+  float group_y = (toolbar_height - group_height) / 2 - origin_y;
   struct nk_command_buffer *canvas = nk_window_get_canvas(ctx);
   struct nk_rect clip = canvas->clip;
   nk_push_scissor(canvas, nk_rect(0, 0, ui->width, ui->height));
@@ -196,16 +208,17 @@ void pp_project_actions(PPSettings *settings) {
   nk_stroke_line(canvas, 0, toolbar_height, ui->width,
                   toolbar_height, 1, pp_ui_theme.border);
   nk_push_scissor(canvas, clip);
-  nk_layout_space_push(ctx, nk_rect(0, padding + (group_height - row_height) / 2,
+  nk_layout_space_push(ctx, nk_rect(0, group_y + (group_height - row_height) / 2,
                                     100, row_height));
   nk_style_push_font(ctx, &ui->heading_font->handle);
   nk_label_colored(ctx, "Yoink", NK_TEXT_LEFT, pp_ui_theme.accent);
   nk_style_pop_font(ctx);
-  nk_layout_space_push(ctx, nk_rect(group_x, padding, 60, row_height));
-  nk_label_colored(ctx, "Project", NK_TEXT_LEFT, pp_ui_theme.muted);
-  float name_width = group_width - (wrapped ? 88 : 294);
-  float name_x = group_x + 60 + spacing;
-  nk_layout_space_push(ctx, nk_rect(name_x, padding, name_width, row_height));
+  nk_layout_space_push(ctx, nk_rect(group_x, group_y, label_width, row_height));
+  nk_label_colored(ctx, label, NK_TEXT_LEFT, pp_ui_theme.muted);
+  float name_width = group_width - label_width - spacing - marker_space -
+                     (wrapped ? 0 : spacing + actions_width);
+  float name_x = group_x + label_width + spacing;
+  nk_layout_space_push(ctx, nk_rect(name_x, group_y, name_width, row_height));
   struct nk_rect name_bounds = nk_widget_bounds(ctx);
   if (pp_ui_edit(ui, "project-name", settings->project_name,
                  sizeof(settings->project_name), false, enabled)) {
@@ -219,19 +232,19 @@ void pp_project_actions(PPSettings *settings) {
     else
       settings->name_error[0] = 0;
   }
-  nk_layout_space_push(ctx, nk_rect(name_x + name_width + spacing, padding,
-                                    16, row_height));
-  nk_label_colored(ctx, pp_app_dirty(settings->app) ? "*" : "",
-                   NK_TEXT_LEFT, pp_ui_theme.accent);
+  if (dirty) {
+    nk_layout_space_push(ctx, nk_rect(name_x + name_width + spacing, group_y,
+                                    marker_width, row_height));
+    nk_label_colored(ctx, "*", NK_TEXT_LEFT, pp_ui_theme.accent);
+  }
   pp_ui_tooltip(ui, name_bounds, "project-name",
                 pp_app_dirty(settings->app) ? "Unsaved changes"
                 : *pp_app_path(settings->app) ? "Project saved"
                                              : "Not saved to a file; no unsaved edits");
   bool actions_enabled = pp_settings_action_enabled(settings);
-  float actions_width = 4 * 44 + 3 * spacing;
   float actions_x = wrapped ? (width - actions_width) / 2
                             : group_x + group_width - actions_width;
-  float actions_y = padding + (wrapped ? row_height + spacing : 0);
+  float actions_y = group_y + (wrapped ? row_height + spacing : 0);
   nk_layout_space_push(ctx, nk_rect(actions_x, actions_y, 44, row_height));
   if (pp_ui_icon_button(ui, "new", PP_UI_ICON_NEW, "New", "New (Ctrl+N)",
                         actions_enabled, false))

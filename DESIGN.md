@@ -81,8 +81,8 @@ design now includes these requirements:
   tray and window titles, current launch instructions and distribution names
   adopt that name. Existing `.pointy` projects and remembered preferences remain
   compatible.
-- The project toolbar aligns the app name, project label, name field and action
-  buttons vertically. New, Open, Save and Save as use equal-width icon buttons
+- The project toolbar aligns the app name, visible Preset label, name field and
+  action buttons vertically. New, Open, Save and Save as use equal-width icon buttons
   with tooltips on hover and keyboard focus. Unsaved changes appear as an
   asterisk beside the displayed project name, outside the stored name.
 - The eight-position selector is a regular three-by-three grid with a monitor
@@ -205,10 +205,12 @@ requiring hover to discover full information.
 | Dialog | `src/ui/project_actions.c` | Save/Discard/Cancel policy | App confirmation; required OS file chooser | settings_smoke Escape, focus, actual file chooser |
 
 Project actions use equal-width 44 by 36 logical-unit drawn icon buttons.
-The Project label, name field, dirty marker and actions form one centered group,
-capped at 760 logical units. The header adds 12 units of vertical padding above
-and below the group. Actions share the project-name field's vertical alignment
-and wrap into a centered second row below 780 units of content width. Save uses the blue
+The visible Preset label, name field, dirty marker and actions form one centered
+group, capped at 760 logical units. The header adds balanced vertical space
+above and below the group. The label and name field use compact six-unit spacing;
+the action group uses the same spacing beside the field on wide windows. Actions
+share the project-name field's vertical alignment and wrap into a centered second
+row below 780 units of content width. Save uses the blue
 primary style with a contrasting inset focus marker. Hover, pressed, disabled
 and keyboard focus states come from the
 shared backend. Full action names and shortcuts appear on pointer hover or
@@ -219,8 +221,9 @@ the editable value; project name and filename remain independent.
 
 Items and Interaction use compact tabs aligned to the left of a shared baseline.
 The selected tab has a pale blue fill and blue lower edge; inactive tabs blend
-into the canvas. The existing keyboard focus, error markers and input ordering
-apply to both tabs.
+into the canvas. Keyboard focus adds to the lower indicator and never draws a
+top or side border. The existing error markers and input ordering apply to both
+tabs.
 
 The white footer places Revert fields, Close settings and Quit in a compact
 group on the right. On the left, Project by Bowen appears above the complete

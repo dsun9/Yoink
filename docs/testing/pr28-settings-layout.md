@@ -2,12 +2,20 @@
 
 Verified on Windows on 2026-10-13 against the native SDL3/OpenGL/Nuklear renderer.
 
-The Project label, editable name, dirty marker and four project actions now form
-one centered group with vertical padding. Narrow windows center the wrapped
-action row below the name. Items and Interaction use compact tabs with a shared
-baseline and a blue selected edge. The footer groups Revert fields, Close
-settings and Quit on the right, and credits Project by Bowen with the complete
+The visible Preset label, editable name, dirty marker and four project actions
+now form one centered group with balanced vertical padding and compact six-unit
+gaps. Narrow windows center the wrapped action row below the name. Items and
+Interaction use compact tabs with a shared baseline and a blue selected edge;
+keyboard focus stays on that lower edge without top or side borders. The footer
+groups Revert fields, Close settings and Quit on the right, and credits Project by Bowen with the complete
 `https://github.com/dsun9/Yoink` link on the left.
+
+The follow-up native-renderer pass measures 18/17 logical units of toolbar
+breathing room at ordinary and minimum sizes, six to seven units between the
+Preset label and name field, and six units between the field and wide-window
+actions. It exercises ordinary, minimum, narrow and wide windows at 100%, 150%
+and 200% UI scales. Focused tabs are checked at their top and side edges, and
+the keyboard activation path remains covered.
 
 ## Reproduction and verification
 
