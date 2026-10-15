@@ -96,6 +96,20 @@ static HWND native(int i) {
     SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(surfaces[i]));CHECK(window);
     return SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
 }
+static HWND composition_host(void) {
+    HWND host=NULL;
+    for(HWND window=GetTopWindow(NULL);window;window=GetWindow(window,GW_HWNDNEXT)) {
+        DWORD process=0;GetWindowThreadProcessId(window,&process);
+        if(process!=GetCurrentProcessId())continue;
+        char name[128]={0};GetClassNameA(window,name,sizeof(name));
+        if(!strcmp(name,"Yoink.CompositionHost")) {
+            CHECK(!host);host=window;
+            printf("LAYOUT visual-host=%p class=%s style=%08lx exstyle=%08lx visible=%d\n",(void *)window,name,
+                (unsigned long)GetWindowLongPtrW(window,GWL_STYLE),(unsigned long)GetWindowLongPtrW(window,GWL_EXSTYLE),IsWindowVisible(window));
+        }
+    }
+    CHECK(host);return host;
+}
 static PPFrame ring(void) {
     PPFrame frame={0};frame.width=frame.height=64;frame.stride=256;frame.pixels=calloc(64,256);CHECK(frame.pixels);
     for(int y=0;y<64;y++) for(int x=0;x<64;x++) if(hypot(x-31.5,y-31.5)>=18 && hypot(x-31.5,y-31.5)<=29) {
@@ -387,13 +401,18 @@ int main(int argc,char **argv) {
     else if(argc==3&&!strcmp(argv[2],"--layout")) {
         create(0,&source);present(0,0,1,(PPRect){220,220,64,64});
         PPComposition *composition=GetPropW(native(0),PP_COMPOSITION_PROPERTY);CHECK(pp_composition_active(composition));
-        HWND proxy=native(0),previous=pp_composition_top(composition,proxy);
+        /* Native notifications may put the retained proxy above its visual
+         * host. Observe the host itself when checking replacement lifetime. */
+        HWND proxy=native(0),previous=composition_host();
         PPRendererMetrics metrics=pp_renderer_metrics(renderers[0]);size_t bytes=pp_renderer_output_bytes(renderers[0]);
         pp_test_composition_control("layout-expanded");API(pp_surface_publish_gl_placement(surfaces[0],&error));pump();
-        HWND expanded=pp_composition_top(composition,proxy);CHECK(expanded!=previous&&!IsWindow(previous)&&native(0)==proxy);
+        HWND expanded=composition_host();
+        printf("LAYOUT previous-host=%p expanded-host=%p proxy=%p previous-host-valid=%d proxy-valid=%d\n",
+            (void *)previous,(void *)expanded,(void *)proxy,IsWindow(previous),IsWindow(proxy));
+        CHECK(expanded!=previous&&!IsWindow(previous)&&native(0)==proxy);
         CHECK(pp_renderer_output_bytes(renderers[0])==bytes);expect_pixel("layout recovery rim",277,252,255,0,0);
         PPRendererMetrics after=pp_renderer_metrics(renderers[0]);CHECK(!memcmp(&metrics,&after,sizeof(metrics)));
-        API(pp_surface_publish_gl_placement(surfaces[0],&error));CHECK(pp_composition_top(composition,proxy)==expanded);
+        API(pp_surface_publish_gl_placement(surfaces[0],&error));CHECK(composition_host()==expanded);
         pp_test_composition_control("");API(pp_surface_publish_gl_placement(surfaces[0],&error));pump();CHECK(!IsWindow(expanded));
         pp_test_composition_control("layout-expanded");present(0,37,1,(PPRect){220,220,90,90});expect_pixel("layout transform interior",265,265,255,255,255);
         CHECK(GetForegroundWindow()==(HWND)receiver->window&&WindowFromPoint((POINT){265,265})==proxy);

@@ -93,6 +93,34 @@ static LRESULT CALLBACK host_procedure(HWND window,UINT message,WPARAM w,LPARAM 
     if(message==WM_NCHITTEST)return HTTRANSPARENT;
     return DefWindowProcW(window,message,w,l);
 }
+struct HostCreation {
+    HRESULT result;
+    DWORD error;
+    bool window_failed;
+};
+/* Leave partial resources with the caller to preserve its teardown order. */
+static HostCreation create_host(IDCompositionDevice *composition,int x,int y,int w,int h,
+        HWND *host,ComPtr<IDCompositionTarget> &target,ComPtr<IDCompositionVisual> &visual,HRESULT hr=S_OK) {
+    *host=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOREDIRECTIONBITMAP|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
+        L"Yoink.CompositionHost",L"Yoink composition",WS_POPUP,x,y,w,h,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
+    bool window_failed=!*host||!SetLayeredWindowAttributes(*host,0,255,LWA_ALPHA);
+    if(!window_failed) {
+        if(SUCCEEDED(hr))hr=composition->CreateTargetForHwnd(*host,TRUE,&target);
+        if(SUCCEEDED(hr))hr=composition->CreateVisual(&visual);
+        if(SUCCEEDED(hr))hr=target->SetRoot(visual.Get());
+    }
+    HostCreation result={window_failed?E_FAIL:hr,GetLastError(),window_failed};
+    return result;
+}
+struct InteropRelease {
+    bool failed,owned;
+    DWORD error;
+};
+template<class Release> static InteropRelease release_interop(Release release) {
+    if(release())return {false,false,ERROR_SUCCESS};
+    DWORD error=GetLastError();
+    return {true,!release(),error};
+}
 extern "C" PPComposition *pp_composition_create(HWND proxy) {
     PPComposition *c=new(std::nothrow) PPComposition;
     if(c)c->proxy=proxy;
@@ -139,14 +167,14 @@ extern "C" bool pp_composition_initialize(PPComposition *c) {
     c->update_locked=c->update_object&&c->lock_dx(c->interop,1,&c->update_object);
     bool compatible=c->update_locked;DWORD probe_error=GetLastError();
     if(c->update_locked) {
-        bool released=c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;
-        if(!released){compatible=false;probe_error=GetLastError();released=c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;}
-        c->update_locked=!released;
+        auto release=release_interop([&](){return c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;});
+        if(release.failed){compatible=false;probe_error=release.error;}
+        c->update_locked=release.owned;
     }
     if(c->update_object&&!c->update_locked) {
-        bool released=c->unregister_dx(c->interop,c->update_object)!=FALSE;
-        if(!released){compatible=false;probe_error=GetLastError();released=c->unregister_dx(c->interop,c->update_object)!=FALSE;}
-        if(released)c->update_object=nullptr;
+        auto release=release_interop([&](){return c->unregister_dx(c->interop,c->update_object)!=FALSE;});
+        if(release.failed){compatible=false;probe_error=release.error;}
+        if(!release.owned)c->update_object=nullptr;
     }
     if(!c->update_locked&&!c->update_object){c->delete_rb(1,&c->update_rb);c->update_rb=0;c->update_texture.Reset();c->update_context=nullptr;}
     if(!compatible){describe(c,"backend=SDL compatibility coherent-publication=unverified stage=registration_probe HRESULT=%08lx owned=%d Win32=%lu GL_error=%04x",hr,c->update_object!=nullptr,probe_error,glGetError());release_device(c);return false;}
@@ -160,13 +188,9 @@ extern "C" bool pp_composition_initialize(PPComposition *c) {
     }
     c->origin_x=GetSystemMetrics(SM_XVIRTUALSCREEN);c->origin_y=GetSystemMetrics(SM_YVIRTUALSCREEN);
     c->desktop_w=GetSystemMetrics(SM_CXVIRTUALSCREEN);c->desktop_h=GetSystemMetrics(SM_CYVIRTUALSCREEN);
-    c->host=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOREDIRECTIONBITMAP|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
-        host_class,L"Yoink composition",WS_POPUP,c->origin_x,c->origin_y,c->desktop_w,c->desktop_h,nullptr,nullptr,instance,nullptr);
-    if(!c->host||!SetLayeredWindowAttributes(c->host,0,255,LWA_ALPHA)){describe(c,"backend=SDL compatibility coherent-publication=unverified stage=host_window Win32=%lu",GetLastError());release_device(c);return false;}
-    if(SUCCEEDED(hr))hr=c->composition->CreateTargetForHwnd(c->host,TRUE,&c->target);
-    if(SUCCEEDED(hr))hr=c->composition->CreateVisual(&c->visual);
-    if(SUCCEEDED(hr))hr=c->target->SetRoot(c->visual.Get());
-    if(FAILED(hr)){describe(c,"backend=SDL compatibility coherent-publication=unverified stage=composition_target HRESULT=%08lx Win32=%lu",hr,GetLastError());release_device(c);return false;}
+    auto host=create_host(c->composition.Get(),c->origin_x,c->origin_y,c->desktop_w,c->desktop_h,&c->host,c->target,c->visual,hr);
+    if(host.window_failed){describe(c,"backend=SDL compatibility coherent-publication=unverified stage=host_window Win32=%lu",host.error);release_device(c);return false;}
+    if(FAILED(host.result)){describe(c,"backend=SDL compatibility coherent-publication=unverified stage=composition_target HRESULT=%08lx Win32=%lu",host.result,host.error);release_device(c);return false;}
     /* The input HWND was created without a redirection bitmap. It receives
      * no artwork swaps and Windows hit tests its configured native region. */
     c->active=true;
@@ -219,14 +243,11 @@ static bool commit(PPComposition *c,PPError *error) {
         /* This HWND has never displayed a tree based on the old desktop origin.
          * Its first content-bearing commit contains matching content/offsets.
          * A layout transition may be blank until DWM accepts that first tree. */
-        HWND host=CreateWindowExW(WS_EX_LAYERED|WS_EX_TRANSPARENT|WS_EX_NOREDIRECTIONBITMAP|WS_EX_NOACTIVATE|WS_EX_TOOLWINDOW|WS_EX_TOPMOST,
-            L"Yoink.CompositionHost",L"Yoink composition",WS_POPUP,x,y,width,height,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);
-        if(!host||!SetLayeredWindowAttributes(host,0,255,LWA_ALPHA)){if(host)DestroyWindow(host);return failure(error,E_FAIL,"Cannot create replacement composition host");}
+        HWND host=nullptr;
         ComPtr<IDCompositionTarget> target;ComPtr<IDCompositionVisual> visual;
-        hr=c->composition->CreateTargetForHwnd(host,TRUE,&target);
-        if(SUCCEEDED(hr))hr=c->composition->CreateVisual(&visual);
-        if(SUCCEEDED(hr))hr=target->SetRoot(visual.Get());
-        if(FAILED(hr)){DestroyWindow(host);return failure(error,hr,"Cannot prepare replacement composition target");}
+        auto created=create_host(c->composition.Get(),x,y,width,height,&host,target,visual);
+        if(FAILED(created.result)){if(host)DestroyWindow(host);SetLastError(created.error);return failure(error,created.result,created.window_failed?
+            "Cannot create replacement composition host":"Cannot prepare replacement composition target");}
         old_host=c->host;old_target=c->target;old_visual=c->visual;
         pp_composition_hide(c);old_target->SetRoot(nullptr);
         c->host=host;c->target=target;c->visual=visual;
@@ -294,16 +315,16 @@ extern "C" bool pp_composition_end(PPComposition *c,bool drawn,PPError *error) {
     c->bind_fb(GL_FRAMEBUFFER,0);bool ok=drawn;
     double start=c->observer?clock_ms():0;
     if(c->update_locked) {
-        bool released=c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;
-        if(!released){ok=false;released=c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;}
-        c->update_locked=!released;
+        auto release=release_interop([&](){return c->unlock_dx(c->interop,1,&c->update_object)!=FALSE;});
+        if(release.failed)ok=false;
+        c->update_locked=release.owned;
     }
     observed(c,PP_COMPOSITION_UNLOCK,start);start=c->observer?clock_ms():0;
     if(c->update_locked){pp_composition_hide(c);return failure(error,E_FAIL,"Cannot release composition GL ownership");}
     if(c->update_object) {
-        bool released=c->unregister_dx(c->interop,c->update_object)!=FALSE;
-        if(!released){ok=false;released=c->unregister_dx(c->interop,c->update_object)!=FALSE;}
-        if(released)c->update_object=nullptr;
+        auto release=release_interop([&](){return c->unregister_dx(c->interop,c->update_object)!=FALSE;});
+        if(release.failed)ok=false;
+        if(!release.owned)c->update_object=nullptr;
     }
     observed(c,PP_COMPOSITION_UNREGISTER,start);
     if(c->update_object){pp_composition_hide(c);return failure(error,E_FAIL,"Cannot unregister composition GL output");}
