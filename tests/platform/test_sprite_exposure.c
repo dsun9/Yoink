@@ -190,8 +190,9 @@ static void ownership(void){
   remove_sprite(id);CHECK(!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);
   id=spawn((PPVec2){screen.x+screen.w*.5,screen.y+screen.h*.5},96);s=pp_sprites_find(presenter,id);
   API(pp_renderer_complete(s->retained.renderer,&error));
-  PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC attachment=(PFNGLGETFRAMEBUFFERATTACHMENTPARAMETERIVPROC)SDL_GL_GetProcAddress("glGetFramebufferAttachmentParameteriv");CHECK(attachment);
-  GLint name=0;attachment(GL_READ_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,&name);CHECK(name>0&&glIsTexture((GLuint)name));
+  /* The retained source remains a GL texture on both native backends. The
+   * compositor output has its own public logical-byte ownership above. */
+  GLint name=0;glGetIntegerv(GL_TEXTURE_BINDING_2D,&name);CHECK(name>0&&glIsTexture((GLuint)name));
   CHECK(DestroyWindow(native(s->surface)));remove_sprite(id);
   API(pp_renderer_complete(presenter->texture_owner,&error));CHECK(!glIsTexture((GLuint)name));
   CHECK(!pp_anchor_presenter_gpu_resources(presenter).retained_bytes);

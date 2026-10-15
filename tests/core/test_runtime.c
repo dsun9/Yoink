@@ -120,6 +120,7 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
 PPRendererMetrics pp_renderer_metrics(const PPRenderer *r) {return r==(PPRenderer *)1?(PPRendererMetrics){cpu_transforms,cpu_transforms,cpu_transforms*2}:r?r->metrics:(PPRendererMetrics){0};}
 bool pp_surface_create_gl(PPSurface **out,PPError *error) {if(!pp_surface_create(out,error))return false;(*out)->window_id=++direct_window_serial;return true;}
 uint32_t pp_surface_window_id(const PPSurface *s) {return s?s->window_id:0;}
+bool pp_surface_publish_gl_placement(PPSurface *s,PPError *error){(void)s;(void)error;return true;}
 bool pp_surface_place_gl(PPSurface *s,PPRect b,bool interactive,PPError *error) {(void)error;s->bounds=b;s->shown=interactive;if(!interactive && capture_owner==s)capture_owner=NULL;return true;}
 bool pp_surface_set_grab_region(PPSurface *s,const PPGrabRegion *r,PPError *error) {(void)s;(void)r;(void)error;return true;}
 void pp_surface_set_rectangular(PPSurface *s,bool enabled) {(void)s;(void)enabled;}
@@ -874,3 +875,4 @@ bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *frame,PPShar
 void pp_renderer_release_output(PPRenderer *r){(void)r;}
 bool pp_renderer_refresh(PPRenderer *r,PPError *error){(void)error;r->metrics.presentation_refreshes++;return true;}
 bool pp_renderer_destroy_retained(PPRenderer *r){pp_renderer_destroy(r);return true;}
+size_t pp_renderer_quarantined_bytes(void){return 0;}

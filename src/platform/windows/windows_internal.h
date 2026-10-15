@@ -3,6 +3,7 @@
 #include "pointy/platform.h"
 #include <windows.h>
 typedef struct SDL_Window SDL_Window;
+typedef struct PPComposition PPComposition;
 struct PPSurface {
     HWND window; HDC dc; HBITMAP bitmap; HGDIOBJ original;
     uint8_t *bits; int width,height;
@@ -13,6 +14,7 @@ struct PPSurface {
     WNDPROC gl_procedure;
     bool gl_video_initialized, gl_interactive;
     bool rectangular;
+    PPComposition *composition;
 };
 void pp_windows_record(PPSurface *surface, HWND window, UINT message, WPARAM w, LPARAM l);
 void pp_windows_forget(PPSurface *surface);

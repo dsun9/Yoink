@@ -254,13 +254,18 @@ size_t pp_content_sources_raster_bytes(const PPContentSources *s) {
 bool pp_content_gpu_reserve(PPContentSources *s,size_t bytes,PPError *error) {
   if(!s)return fail(error,PP_ERROR_ARGUMENT,"GPU reservation requires content owner");
   s->gpu.limit_bytes=PP_RETAINED_GPU_LIMIT;
-  if(bytes>s->gpu.limit_bytes||s->gpu.retained_bytes>s->gpu.limit_bytes-bytes)
+  size_t quarantined=pp_renderer_quarantined_bytes();
+  if(quarantined>s->gpu.limit_bytes||bytes>s->gpu.limit_bytes-quarantined||s->gpu.retained_bytes>s->gpu.limit_bytes-quarantined-bytes)
     return fail(error,PP_ERROR_RESOURCE_LIMIT,"Retained GPU textures exceed 256 MiB including candidate overlap");
   s->gpu.retained_bytes+=bytes;if(s->gpu.retained_bytes>s->gpu.peak_bytes)s->gpu.peak_bytes=s->gpu.retained_bytes;
   return true;
 }
 void pp_content_gpu_release(PPContentSources *s,size_t bytes){if(s)s->gpu.retained_bytes-=bytes;}
-PPGpuResources pp_content_gpu_resources(const PPContentSources *s){PPGpuResources result=s?s->gpu:(PPGpuResources){0};result.limit_bytes=PP_RETAINED_GPU_LIMIT;return result;}
+PPGpuResources pp_content_gpu_resources(const PPContentSources *s){
+  PPGpuResources result=s?s->gpu:(PPGpuResources){0};result.limit_bytes=PP_RETAINED_GPU_LIMIT;
+  result.retained_bytes+=pp_renderer_quarantined_bytes();if(result.retained_bytes>result.peak_bytes)result.peak_bytes=result.retained_bytes;
+  return result;
+}
 static bool visual_alpha(const PPFrame *frame) {
   if(!frame||!frame->pixels)return false;
   for(int y=0;y<frame->height;y++)for(int x=0;x<frame->width;x++)if(frame->pixels[(size_t)y*frame->stride+x*4+3])return true;

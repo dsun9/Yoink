@@ -1,5 +1,6 @@
 #import "macos_internal.h"
 #include <math.h>
+bool pp_surface_publish_gl_placement(PPSurface *surface,PPError *error) {(void)surface;(void)error;return true;}
 bool pp_surface_set_grab_region(PPSurface *surface,const PPGrabRegion *region,PPError *error) {
     (void)surface;(void)region;if(error)*error=(PPError){PP_ERROR_PLATFORM,"Approximate native grab regions are Windows-only"};return false;
 }

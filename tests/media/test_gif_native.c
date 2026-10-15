@@ -2,6 +2,7 @@
 #include "pointy/platform.h"
 #include "../../src/app/presenter_internal.h"
 #include "../../src/platform/windows/windows_internal.h"
+#include "../../src/platform/windows/composition.h"
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
 #include <math.h>
@@ -83,8 +84,14 @@ static size_t native_output_bytes(uint64_t id) {
     CHECK(pp_sprites_find(presenter,id)->retained.output_bytes==bytes);return bytes;
 }
 static void pixel(const char *label,int x,int y,int r,int g,int b) {
+    bool pp_test_desktop_capture_start(RECT rectangle);
+    unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new);
+    static bool capture_started;
+    RECT rectangle={x,y,x+1,y+1};
+    if(!capture_started){CHECK(pp_test_desktop_capture_start(rectangle));capture_started=true;}
     ULONGLONG until=GetTickCount64()+1000;COLORREF value=CLR_INVALID;
-    do {pump();HDC dc=GetDC(NULL);CHECK(dc);value=GetPixel(dc,x,y);ReleaseDC(NULL,dc);
+    do {pump();unsigned char *pixels=pp_test_desktop_capture(rectangle,false);CHECK(pixels);
+        value=RGB(pixels[2],pixels[1],pixels[0]);free(pixels);
         if(value!=CLR_INVALID && abs((int)GetRValue(value)-r)<=3 && abs((int)GetGValue(value)-g)<=3 && abs((int)GetBValue(value)-b)<=3)break;
     }while(GetTickCount64()<until);
     printf("GIF compositor %s RGB=%d,%d,%d expected=%d,%d,%d\n",label,GetRValue(value),GetGValue(value),GetBValue(value),r,g,b);
@@ -109,6 +116,7 @@ static void retained_native(void) {
     }
     PPRendererMetrics before=pp_anchor_presenter_renderer_metrics(presenter);uint64_t builds=pp_assets_source_metrics(assets).raster_builds;
     direct_update(1.08);PPRendererMetrics first=pp_anchor_presenter_renderer_metrics(presenter);
+    printf("GIF PRESENTATION %s\n",pp_composition_description((PPComposition *)GetPropW(native(ids[0]),PP_COMPOSITION_PROPERTY)));
     CHECK(first.source_uploads==before.source_uploads+2 && first.transform_draws==before.transform_draws+3 && first.readbacks==before.readbacks);
     CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==24+native_output_bytes(ids[0])+native_output_bytes(ids[1])+native_output_bytes(ids[2]));
     printf("GIF GL renderer=%s vendor=%s version=%s shared_frames=2 independent_instances=3 native_density=%.2f\n",glGetString(GL_RENDERER),glGetString(GL_VENDOR),glGetString(GL_VERSION),presenter->displays[0].drawable_pixels_per_dip);

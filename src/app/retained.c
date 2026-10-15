@@ -159,6 +159,11 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
     rectangle.w!=r->bounds.w || rectangle.h!=r->bounds.h || center_changed;
   bool place=!r->visible || memcmp(&rectangle,&r->bounds,sizeof(rectangle)) || !interactive;
   bool overlap=changed && !source.shared_texture;
+  /* Select the backend with an empty hidden renderer before admission.
+   * Accepted source, pose, native geometry and grab area remain untouched. */
+  if((changed||(interactive&&redraw))&&!r->renderer&&
+     !(pp_presenter_texture_owner(p,error)&&pp_renderer_create_shared_window(&r->renderer,
+        pp_surface_window_id(surface),p->texture_owner,error)))goto grab_rejected;
   size_t source_candidate=overlap?(size_t)frame->width*frame->height*4:0;
   size_t candidate=interactive&&redraw?pp_renderer_output_candidate_bytes(r->renderer,output_w,output_h):0;
   /* Reserve both candidates while the accepted source/output are still owned.
@@ -169,11 +174,15 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
     pp_presenter_gpu_release(p,source_candidate);goto grab_rejected;
   }
   if(changed || (interactive && redraw)) {
-    bool ok=r->renderer || (pp_presenter_texture_owner(p,error) && pp_renderer_create_shared_window(&r->renderer,pp_surface_window_id(surface),p->texture_owner,error));
-    if(ok) ok=pp_renderer_prepare_source_output(r->renderer,frame,source.shared_texture,
+    bool ok=pp_renderer_prepare_source_output(r->renderer,frame,source.shared_texture,
         source.content_id,source.source_revision,interactive?output_w:0,interactive?output_h:0,error);
     if(!ok) {
-      pp_presenter_gpu_release(p,source_candidate+candidate);
+      /* Failed BeginDraw cleanup can still own a registered candidate.
+       * Keep its reservation until native/GL ownership actually ends. */
+      size_t remaining=pp_renderer_output_bytes(r->renderer);
+      size_t held=remaining>r->output_bytes?remaining-r->output_bytes:0;
+      r->output_bytes+=held;
+      pp_presenter_gpu_release(p,source_candidate+candidate-held);
       /* A protective allocation rejection leaves the transactional old texture
        * usable. A broken context/presentation cannot keep intercepting input. */
       if(error && error->code==PP_ERROR_RENDER) goto native_failure;
@@ -197,6 +206,7 @@ bool pp_retained_present(PPAnchorPresenter *p,PPSurface *surface,PPRetainedPrese
   if(interactive && redraw && !pp_renderer_draw_source_at(r->renderer,source.layout,source.source_rect,pose.longest_dip,pose.angle_deg,
       pose.opacity,display->drawable_pixels_per_dip,center,error)) goto native_failure;
   if(refresh&&!pp_renderer_refresh(r->renderer,error))goto native_failure;
+  if(interactive&&!redraw&&!refresh&&!pp_surface_publish_gl_placement(surface,error))goto native_failure;
   size_t output_bytes=pp_renderer_output_bytes(r->renderer);
   pp_presenter_gpu_release(p,r->output_bytes-output_bytes);r->output_bytes=output_bytes;
   if(place || (redraw && interactive)) p->metrics.native_publications++;

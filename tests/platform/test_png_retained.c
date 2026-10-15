@@ -29,6 +29,7 @@ bool pp_test_replacement_candidates_released(void);
 unsigned pp_test_replacement_source_allocations(void);
 unsigned pp_test_replacement_output_rejections(void);
 unsigned pp_test_replacement_candidate_deletions(void);
+unsigned pp_test_replacement_expected_deletions(void);
 static double now(void){LARGE_INTEGER n,f;QueryPerformanceCounter(&n);QueryPerformanceFrequency(&f);return(double)n.QuadPart/f.QuadPart;}
 static void cleanup(void){
   pp_platform_settings_window(0);pp_platform_drawer_close(false);SDL_DestroyWindow(drawer);SDL_DestroyWindow(settings);
@@ -132,7 +133,7 @@ int main(int argc,char **argv){
   CHECK(presenter->notice.code==(output_exhaustion||source_exhaustion?PP_ERROR_MEMORY:PP_ERROR_RESOURCE_LIMIT)&&!presenter->failed_surface);
   if(output_exhaustion) {
     CHECK(pp_test_replacement_source_allocations()==1&&pp_test_replacement_output_rejections()==1);
-    CHECK(pp_test_replacement_candidate_deletions()==2);
+    CHECK(pp_test_replacement_candidate_deletions()==pp_test_replacement_expected_deletions());
     CHECK(pp_anchor_presenter_gpu_resources(presenter).peak_bytes>=charge+128+145*73*4);
   }
   if(source_exhaustion)CHECK(pp_test_replacement_source_allocations()==0&&pp_test_replacement_output_rejections()==0&&pp_test_replacement_candidate_deletions()==1);

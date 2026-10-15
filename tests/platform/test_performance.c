@@ -169,7 +169,7 @@ static int acceptance_control(const char *control) {
   }
   return acceptance_result(&a);
 }
-static const char *stage_names[] = {"text", "raster", "inspect", "find_font", "renderer_create", "transform", "ui_create", "upload", "ui_end_swap", "surface", "dib", "layered", "readback", "texture", "source_request", "cpu_draw_submission", "gpu_execution", "cpu_wait_gpu_completion", "native_set_size", "native_placement", "make_current", "gl_swap", "gl_finish", "query_result", "draw_state"};
+static const char *stage_names[] = {"text", "raster", "inspect", "find_font", "renderer_create", "transform", "ui_create", "upload", "ui_end_swap", "surface", "dib", "layered", "readback", "texture", "source_request", "cpu_draw_submission", "gpu_execution", "cpu_wait_gpu_completion", "native_set_size", "native_placement", "make_current", "gl_swap", "gl_finish", "query_result", "draw_state", "composition_begin", "interop_register", "interop_lock", "composition_copy", "interop_unlock", "interop_unregister", "composition_end", "composition_commit"};
 static void report(const char *scenario, double elapsed) {
   pp_probe_printf("SCENARIO %s wall_ms=%.3f\n", scenario, elapsed);
   for (int i=0;i<PROBE_COUNT;i++) if (pp_probe_metrics[i].count)
@@ -595,7 +595,7 @@ static int native_sharp_acceptance(PPApp *app,bool production_loop) {
   PPFontInfo font;const PPItem *item=pp_project_target(pp_app_project(app),PP_ANCHOR_TOP_LEFT);
   selected_font(pp_app_assets(app),item->text_style.fallback_asset,item->text_style.fallback_face,"emoji-fallback",&font);
   a.default_segoe=!strcmp(font.family,"Segoe UI Emoji");pp_probe_completion_enabled=true;
-  pp_probe_printf("SHARP protocol=%s easing_gpu_completion=%s sharp_gpu_completion=actual-glFinish-after-returned-swap\n",production_loop?"production-worker-input":"synchronous-complete-path",production_loop?"shipping-normal-draws":"every-draw");
+  pp_probe_printf("SHARP protocol=%s easing_gpu_completion=%s sharp_gpu_completion=actual-glFinish-after-selected-backend-publication\n",production_loop?"production-worker-input":"synchronous-complete-path",production_loop?"shipping-normal-draws":"every-draw");
   bool observed=pp_renderer_create(&renderer,&error)&&sharp_native_samples(app,renderer,&a,pp_probe_clock()+45000,production_loop);
   a.max_input_wait_ms=pp_probe_injected_max_wait;pp_renderer_destroy(renderer);pp_probe_completion_enabled=false;
   bool ok=observed&&a.release&&a.default_segoe&&a.sharp_observations==ACCEPTANCE_SAMPLES&&a.max_sharp_ms<=200&&a.max_input_wait_ms<=50&&!a.stopped&&!a.timed_out;
