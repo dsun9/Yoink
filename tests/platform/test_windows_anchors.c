@@ -1,5 +1,6 @@
 #include "../../src/app/anchors.h"
 #include "../../src/platform/windows/windows_internal.h"
+#include "../../src/platform/windows/composition.h"
 #include "receiver_shared.h"
 #include "../test.h"
 #include "../project_fixture.h"
@@ -67,9 +68,10 @@ static BOOL CALLBACK find_sprite(HWND window,LPARAM context) {
 }
 static void check_seam_sprite(double pointer_x,double grab_x,int expected_width) {
     PPPose pose;CHECK(pp_anchor_presenter_instance_pose(presenter,0,&pose));PPSurface *s=NULL;EnumWindows(find_sprite,(LPARAM)&s);
-    CHECK(s&&IsWindowVisible(s->window));CHECK(s->width==expected_width);CHECK(pose.longest_dip==96);
-    CHECK(fabs(pose.center.x+grab_x*s->width/96-pointer_x)<2);
-    CHECK(fabs(s->origin.x+s->width*.5+grab_x*s->width/96-pointer_x)<2);
+    CHECK(s&&IsWindowVisible(s->window));CHECK(s->width==expected_width+1);CHECK(pose.longest_dip==96);
+    printf("ANCHOR PRESENTATION %s\n",pp_composition_description(s->composition));
+    CHECK(fabs(pose.center.x+grab_x*expected_width/96-pointer_x)<2);
+    CHECK(fabs(s->origin.x+s->width*.5+grab_x*expected_width/96-pointer_x)<2);
 }
 static void test_native_presentation_at_simulated_mixed_scale_seam(void) {
     pp_anchor_presenter_destroy(presenter);presenter=NULL;pp_displays_free(displays);count=2;displays=calloc(count,sizeof(*displays));CHECK(displays);

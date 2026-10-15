@@ -59,12 +59,12 @@ static void quality(uint64_t id,const PPTextResult *source) {
   PPPose expected_pose=pp_scene_get(scene,id)->pose;
   double drawable_per_desktop=density/display->desktop_units_per_dip,scale=expected_pose.longest_dip*density/fmax(layout.x,layout.y);
   double angle=expected_pose.angle_deg*3.14159265358979323846/180,c=cos(angle),s=sin(angle);
-  HDC screen=GetDC(NULL);CHECK(screen);HDC dc=CreateCompatibleDC(screen);CHECK(dc);
-  int capture_width=rectangle.right-rectangle.left,capture_height=rectangle.bottom-rectangle.top;
-  BITMAPINFO info={0};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=capture_width;info.bmiHeader.biHeight=-capture_height;
-  info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;void *capture_pixels=NULL;
-  HBITMAP capture=CreateDIBSection(screen,&info,DIB_RGB_COLORS,&capture_pixels,NULL,0);CHECK(capture&&capture_pixels);HGDIOBJ old=SelectObject(dc,capture);
-  CHECK(BitBlt(dc,0,0,capture_width,capture_height,screen,rectangle.left,rectangle.top,SRCCOPY|CAPTUREBLT));ReleaseDC(NULL,screen);
+  bool pp_test_desktop_capture_start(RECT rectangle);
+  unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new);
+  static bool capture_started;
+  if(!capture_started){CHECK(pp_test_desktop_capture_start(rectangle));capture_started=true;Sleep(100);}
+  int capture_width=rectangle.right-rectangle.left;
+  unsigned char *capture_pixels=pp_test_desktop_capture(rectangle,false);CHECK(capture_pixels);
   unsigned samples=0,partial=0,max_error=0;
   COLORREF background=GetSysColor(COLOR_WINDOW);int backdrop[3]={GetRValue(background),GetGValue(background),GetBValue(background)};
   int step_x=SDL_max(7,(rectangle.right-rectangle.left+23)/24),step_y=SDL_max(7,(rectangle.bottom-rectangle.top+23)/24);
@@ -83,7 +83,7 @@ static void quality(uint64_t id,const PPTextResult *source) {
         rgba[channel]=(top*(1-fy)+bottom*fy)*expected_pose.opacity;
       }
     }
-    COLORREF pixel=GetPixel(dc,px-rectangle.left,py-rectangle.top);CHECK(pixel!=CLR_INVALID);int actual[3]={GetRValue(pixel),GetGValue(pixel),GetBValue(pixel)};
+    const unsigned char *pixel=capture_pixels+((size_t)(py-rectangle.top)*capture_width+px-rectangle.left)*4;int actual[3]={pixel[2],pixel[1],pixel[0]};
     for(int channel=0;channel<3;channel++) {
       int expected=(int)lround(rgba[channel]+backdrop[channel]*(1-rgba[3]/255));unsigned difference=(unsigned)abs(actual[channel]-expected);
       if(difference>max_error) max_error=difference;
@@ -92,7 +92,7 @@ static void quality(uint64_t id,const PPTextResult *source) {
     }
     partial+=rgba[3]>0&&rgba[3]<254;samples++;
   }
-  SelectObject(dc,old);DeleteObject(capture);DeleteDC(dc);CHECK(samples>100&&partial>0);CHECK(GetForegroundWindow()==(HWND)receiver->window);
+  free(capture_pixels);CHECK(samples>100&&partial>0);CHECK(GetForegroundWindow()==(HWND)receiver->window);
   printf("QUALITY native bitmap original-strike bilinear samples=%u partial_alpha=%u max_RGB_error=%u rotation=%.2f opacity=%.2f density=%.2f layout=%.0fx%.0f source=%dx%d\n",samples,partial,max_error,sprite->pose.angle_deg,sprite->pose.opacity,density,layout.x,layout.y,source->frame.width,source->frame.height);
 }
 int main(int argc,char **argv) {

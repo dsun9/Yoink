@@ -6,6 +6,7 @@
 #include "../../src/app/runtime_internal.h"
 #include "../../src/app/presenter_internal.h"
 #include "../../src/render/gl_api.h"
+#include "../../src/platform/windows/composition.h"
 #include "../test.h"
 #include <windows.h>
 #include <math.h>
@@ -15,7 +16,7 @@
 #define MAX_SAMPLES 4096
 typedef struct Moment { double x, y, angle, extent, mass; } Moment;
 typedef struct Observation { Moment image; LONGLONG qpc; unsigned workload; } Observation;
-typedef struct Reference { Moment image; PPPose pose; LONGLONG qpc; unsigned workload; RECT native; bool moving; } Reference;
+typedef struct Reference { Moment image; PPPose pose; LONGLONG qpc; unsigned workload; RECT native; bool moving,drawn; } Reference;
 static PPError error;
 static PPApp *app;
 static PPRuntime *runtime;
@@ -36,6 +37,7 @@ static unsigned reference_readbacks;
 static HANDLE injector;
 static INPUT injected;
 static volatile LONG accepted;
+static uint8_t *completed_pixels;
 
 bool pp_test_desktop_capture_start(RECT rectangle);
 unsigned char *pp_test_desktop_capture_poll(RECT rectangle);
@@ -103,7 +105,7 @@ static void cleanup(void) {
   if (sampler_ready) CloseHandle(sampler_ready);
   if (sampler_stop) CloseHandle(sampler_stop);
   pp_runtime_destroy(runtime); runtime=NULL;
-  pp_app_destroy(app); app=NULL;
+  pp_app_destroy(app); app=NULL;free(completed_pixels);completed_pixels=NULL;
   if (background) DestroyWindow(background);
   INPUT up[2]={{.type=INPUT_KEYBOARD},{.type=INPUT_MOUSE}};
   up[0].ki.wVk=VK_MENU; up[0].ki.dwFlags=KEYEVENTF_KEYUP; up[1].mi.dwFlags=MOUSEEVENTF_LEFTUP;
@@ -114,14 +116,30 @@ static void cleanup(void) {
  * depending on this callback for its samples or its passing condition. */
 void pp_test_sprite_placed(void) { if (defect_control&&workload) Sleep(35); }
 
-static Moment completed_image(PPSprite *sprite, RECT *bounds) {
-  int w,h; CHECK(SDL_GetWindowSizeInPixels(SDL_GetWindowFromID(pp_surface_window_id(sprite->surface)),&w,&h));
-  GLint fbo=0; glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING,&fbo); CHECK(fbo!=0);
-  uint8_t *pixels=malloc((size_t)w*h*4); CHECK(pixels);
-  glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,pixels); CHECK(glGetError()==GL_NO_ERROR);
-  CHECK(GetWindowRect(native(sprite->surface),bounds));
-  Moment result=moment(pixels,w,h,w*4,true,bounds->left,bounds->top); free(pixels); CHECK(result.mass>0);
-  return result;
+
+static int completed_width,completed_height;
+static Moment completed_image(PPSprite *sprite,RECT *bounds) {
+  CHECK(completed_pixels);CHECK(GetWindowRect(native(sprite->surface),bounds));
+  return moment(completed_pixels,completed_width,completed_height,completed_width*4,true,bounds->left,bounds->top);
+}
+static void completed_draw(PPRenderer *renderer,int x,int y,int w,int h,bool top_down,void *context) {
+  (void)context;
+  if(!runtime||!runtime->presenter||runtime->presenter->instance_count!=1)return;
+  PPSprite *sprite=runtime->presenter->instances;if(renderer!=sprite->retained.renderer)return;
+  LONGLONG start=counter();uint8_t *raw=malloc((size_t)w*h*4);CHECK(raw);
+  glReadPixels(x,y,w,h,GL_RGBA,GL_UNSIGNED_BYTE,raw);CHECK(glGetError()==GL_NO_ERROR);
+  free(completed_pixels);completed_pixels=malloc((size_t)w*h*4);CHECK(completed_pixels);
+  for(int row=0;row<h;row++)memcpy(completed_pixels+(size_t)row*w*4,raw+(size_t)(top_down?h-row-1:row)*w*4,(size_t)w*4);
+  free(raw);completed_width=w;completed_height=h;
+  reference_readback_ms+=(counter()-start)*1000/qpc_frequency;reference_readbacks++;
+  if(!workload)return;
+  CHECK(reference_count<MAX_SAMPLES);Reference *r=references+reference_count++;
+  *r=(Reference){.pose=sprite->pose,.qpc=start,.workload=(unsigned)workload,.moving=sprite->rotating||sprite->resizing,.drawn=true};
+  r->image=completed_image(sprite,&r->native);
+  printf("POSE workload=%u t=%.6f center=%.6f,%.6f longest_dip=%.6f angle_deg=%.6f easing=%d pivot=%.6f,%.6f native=%ld,%ld,%ld,%ld GL_center=%.6f,%.6f\n",
+      r->workload,r->qpc/qpc_frequency,r->pose.center.x,r->pose.center.y,r->pose.longest_dip,r->pose.angle_deg,
+      sprite->rotating||sprite->resizing,sprite->rotate_pivot.x,sprite->rotate_pivot.y,
+      r->native.left,r->native.top,r->native.right,r->native.bottom,r->image.x,r->image.y);
 }
 static void tick(void) {
   PPPlatformEvent event;
@@ -133,20 +151,20 @@ static void tick(void) {
     }
     pp_runtime_event(runtime,&event);
   }
-  PPRendererMetrics before=pp_runtime_renderer_metrics(runtime);
-  LONGLONG started=counter(); pp_runtime_tick(runtime,now()); CHECK(!runtime->failed);
-  PPRendererMetrics after=pp_runtime_renderer_metrics(runtime);
-  if (workload&&after.transform_draws!=before.transform_draws) {
-    CHECK(runtime->presenter->instance_count==1&&reference_count<MAX_SAMPLES);
-    PPSprite *sprite=runtime->presenter->instances;
-    Reference *r=references+reference_count++;
-    *r=(Reference){.pose=sprite->pose,.qpc=started,.workload=(unsigned)workload,.moving=sprite->rotating||sprite->resizing};
-    LONGLONG read_start=counter(); r->image=completed_image(sprite,&r->native);
-    reference_readback_ms+=(counter()-read_start)*1000/qpc_frequency; reference_readbacks++;
-    printf("POSE workload=%u t=%.6f center=%.6f,%.6f longest_dip=%.6f angle_deg=%.6f easing=%d pivot=%.6f,%.6f native=%ld,%ld,%ld,%ld GL_center=%.6f,%.6f\n",
-        r->workload,r->qpc/qpc_frequency,r->pose.center.x,r->pose.center.y,r->pose.longest_dip,r->pose.angle_deg,
-        sprite->rotating||sprite->resizing,sprite->rotate_pivot.x,sprite->rotate_pivot.y,
-        r->native.left,r->native.top,r->native.right,r->native.bottom,r->image.x,r->image.y);
+  pp_runtime_tick(runtime,now());CHECK(!runtime->failed);
+  if(workload&&completed_pixels&&runtime->presenter->instance_count==1) {
+    PPSprite *sprite=runtime->presenter->instances;LONGLONG timestamp=counter();
+    if(!sprite->rotating&&!sprite->resizing&&sprite->retained.visible&&reference_count&&
+       timestamp-references[reference_count-1].qpc>=qpc_frequency*.05) {
+      /* No publication changed these completed pixels. Refresh the retained
+       * state's timestamp while it stays visible, so a settled image remains
+       * eligible under the same 250 ms desktop freshness gate. These entries
+       * never count as a new draw or a distinct easing pose. */
+      CHECK(reference_count<MAX_SAMPLES);Reference *r=references+reference_count++;
+      *r=(Reference){.pose=sprite->pose,.qpc=timestamp,.workload=(unsigned)workload};
+      r->image=completed_image(sprite,&r->native);
+      printf("RETAINED_REFERENCE workload=%u t=%.6f GL_center=%.6f,%.6f\n",r->workload,timestamp/qpc_frequency,r->image.x,r->image.y);
+    }
   }
 }
 static void pump(unsigned ms) {
@@ -167,14 +185,14 @@ static void pointer_on_artwork(PPSprite *sprite) {
   /* Find a real visible pixel away from the artwork center, so mouse-position
    * rotation exercises the pivot rather than coinciding with center rotation. */
   int w,h; CHECK(SDL_GetWindowSizeInPixels(SDL_GetWindowFromID(pp_surface_window_id(sprite->surface)),&w,&h));
-  uint8_t *pixels=malloc((size_t)w*h*4); CHECK(pixels); glReadPixels(0,0,w,h,GL_RGBA,GL_UNSIGNED_BYTE,pixels);
+  uint8_t *pixels=completed_pixels;CHECK(completed_width==w&&completed_height==h);
   POINT point={0}; bool found=false;
   for (int x=w/3;x<w*2/3&&!found;x++) for (int y=0;y<h;y++) {
     if (pixels[((size_t)y*w+x)*4+3]<200) continue;
     point=(POINT){bounds.left+x,bounds.top+h-y-1};
     if (fabs(point.x-m.x)>longest*.05&&WindowFromPoint(point)==native(sprite->surface)) { found=true; break; }
   }
-  free(pixels); CHECK(found); CHECK(SetCursorPos(point.x,point.y)); pump(10);
+  CHECK(found); CHECK(SetCursorPos(point.x,point.y)); pump(10);
 }
 static double shape_error(Moment a, Moment b) {
   double angle=remainder(a.angle-b.angle,3.14159265358979323846);
@@ -208,7 +226,7 @@ static bool analyze(void) {
     }
     double drift=displacement(o.image,references[selected].image);
     meaningful[k]++; maxima[k]=fmax(maxima[k],drift); if (drift>=.1) bad[k]++;
-    if (references[selected].moving) { moving[k]++; if (!seen[selected]) distinct[k]++; }
+    if (references[selected].drawn&&references[selected].moving) { moving[k]++; if (!seen[selected]) distinct[k]++; }
     seen[selected]=true;
     printf("DESKTOP workload=%u qpc_s=%.6f reference_s=%.6f shape_error=%.6fpx center=%.6f,%.6f expected=%.6f,%.6f displacement=%.6fpx\n",
         o.workload,o.qpc/qpc_frequency,references[selected].qpc/qpc_frequency,best,o.image.x,o.image.y,
@@ -216,7 +234,7 @@ static bool analyze(void) {
   }
   bool meaningful_all=true, complete_all=true, no_displacement=true;
   for (unsigned k=0;k<4;k++) {
-    unsigned poses=0; for (unsigned j=0;j<reference_count;j++) if (references[j].workload==k+1) poses++;
+    unsigned poses=0; for (unsigned j=0;j<reference_count;j++) if (references[j].workload==k+1&&references[j].drawn) poses++;
     printf("RESULT workload=%u completed_GL_poses=%u desktop_matched=%u desktop_active_easing=%u distinct_easing_poses=%u desktop_unmatched=%u blank=%u displaced=%u maximum=%.6fpx\n",
         k+1,poses,meaningful[k],moving[k],distinct[k],unmatched[k],blank[k],bad[k],maxima[k]);
     meaningful_all=meaningful_all&&meaningful[k]>=10&&distinct[k]>=10&&poses>=10;
@@ -239,7 +257,7 @@ static void setup_desktop(void) {
   PPDisplay *displays=NULL; size_t count=0; API(pp_platform_displays(&displays,&count,&error));
   const PPDisplay *display=pp_display_at(displays,count,center); CHECK(display);
   longest=fmin(1536,w*.85/display->desktop_units_per_dip);
-  printf("ENV configuration=%s backend=retained-transparent-GL monitor=%ld,%ld,%ld,%ld capture=%ld,%ld,%ld,%ld actual_desktop_density=%.3f actual_drawable_density=%.3f simulated_density=none longest_dip=%.3f forced_placement_pause_ms=%d\n",
+  printf("ENV configuration=%s presenter=shared-retained monitor=%ld,%ld,%ld,%ld capture=%ld,%ld,%ld,%ld actual_desktop_density=%.3f actual_drawable_density=%.3f simulated_density=none longest_dip=%.3f forced_placement_pause_ms=%d\n",
       PP_WHEEL_CONFIGURATION,monitor.rcMonitor.left,monitor.rcMonitor.top,monitor.rcMonitor.right,monitor.rcMonitor.bottom,
       capture_bounds.left,capture_bounds.top,capture_bounds.right,capture_bounds.bottom,
       display->desktop_units_per_dip,display->drawable_pixels_per_dip,longest,defect_control?35:0);
@@ -280,6 +298,9 @@ static void workload_run(unsigned kind) {
   API(pp_scene_set_pose(pp_app_scene(app),id,(PPPose){center,longest,17.25,1},&error));
   pump(500); CHECK(runtime->presenter->instance_count==1);
   PPSprite *sprite=runtime->presenter->instances; CHECK(sprite->retained.valid);
+  SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(sprite->surface));
+  HWND native=SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
+  printf("PRESENTATION %s\n",pp_composition_description(GetPropW(native,PP_COMPOSITION_PROPERTY)));
   PPVec2 layout=pp_item_snapshot_size(pp_scene_get(pp_app_scene(app),id)->snapshot); CHECK(layout.x/layout.y>5);
   printf("WORKLOAD %u content=%s operation=%s text=\"%s\" canonical_layout=%.3f,%.3f aspect=%.3f initial_center=%.3f,%.3f initial_dip=%.3f initial_angle=17.25 pivot=mouse-position wheels=6 direction=alternating cadence_ms=200 easing_seconds=%.3f\n",
       kind+1,kind<2?"text":"emoji",kind%2?"zoom":"rotation",item.text,layout.x,layout.y,layout.x/layout.y,
@@ -302,13 +323,16 @@ static void workload_run(unsigned kind) {
   pp_scene_delete(pp_app_scene(app),id); pump(50);
 }
 int main(int argc,char **argv) {
-  setvbuf(stdout,NULL,_IONBF,0); SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+  /* Per-character redirected writes can stall the owner thread long enough
+   * to skip easing poses. Flush this bounded probe's log at normal exit. */
+  static char output_buffer[1024*1024];setvbuf(stdout,output_buffer,_IOFBF,sizeof(output_buffer));
+  SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   defect_control=argc==2&&!strcmp(argv[1],"--defect-control");
   shift_control=argc==2&&!strcmp(argv[1],"--shift-control");
   empty_control=argc==2&&!strcmp(argv[1],"--empty-control");
   CHECK(argc==1||defect_control||shift_control||empty_control);
   LARGE_INTEGER frequency; CHECK(QueryPerformanceFrequency(&frequency)); qpc_frequency=(double)frequency.QuadPart;
-  atexit(cleanup); setup_desktop();
+  atexit(cleanup);pp_renderer_diagnostic_observer(completed_draw,NULL); setup_desktop();
   API(pp_app_create(&app,&(PPAppOptions){.preferences_directory=""},&error));
   for (unsigned a=0;a<8;a++) API(pp_app_command(app,&(PPCommand){.kind=PP_COMMAND_SET_ENABLED,.anchor=(PPAnchor)a,.enabled=false},&error));
   PPProjectSettings settings=*pp_project_settings(pp_app_project(app)); settings.rotation_step_deg=1;settings.resize_factor=1.01;settings.easing_seconds=.12;

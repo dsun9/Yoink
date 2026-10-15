@@ -1,6 +1,7 @@
 /* Original selective hook adapter. It observes OS input, never replays it.
  * Native alpha routing remains the authority for the topmost mouse target. */
 #include "windows_internal.h"
+#include "composition.h"
 #include "pointy/interaction.h"
 #include <stdio.h>
 static HHOOK hook;
@@ -51,7 +52,8 @@ static PPSurface *target(POINT point) {
 void pp_surface_set_rectangular(PPSurface *surface,bool enabled) {if(surface) surface->rectangular=enabled;}
 void pp_surface_inherit_order(PPSurface *replacement,PPSurface *previous) {
     if(!replacement || !previous || !replacement->window || !previous->window) return;
-    SetWindowPos(replacement->window,previous->window,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+    if(!SetWindowPos(replacement->window,previous->window,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)||
+       !pp_composition_order(replacement->composition))pp_surface_hide(replacement);
 }
 void pp_platform_release_capture(void) {owner=NULL;accepted_press=NULL;capture_eligible=false;}
 void pp_surface_cancel_input(PPSurface *surface) {
@@ -149,8 +151,9 @@ void pp_surface_raise(PPSurface *surface) {
     for(HWND window=GetTopWindow(NULL);window;window=GetWindow(window,GW_HWNDNEXT)) {
         for(PPSurface *s=surfaces;s;s=s->input_next) if(s->window==window&&s->instance_id&&IsWindowVisible(window)) {
             if(s!=surface) {
-                HWND before=GetWindow(window,GW_HWNDPREV);
-                SetWindowPos(surface->window,before?before:HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE);
+                HWND before=GetWindow(pp_composition_top(s->composition,window),GW_HWNDPREV);
+                if(!SetWindowPos(surface->window,before?before:HWND_TOPMOST,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE)||
+                   !pp_composition_order(surface->composition))pp_surface_hide(surface);
             }
             return;
         }

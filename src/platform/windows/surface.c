@@ -2,6 +2,7 @@
  * copyright its contributors, AGPL-3.0-or-later (see repository LICENSE).
  * The native window directly owns input; no reference proxy/source routing. */
 #include "windows_internal.h"
+#include "composition.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,5 +102,6 @@ void pp_surface_hide(PPSurface *surface) {
     if(!surface) return;
     pp_windows_input_cancel(surface);
     surface->gl_interactive=false;
+    pp_composition_hide(surface->composition);
     if(surface->window) ShowWindow(surface->window,SW_HIDE);
 }

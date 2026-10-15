@@ -1,5 +1,10 @@
 # Rotation and zoom jitter diagnosis
 
+Issue [#32](https://github.com/dsun9/Yoink/issues/32) implements coherent
+Windows presentation through a stable DirectComposition host. Its validation
+appears below the issue 31 baseline. The original diagnosis and baseline
+measurements remain here to explain the observed failure.
+
 On 2026-10-14 the user reported small sideways jumps when rotating or zooming
 text or emoji, especially large elongated artwork.
 
@@ -65,7 +70,7 @@ Combining the visible move and resize, preserving overlap with
 did not reliably remove the captured displacement. All experimental production
 changes were reverted.
 
-No production fix is included. A fix must prevent the compositor from showing
+The original diagnosis included no production fix. A fix must prevent the compositor from showing
 an old frame at a new origin, while preserving transparent input routing,
 GPU budgets, and transform responsiveness. A stable render viewport or a
 presentation mechanism that commits geometry and content together are possible
@@ -120,6 +125,14 @@ image at a new origin retains its shape and produces a nonzero residual.
 Candidates must precede the capture and be within 250 milliseconds. Equal
 shape scores choose the latest candidate, avoiding an earlier repeated pose.
 
+After easing stops, an unchanged visible retained image can receive a fresh
+state-reference timestamp without another readback. It uses the cached actual
+completed pixels and current accepted native bounds. These entries do not
+count as completed GL draws or distinct easing poses. The 250-millisecond
+matching limit stays the same across long settled intervals and deliberate
+placement pauses. The probe buffers its log until exit so redirected
+per-character output does not delay the owner between easing updates.
+
 Each workload needs at least ten distinct captured poses during active easing,
 ten matched desktop images and ten completed GL poses. Every active blank or
 unmatched desktop image prevents a passing result. A shape difference above
@@ -139,8 +152,8 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platfo
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^sprite_(stability|cursor)$' -LogPrefix sprite-jitter-gl
 ```
 
-The synthetic and ordinary desktop regressions are opt-in and expected to
-fail against unchanged production. Completed-GL accuracy and cursor checks
+The synthetic and ordinary desktop regressions are opt-in and fail against
+the issue 31 production baseline. Completed-GL accuracy and cursor checks
 remain ordinary passing correctness tests. A failing desktop regression must
 not be reclassified as a failing completed-GL check.
 
@@ -211,3 +224,75 @@ Raw logs use the `ticket31-final-natural`, `ticket31-final-synthetic`,
 `ticket31-empty-control` and `ticket31-owned-timeout` prefixes under `build/`.
 The implementation handoff preserves copies and SHA-256 hashes outside the
 worktree before cleanup. No production fix is included in issue 31.
+
+## Issue 32 validation on 2026-10-14
+
+Windows now uses a stable DirectComposition visual host and a tight native
+input proxy. The canonical source shader draws directly into the locked
+`BeginDraw` output. A completed update and its matching visual offsets enter
+one composition commit. Integer translation reuses those pixels. The native
+input proxy has no artwork front buffer. The mechanism and cleanup policy are
+recorded in [ADR 0002](../adr/0002-coherent-windows-sprite-presentation.md).
+
+The available machine selected `DirectComposition WGL_NV_DX_interop2`, with
+the NVIDIA GeForce RTX 5090 for both GL and DXGI. It keeps one logical native
+output, performs no GPU copy, and adds no production readback, compositor
+wait or interaction sleep. SDL compatibility fallback remains available when
+the actual register/lock/unlock/unregister capability probe fails; coherent
+publication on that fallback remains unverified.
+
+The deterministic desktop probe reduced the rotation residual from
+18.995166 to 0.015953 pixels and the zoom residual from 11.988162 to 0.011838
+pixels. Its final maximum across four mandatory samples was 0.024175 pixels.
+The ordinary wheel run captured the following results through the final
+production backend, with 24 native wheel events and no placement pause.
+
+| Workload | Completed GL poses | Matched desktop images | Distinct easing poses | Unmatched or blank | Displaced | Largest residual |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Text rotation | 70 | 56 | 42 | 0 | 0 | 0.000000 px |
+| Text zoom | 61 | 59 | 42 | 0 | 0 | 0.000000 px |
+| Emoji rotation | 66 | 54 | 46 | 0 | 0 | 0.000000 px |
+| Emoji zoom | 62 | 68 | 45 | 0 | 0 | 0.000000 px |
+
+The collector obtained 325 fresh images including setup. Its 267 output
+readbacks took 1,154.174 milliseconds total, or 4.323 milliseconds on average.
+The shifted-byte control still failed with 19-pixel residuals in all 242
+matched images. The empty-image control failed with zero observations and
+zero meaningful workloads, despite a zero displacement maximum.
+
+The deliberate 35-millisecond wheel placement pause also passed. It captured
+21, 19, 21 and 23 distinct easing poses for text rotation, text zoom, emoji
+rotation and emoji zoom. All 230 matched active desktop images had zero
+measured displacement; no active image was blank or unmatched. The collector
+obtained 304 fresh images including setup. The 123 actual output readbacks
+took 528.165 milliseconds total, or 4.294 milliseconds on average. These
+measurements retain the original 0.1-pixel displacement, 0.15-pixel shape,
+250-millisecond freshness and ten-distinct-easing-pose gates.
+
+The full Release performance matrix completed all 96 source/size/density/
+rotation cases, 288 warmups and 1,920 active samples. The 96 cold cases had
+120 draws, 120 GPU observations and 120 completed publications, with zero
+accounting mismatches. The required largest default Segoe warm cases had a
+worst complete-owner p95 of 11.833 milliseconds, below 16.7 milliseconds.
+The worst p95 across all regression cases was 19.072 milliseconds. Maximum
+native input wait was 31 milliseconds, below 50, and all 20 native sharp
+updates matched their input and source revision, with a maximum latency of
+138.322 milliseconds, below 200. The probe buffered 592,904 bytes within its
+8 MiB capacity and flushed after cleanup, with no overflow. Its boundary is
+selected-backend publication and GPU completion; compositor-visible cadence
+and scanout remain unobserved.
+
+Earlier runs exposed a 113-millisecond cold native-device initialization on
+the input owner and a redundant show call on already-visible visual hosts.
+The shared device now initializes in ordinary renderer/runtime startup,
+synchronized once per process. Each sprite still probes its current WGL
+context and owns its own composition tree and interop handle. Startup time
+remains reported separately by the same performance protocol; none of the
+96 cold source/output cases or input limits changed.
+
+Simulated 100%, 150% and 200% landmark checks, injected desktop metrics,
+capability and cleanup fault controls are distinct from physical display and
+driver-removal evidence. Physical mixed-density migration, hotplug, other
+GPU families, SDL-fallback coherence and native macOS execution remain
+unverified. Instrumented desktop observations do not estimate production
+frame cadence or jitter frequency.

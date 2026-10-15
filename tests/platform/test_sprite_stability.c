@@ -1,5 +1,6 @@
 #include "../../src/app/presenter_internal.h"
 #include "../../src/render/gl_api.h"
+#include "../../src/platform/windows/composition.h"
 #include "../test.h"
 #include <windows.h>
 #include <dwmapi.h>
@@ -14,6 +15,7 @@ static PPAnchorPresenter *presenter;
 static PPRenderer *renderer;
 static PPSurface *surface;
 static PPRetainedPresentation retained;
+static bool reported_backend;
 static HWND background;
 static bool capture_changes;
 static RECT capture_bounds;
@@ -24,6 +26,21 @@ static unsigned compositor_samples;
 bool pp_test_desktop_capture_start(RECT rectangle);
 unsigned char *pp_test_desktop_capture(RECT rectangle, bool require_new);
 
+static uint8_t *completed_pixels;
+static int completed_width,completed_height;
+static void completed_draw(PPRenderer *r,int x,int y,int w,int h,bool top_down,void *context) {
+  if(!reported_backend&&surface) {
+    SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(surface));
+    HWND native=SDL_GetPointerProperty(SDL_GetWindowProperties(window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
+    printf("PRESENTATION %s\n",pp_composition_description(GetPropW(native,PP_COMPOSITION_PROPERTY)));reported_backend=true;
+  }
+  (void)context;if(r!=retained.renderer)return;
+  uint8_t *raw=malloc((size_t)w*h*4);CHECK(raw);
+  glReadPixels(x,y,w,h,GL_RGBA,GL_UNSIGNED_BYTE,raw);CHECK(glGetError()==GL_NO_ERROR);
+  free(completed_pixels);completed_pixels=malloc((size_t)w*h*4);CHECK(completed_pixels);
+  for(int row=0;row<h;row++)memcpy(completed_pixels+(size_t)row*w*4,raw+(size_t)(top_down?h-row-1:row)*w*4,(size_t)w*4);
+  free(raw);completed_width=w;completed_height=h;
+}
 static HWND native(void) {
   SDL_Window *window = SDL_GetWindowFromID(pp_surface_window_id(surface));
   CHECK(window);
@@ -38,7 +55,7 @@ static void cleanup(void) {
   pp_anchor_presenter_destroy(presenter);
   pp_renderer_destroy(renderer);
   pp_project_destroy(project);
-  pp_assets_destroy(assets);
+  pp_assets_destroy(assets);free(completed_pixels);
 }
 
 static void cursor(void) {
@@ -63,18 +80,13 @@ static void cursor(void) {
   CHECK(arrow);
 }
 
-/* Read the complete retained color FBO left as the read framebuffer by native
- * publication. This measures actual shader output before desktop composition. */
+/* The diagnostic observer captures each shader result while its compositor
+ * update remains GL-readable. These pixels precede desktop composition. */
 static PPVec2 artwork_center_channel(int channel) {
   int w, h;
   CHECK(SDL_GetWindowSizeInPixels(SDL_GetWindowFromID(pp_surface_window_id(surface)), &w, &h));
-  GLint fbo = 0;
-  glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &fbo);
-  CHECK(fbo != 0);
-  uint8_t *pixels = malloc((size_t)w * h * 4);
-  CHECK(pixels);
-  glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
-  CHECK(glGetError() == GL_NO_ERROR);
+  CHECK(completed_pixels&&completed_width==w&&completed_height==h);
+  uint8_t *pixels=completed_pixels;
   double weight = 0, xsum = 0, ysum = 0;
   for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) {
     double a = pixels[((size_t)y * w + x) * 4 + channel];
@@ -88,7 +100,7 @@ static PPVec2 artwork_center_channel(int channel) {
       CHECK(covered);
     }
   }
-  free(pixels);
+
   CHECK(weight > 0);
   RECT bounds;
   CHECK(GetWindowRect(native(), &bounds));
@@ -185,7 +197,7 @@ static void setup_stability(void) {
   API(pp_assets_create(&assets, &error));
   API(pp_project_create(assets, &project, &error));
   API(pp_renderer_create(&renderer, &error));
-  printf("ENV configuration=%s backend=retained-transparent-GL GPU_vendor=%s GPU_renderer=%s GL_version=%s\n",
+  printf("ENV configuration=%s presenter=shared-retained GPU_vendor=%s GPU_renderer=%s GL_version=%s\n",
       PP_STABILITY_CONFIGURATION, glGetString(GL_VENDOR), glGetString(GL_RENDERER), glGetString(GL_VERSION));
   API(pp_anchor_presenter_create(&presenter, renderer, project, &error));
   API(pp_surface_create_gl(&surface, &error));
@@ -265,10 +277,24 @@ static void stability(void) {
     CHECK(after.transform_draws == before.transform_draws);
   }
   puts("PASS tiny-output reuse and maximum artwork extent on both axes.");
+  pose.angle_deg=45;
+  API(pp_retained_present(presenter,surface,&retained,source,pose,&display,&error));
+  size_t large_output=(size_t)retained.bounds.w*(size_t)retained.bounds.h*4;
+  CHECK(large_output>128*1024*1024&&large_output<PP_RETAINED_GPU_LIMIT);
+  CHECK(pp_renderer_output_bytes(retained.renderer)==large_output);
+  CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==retained.gpu_bytes+large_output);
+  printf("PASS admitted elongated 8192-pixel artwork at45degrees output=%.0fx%.0f logical_bytes=%zu GPU_limit=%u\n",
+      retained.bounds.w,retained.bounds.h,large_output,PP_RETAINED_GPU_LIMIT);
+  /* Releasing an anchor consumer may keep its native window alive for reuse. */
+  pp_retained_release(presenter,&retained);
+  CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==0);
+  source.frame=&frame;
+  API(pp_retained_present(presenter,surface,&retained,source,(PPPose){{300,300},96,0,1},&display,&error));
+  CHECK(pp_renderer_output_bytes(retained.renderer)==retained.output_bytes);
   elongated_stability(display);
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) { pp_renderer_diagnostic_observer(completed_draw,NULL);
   setvbuf(stdout, NULL, _IONBF, 0);
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   atexit(cleanup);

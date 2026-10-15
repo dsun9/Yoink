@@ -2,6 +2,15 @@
 #define POINTY_RENDER_H
 #include "pointy/types.h"
 typedef struct PPRenderer PPRenderer;
+/* Opt-in diagnostics only. Called on the owner thread while completed draw
+ * pixels remain GL-readable, before compositor ownership changes. Coordinates
+ * name the logical rectangle in the current read framebuffer. No production
+ * caller installs this observer, and the renderer never performs CPU readback. */
+typedef void (*PPRenderDiagnostic)(PPRenderer *renderer,int x,int y,int width,int height,bool top_down,void *context);
+void pp_renderer_diagnostic_observer(PPRenderDiagnostic observer,void *context);
+/* Process-lived logical bytes retained after an unrecoverable driver ownership
+ * failure. Content admission includes them across presenter lifetimes. */
+size_t pp_renderer_quarantined_bytes(void);
 typedef struct PPSharedTexture PPSharedTexture;
 struct PPFrame;
 /* Explicit context group owner. It outlives joined renderers and textures.

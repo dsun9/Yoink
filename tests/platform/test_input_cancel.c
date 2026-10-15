@@ -38,6 +38,7 @@ static LRESULT WINAPI forward_input(HHOOK value, int code, WPARAM w, LPARAM l) {
   return 17;
 }
 HWND pp_windows_drawer_window(void) { return NULL; }
+void pp_surface_hide(PPSurface *surface) {pp_surface_cancel_input(surface);}
 bool pp_windows_enqueue(PPPlatformEvent event) {
   recorded = event;
   queued++;
