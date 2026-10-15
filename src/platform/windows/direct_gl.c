@@ -141,11 +141,21 @@ bool pp_surface_place_gl(PPSurface *surface,PPRect bounds,bool interactive,PPErr
         return fail(surface,error,PP_ERROR_ARGUMENT,"Invalid direct surface bounds");
     if(!interactive) {pp_surface_hide(surface);return true;}
     int width=(int)llround(bounds.w),height=(int)llround(bounds.h);
+    bool visible=IsWindowVisible(surface->window),composition=pp_composition_active(surface->composition);
     /* SDL applies its pending floating size when a hidden window is shown.
      * Record the new size through SDL before the native ordering operation. */
     if((surface->width!=width || surface->height!=height) && !SDL_SetWindowSize(surface->gl_window,width,height))
         return fail(surface,error,PP_ERROR_PLATFORM,SDL_GetError());
-    UINT order=IsWindowVisible(surface->window)?SWP_NOZORDER:0;
+    UINT order=visible?SWP_NOZORDER:0;
+    if(composition) {
+        RECT sized;
+        if(!GetWindowRect(surface->window,&sized))return fail(surface,error,PP_ERROR_PLATFORM,"Cannot query sized input window");
+        /* The composition output owns all visible pixels. Keep SDL's sizing
+         * notification, then move/order its input proxy without another resize
+         * or preservation of the old WGL client pixels. */
+        order|=SWP_NOCOPYBITS;
+        if(sized.right-sized.left==width&&sized.bottom-sized.top==height)order|=SWP_NOSIZE;
+    }
     HWND settings=pp_windows_settings_window();
     surface->gl_interactive=true;
     if(!SetWindowPos(surface->window,settings?settings:HWND_TOPMOST,(int)llround(bounds.x),(int)llround(bounds.y),

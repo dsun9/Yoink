@@ -86,10 +86,17 @@ int main(void) {
   draw();
   key(PP_KEY_A, PP_MOD_CONTROL);
   draw();
+  PPItemSnapshot *before_draft=settings->editor.preview;
+  double accepted_size=pp_project_item(pp_app_project(app),settings->editor.id)->text_style.font_size_dip;
   pp_settings_event(
       settings, &(PPPlatformEvent){.kind = PP_EVENT_TEXT,
                                    .window_id = pp_settings_window_id(settings),
                                    .codepoint = '0'});
+  draw();
+  CHECK(!strcmp(settings->editor.size,"0")&&!settings->editor.appearance_error[0]);
+  CHECK(settings->editor.preview==before_draft&&pp_project_item(pp_app_project(app),settings->editor.id)->text_style.font_size_dip==accepted_size);
+  /* Numeric drafts validate on Enter or blur, as specified in DESIGN.md. */
+  key(PP_KEY_ENTER,0);
   draw();
   CHECK(!strcmp(settings->editor.size, "0") &&
         settings->editor.appearance_error[0]);

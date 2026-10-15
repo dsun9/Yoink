@@ -114,11 +114,23 @@ static void create(int i,const PPFrame *source) {
 }
 static void present(int i,double angle,double opacity,PPRect bounds) {
     API(pp_surface_place_gl(surfaces[i],bounds,opacity>0,&error));
+    SDL_Window *window=SDL_GetWindowFromID(pp_surface_window_id(surfaces[i]));
+    int width=0,height=0;RECT actual;
+    CHECK(SDL_GetWindowSizeInPixels(window,&width,&height)&&GetWindowRect(native(i),&actual));
+    printf("PLACEMENT requested=%.0f,%.0f,%.0fx%.0f native=%ld,%ld,%ldx%ld SDL=%dx%d visible=%d\n",
+        bounds.x,bounds.y,bounds.w,bounds.h,actual.left,actual.top,actual.right-actual.left,actual.bottom-actual.top,width,height,opacity>0);
+    CHECK(width==actual.right-actual.left&&height==actual.bottom-actual.top);
+    if(opacity>0)CHECK(actual.left==(LONG)llround(bounds.x)&&actual.top==(LONG)llround(bounds.y)&&
+        width==(int)llround(bounds.w)&&height==(int)llround(bounds.h));
     if(opacity>0) {
         API(pp_renderer_draw(renderers[i],(PPVec2){64,64},64,angle,opacity,1,&error));
         API(pp_renderer_complete(renderers[i],&error));
     }
     pump();
+    CHECK(SDL_GetWindowSizeInPixels(window,&width,&height)&&GetWindowRect(native(i),&actual));
+    CHECK(width==actual.right-actual.left&&height==actual.bottom-actual.top);
+    if(opacity>0)CHECK(actual.left==(LONG)llround(bounds.x)&&actual.top==(LONG)llround(bounds.y)&&
+        width==(int)llround(bounds.w)&&height==(int)llround(bounds.h));
 }
 static COLORREF pixel(int x,int y) {
     bool pp_test_desktop_capture_start(RECT rectangle);

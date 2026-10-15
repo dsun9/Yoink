@@ -1,6 +1,8 @@
 # Bounded rendering performance acceptance
 
-This protocol implements [ticket #11](https://github.com/dsun9/Yoink/issues/11) under [the rendering specification, issue #1](https://github.com/dsun9/Yoink/issues/1). It measures a visible sprite through the production native hook, `pp_platform_poll`, runtime event/tick, interaction and easing, the app-lived shared source worker, retained OpenGL drawing, returned native swap, and explicit GPU completion. The same probe, receiver and desktop supervisor provide the measurements. Hosted CI checks deterministic behavior; machine timing stays in this opt-in desktop command.
+This protocol implements [ticket #11](https://github.com/dsun9/Yoink/issues/11) under [the rendering specification, issue #1](https://github.com/dsun9/Yoink/issues/1). It measures a visible sprite through the production native hook, `pp_platform_poll`, runtime event/tick, interaction and easing, the app-lived shared source worker, retained OpenGL drawing, selected native publication and explicit GPU completion. The same probe, receiver and desktop supervisor provide the measurements. Hosted CI checks deterministic behavior; machine timing stays in this opt-in desktop command.
+
+The Windows backend selected after [issue #32](https://github.com/dsun9/Yoink/issues/32) draws directly into a DirectComposition logical surface through `WGL_NV_DX_interop2`. Complete owner time includes `BeginDraw`, registration, lock, shader drawing, unlock, unregister, `EndDraw` and `Commit`. The `PRESENTATION` record identifies the actual GL and DXGI devices, logical-output policy and copy count. These draws call no SDL swap, so a zero swap distribution does not measure zero publication cost. Per-stage composition distributions report that work. The explicit GPU observation completes the genuine draw after native submission; a returned commit does not establish compositor visibility, cadence or scanout. The historical SDL-swap results below retain their original boundaries.
 
 ## Repeatable commands
 
@@ -10,11 +12,15 @@ Build all Release targets, then run correctness and performance separately from 
 cmake --preset windows-release
 cmake --build --preset windows-release --parallel 4 -- /nodeReuse:false
 ctest --preset windows-release -L headless --output-on-failure
-powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^(shaped_editor|lifecycle|ui_density|ui_preview|bitmap_retained|scalable_quality|png_retained|direct_gl|sprite_flow|drawer_hidden|surface_failure|settings_smoke|windows_gif|windows_surface|windows_capture|windows_anchors)$' -LogPrefix rendering-correctness
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^(shaped_editor|lifecycle|ui_density|ui_preview|sprite_stability|sprite_cursor|sprite_exposure_ownership|scalable_quality|png_retained|replacement_output_exhaustion|replacement_source_exhaustion|direct_gl|grab_native|direct_gl_compat|composition_.*)$' -LogPrefix rendering-correctness
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^bitmap_retained$' -LogPrefix rendering-bitmap
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^(sprite_flow|drawer_hidden|surface_failure|settings_smoke|windows_gif|windows_surface|windows_capture|windows_anchors)$' -LogPrefix rendering-consumers
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -SpriteJitter -Configuration Release -BuildDirectory build/windows-release -LogPrefix rendering-jitter
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -SpriteWheel -Configuration Release -BuildDirectory build/windows-release -LogPrefix rendering-wheel
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Performance -Configuration Release -BuildDirectory build/windows-release -LogPrefix rendering-performance
 ```
 
-Both supervised desktop commands must pass. Run them exclusively with no competing build or test. Each supervisor has a 180-second hard timeout. The performance probe stops scheduling after 145 seconds, leaving time for cleanup. `-BuildDirectory` accepts an isolated checkout's absolute build directory. A Debug run cannot satisfy acceptance.
+All six supervised desktop commands must pass. Run them exclusively with no competing build or test. Correctness uses two batches and an isolated bitmap fixture, each within the existing 180-second hard timeout. Issue 33 records an intermittent bitmap wheel failure after preceding native fixtures; the separate passing command preserves that limitation. The performance probe stops scheduling after 145 seconds, leaving time for cleanup. `-BuildDirectory` accepts an isolated checkout's absolute build directory. A Debug run cannot satisfy acceptance. The wheel shifted-byte and empty-image controls, and the separate deliberate placement-pause command, are described in [sprite jitter](sprite-jitter.md).
 
 The supervisor preserves child failures, refuses held input, holds the desktop mutex, and restores injected input, the exact saved cursor and foreground window. Failed recovery fails acceptance. A suspended receiver child enters a private kill-on-close Windows job before it runs, so even an abrupt probe exit cannot orphan its receiver. The normal path closes the receiver gracefully. Runtime consumers are destroyed before the app-lived source owner joins its worker, before CRT exit. No driver or global display setting changes are part of this recipe.
 
@@ -32,7 +38,7 @@ Density simulation changes both desktop-units-per-DIP and drawable-pixels-per-DI
 
 Each case reports median, nearest-rank p95 and maximum for complete owner work, source acquisition, CPU draw submission, GPU execution, explicit GPU-completion wait, returned native swap, and native sizing/placement. Three warmups are reported individually and excluded from those twenty-sample distributions. The p95 is the nineteenth sorted value. Both largest default-Segoe rotation cases must have complete warm p95 at most 16.7 ms. Other sources report their own costs and do not create a universal 60 Hz guarantee.
 
-Direct window contexts request swap interval zero in production. Runtime scheduling and native input delivery pace owner work. The probe records the actual interval and verified synchronous debug-error policy or query fallback once per actual context. An unsupported interval request retains the driver's policy and must still pass the same measured gates. No asynchronous submission result substitutes for GPU completion.
+Direct window contexts request swap interval zero in production. Runtime scheduling and native input delivery pace owner work. DirectComposition publication bypasses SDL swap; the interval remains relevant to the transparent SDL compatibility route. The probe records the actual interval and verified synchronous debug-error policy or query fallback once per actual context. An unsupported interval request retains the driver's policy and must still pass the same measured gates. No asynchronous submission result substitutes for GPU completion.
 
 Static-source rotation must add zero source builds/uploads. All measured transform draws must have matching completed GPU observations. GIF uses real instance elapsed clocks; a due frame is a content change and may upload its identified retained source. Translation and unchanged-content reuse, fractional resizing/latest replacement, geometry, CPU/GPU/capture limits, worker reservations, cancellation and rollback also have deterministic presenter/runtime CI checks. The seed-only SVG-to-PNG regression holds the first endpoint, verifies rejection preserves output/pose/revision, and requires exact source-charge release after acceptance, including an independent old consumer.
 
@@ -56,7 +62,7 @@ The correctness command covers premultiplied alpha/color, rectangular targeting 
 
 The full matrix uses the direct retained GL backend. Compatibility costs must remain separate. Historical legacy readback/layered measurements below are failing evidence, not current compatibility acceptance; no current Cocoa desktop timing is inferred from them. A compatibility implementation on another machine must be measured under its actual selected backend and must state unmet budgets.
 
-GPU completion plus returned swap establishes the measured GPU/native API boundary. It does not prove DWM-visible frame cadence, scanout or fullscreen behavior. Physical mixed-display/fullscreen and native macOS window/input/Retina/Spaces remain unverified on this Windows host. Hosted Windows/macOS configure/build/headless/package results are separate evidence.
+GPU completion plus the selected backend's returned publication establishes the measured GPU/native API boundary. It does not prove DWM-visible frame cadence, scanout or fullscreen behavior. Independent desktop displacement evidence comes from the separate [sprite jitter regression](sprite-jitter.md). Physical mixed-display/fullscreen and native macOS window/input/Retina/Spaces remain unverified on this Windows host. Hosted Windows/macOS configure/build/headless/package results are separate evidence.
 
 ## Preserved observations
 
@@ -130,3 +136,67 @@ All-target Release compilation passed. The 31 headless checks passed in 44.30 se
 Both native commands ran once under separate exclusive grants. Each supervisor restored exact saved/actual foreground HWND 67688 and cursor 1637,1311, with input released and the original window valid. Performance restored its valid saved DPI scope 80000022 with setter return 22, error zero, current awareness two and semantic equality. Both post-run inventories contained zero owned receiver/helper/application/compiler processes. GL contexts and workers ended with their owning fixtures, and performance recorded cleanup before output flush.
 
 Raw logs, lossless parsed cases/phases/samples and their SHA-256 are preserved externally in the final-review-fixes handoff. The earlier ticket-11 measurements and failure history above remain unchanged. These results retain the stated limits on physical mixed-display/fullscreen behavior, native macOS and compositor-visible cadence.
+
+## Shared presenter acceptance, issue 33, 2026-10-14
+
+The final Release matrix selected DirectComposition with `WGL_NV_DX_interop2`
+on the RTX 5090 and NVIDIA 610.62 driver. It drew directly into one logical
+output, with zero GPU copies and zero SDL swaps. The host was the same single
+3840 by 2160 display at 150%. The 100% cases simulated both density ratios
+coherently. Native/drawable dimensions and the physical input target matched
+the requested pose in all 96 cases. The installed scalable font was Segoe UI
+Emoji Regular 1.70, with COLRv1 layers; explicit Noto was 2.051 with its useful
+bitmap strike. The final log reports actual source, revision and font metadata.
+
+The two required largest default Segoe cases used 1536 DIP at physical 150%.
+Complete owner time includes every genuine draw within each active sample,
+all native placement and composition calls, and explicit GPU completion.
+
+| Starting rotation | Median ms | p95 ms | Maximum ms | Required p95 limit ms |
+| --- | ---: | ---: | ---: | ---: |
+| 0 degrees | 6.443 | 13.747 | 14.687 | 16.7 |
+| 17.25 degrees | 8.760 | 12.209 | 12.523 | 16.7 |
+
+All 96 cases, 96 strict cold cases, 288 warmups and 1920 active samples
+completed. The cold totals were 120 draws, 120 GPU observations and 120
+completions, with zero mismatches. All 9518 warmup/active draws also matched
+their GPU execution and completion observations. Static transforms added zero
+source builds and uploads. The worst owner p95 across all regression cases
+was 17.292 ms; the 16.7-ms gate applies to the two required Segoe cases.
+
+Tagged hook input maximum was 31 ms against 50 ms, with 6068 tagged hooks,
+2228 normalized wheels and 281 hooks while source work was pending. All twenty
+sharp samples matched the latest normalized input timestamp, sprite, endpoint,
+revision and density, with actual pending-worker overlap. Maximum completed
+sharp latency was 135.227 ms against 200 ms. The fixed buffer held 596461 of
+8388608 bytes, overflow was zero, and cleanup preceded its final flush. Initial
+runtime work before tagged input was 570.063 ms and has no input-latency claim.
+The supervisor restored input, the exact saved cursor and the foreground HWND;
+the probe restored its saved DPI scope.
+
+Two earlier issue-33 runs remain failed evidence. The first stopped after
+42 cases when the cold PNG input target did not match its proxy; its observed
+required p95 was also 17.802 ms. The next completed the full matrix but its
+rotated required p95 was 18.192 ms, despite input at 47 ms and sharp at
+135.071 ms. GPU execution p95 in that rotated case was .101 ms and completion
+wait p95 was .017 ms. Its owner cost included Commit p95 5.932 ms, native
+sizing/placement p95 2.984 ms, and unregister p95 3.368 ms.
+
+The final native placement retains SDL's sizing request and queries its actual
+result. Once that size matches, the following input-proxy move/order uses
+`SWP_NOSIZE`, and the composition proxy uses `SWP_NOCOPYBITS`. This removes
+redundant resize and client-pixel preservation work. Interop ownership, the
+matching pixel/offset commit and all admission limits remain unchanged. A
+native-only resize experiment failed exact SDL/native dimension checks and was
+removed. The focused final command passed visible resize, hide/show,
+compatibility, layout recovery, bitmap and anchor checks. The passing final
+matrix establishes this run's acceptance; one before/after pair does not
+establish a universal bound on driver or compositor scheduling variance.
+
+The authoritative matrix prefix is `ticket33-performance-sizing4`; the
+external issue-33 evidence archive preserves this run, parsed phase/sample
+records, all earlier failures and SHA-256 checksums. These API timing results
+do not establish compositor-visible cadence or scanout. Final independent
+desktop checks and native correctness are recorded in the linked jitter and
+Windows testing documents. Physical mixed-display/hotplug, other GPU families,
+SDL fallback coherence and native macOS remain unverified.

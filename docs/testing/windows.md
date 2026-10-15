@@ -1,5 +1,64 @@
 # Windows acceptance
 
+## Shared presenter acceptance for issue 33
+
+The final Release native checks covered 39 unique tests through passing
+bounded commands. The 30-test rendering command passed in 89.72 seconds,
+the bitmap fixture passed separately in 7.81 seconds, and the eight consumer
+tests passed in 92.73 seconds. The consumer command included sprite flow,
+drawer, failed surfaces, Settings, GIF playback, native surfaces, capture and
+anchors. The supervisor restored input, exact cursor position and foreground
+after each command. The [performance protocol](rendering-performance.md)
+contains the repeatable command groups and final measured timing gates.
+The final all-target Release build passed. All 45 non-desktop tests passed in
+67.50 seconds, including all 32 tests labeled headless. The final owned
+helper/receiver/application/compiler process inventory was empty.
+
+Bitmap's wheel-growth assertion failed intermittently after earlier native
+fixtures, while its final isolated run and focused five-test command passed.
+The failed batch logs remain preserved. The isolated diagnostic observed the
+exact proxy target, an actual Alt modifier, one normalized wheel event and
+size growth from 384 to 422.4 DIP. This does not explain the earlier batch
+failures, which had no target/modifier diagnostics. No input assertion or
+quality threshold was relaxed, and there is no claim of a clean combined
+31-test rendering command. A final targeted run of `sprite_exposure_ownership`
+immediately followed by bitmap passed both tests in 9.20 seconds with the same
+target/modifier/event/growth observations. Its preceding attempt refused held
+input at supervisor preflight and started no test. The passing targeted run
+does not explain the earlier larger-batch intermittency.
+An earlier sprite-flow inner cursor-restoration
+failure also remains preserved; its later final consumer run passed both
+inner and outer restoration.
+
+The final anchor fixture compared actual independent Desktop Duplication
+pixels for PNG, finite GIF, fixed rounded-arrow SVG, Noto bitmap, installed
+default Segoe and mixed multiline text. It used 17.25-degree rotation,
+fractional opacity and 150% density. Maximum RGB errors were zero for PNG
+and one for the other sources, within the unchanged four-byte gate. A stale
+PNG reference against the actual GIF produced error 56 and was rejected by
+the same detector. Unchanged updates added no builds/uploads/draws, hide/show
+reused source textures, hidden output charges reached zero, and final raster
+charges reached zero after all snapshots and presenters were destroyed.
+The color fixture uses inset model display bounds to keep the complete preview
+on the real fullscreen receiver. Separate tests retain the actual screen-edge
+and simulated mixed-density seam checks.
+
+GIF playback now checks actual desktop pixels with Desktop Duplication.
+Two visible instances retained independent red/green clocks through shared
+source ownership, transparent interiors, remaining-consumer playback and
+GIF-to-PNG-to-GIF replacement. Blank/capture/animation union and exact output
+release checks passed. Settings numeric drafts now follow the documented
+Enter/blur validation boundary in DESIGN.md before asserting invalid input.
+The previous immediate-validation expectation also failed on the issue-32
+baseline and remains preserved as a fixture failure.
+
+The independent desktop jitter checks and their shifted/empty/pause controls
+passed on final production code as recorded in [sprite jitter](sprite-jitter.md).
+The final matrix covers selected-backend native API publication and completed
+GPU drawing. It makes no compositor cadence/scanout claim. The physical host
+has one 3840 by 2160 display at 150%; simulated geometry and injected metrics
+do not establish physical mixed-display migration, hotplug or native macOS.
+
 ## Retained preview integration
 
 [Ticket #10 preview checks](preview-retention.md) record shared source/cache/
@@ -9,7 +68,10 @@ only original input outside the rectangle passes through. The six-test retained
 consumer run and separate two-test anchor/flow run passed with exact supervisor
 foreground/cursor/input restoration. Earlier 22 white first-use observations
 remain unresolved history; the passing clean baseline does not establish a
-remedy. Full warm/input/sharp timing and compositor cadence remain ticket #11.
+remedy. Current measured warm/input/sharp acceptance is recorded in
+[rendering performance](rendering-performance.md). Independent captured
+displacement is recorded in [sprite jitter](sprite-jitter.md). Compositor
+cadence remains unobserved.
 
 ## Default emoji font checks for issue 2
 

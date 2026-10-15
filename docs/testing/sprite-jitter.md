@@ -296,3 +296,52 @@ driver-removal evidence. Physical mixed-density migration, hotplug, other
 GPU families, SDL-fallback coherence and native macOS execution remain
 unverified. Instrumented desktop observations do not estimate production
 frame cadence or jitter frequency.
+
+## Issue 33 final placement verification
+
+The final issue-33 code retains SDL sizing and skips a redundant native resize
+when the input proxy already has the requested dimensions. Its selected
+backend remains the stable DirectComposition host with direct logical output.
+The following Release checks ran exclusively on the same RTX 5090, NVIDIA
+610.62 driver and single 3840 by 2160 display at physical 150% density.
+The original displacement, shape, freshness and meaningful-sample limits were
+unchanged.
+
+The deterministic independent-desktop check passed with four observations and
+maximum drift .024175 pixels. Rotation and zoom observations during placement
+were .015953 and .011838 pixels. The separate completed-GL landmark test
+passed its existing .02-pixel gate at simulated 100%, 150% and 200% density.
+
+The ordinary native wheel run passed all 24 events with 245 fresh desktop
+images, including setup. Every matched active image had zero displacement,
+and none was blank or unmatched.
+
+| Workload | Completed GL poses | Matched desktop images | Distinct easing poses |
+| --- | ---: | ---: | ---: |
+| Text rotation | 71 | 51 | 45 |
+| Text zoom | 63 | 55 | 42 |
+| Emoji rotation | 69 | 52 | 46 |
+| Emoji zoom | 62 | 51 | 43 |
+
+Its 273 actual output readbacks took 1111.384 ms, mean 4.071 ms. These
+instrumented captures do not estimate production frame cadence.
+
+The shifted-byte control failed as required. All 214 matched images had a
+19-pixel residual. The empty-image control failed with zero desktop images
+and zero meaningful workloads despite zero reported displacement. The
+deliberate 35-ms native placement pause passed all 24 wheel events with 218
+fresh images, 186 matched active images and 22/19/23/21 distinct easing poses
+in workload order. No active image was blank, unmatched or displaced. Its
+120 output readbacks took 503.226 ms, mean 4.194 ms.
+
+The final prefixes are `ticket33-synthetic-sizing4`, `ticket33-wheel-sizing4`,
+`ticket33-wheel-shift-sizing4`, `ticket33-wheel-empty-sizing4` and
+`ticket33-wheel-pause-sizing4`. Each supervisor restored released input,
+the exact saved cursor and foreground HWND. Their logs, earlier failures and
+SHA-256 checksums are preserved in the external issue-33 evidence archive.
+The final full matrix also passed 13.747-ms required warm p95, 31-ms input
+maximum and 135.227-ms sharp maximum; its complete per-angle observations
+and earlier timing failures are in [rendering performance](rendering-performance.md).
+
+Physical mixed-display traversal/hotplug, fullscreen behavior, other GPU
+families, SDL fallback coherence and native macOS remain unverified.
