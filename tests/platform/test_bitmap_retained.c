@@ -31,6 +31,7 @@ static void cleanup(void) {
 }
 static void poll(void) {
   PPPlatformEvent event;while(pp_platform_poll(&event)) {
+    if(event.kind==PP_EVENT_WHEEL)printf("WHEEL instance=%llu modifiers=%u delta=%.3f at=%.0f,%.0f\n",(unsigned long long)event.instance_id,event.modifiers,event.wheel_delta,event.desktop_point.x,event.desktop_point.y);
     if(event.instance_id) { downs+=event.kind==PP_EVENT_BUTTON_DOWN;ups+=event.kind==PP_EVENT_BUTTON_UP;moves+=event.kind==PP_EVENT_POINTER_MOVE;wheels+=event.kind==PP_EVENT_WHEEL; }
     if(presenter) API(pp_anchor_presenter_event(presenter,&event,&error));
   }
@@ -137,7 +138,13 @@ int main(int argc,char **argv) {
   pose(id,(PPPose){{520,400},120,0,1});CHECK(native(surface)==window);unchanged(warm,builds);
   CHECK(SetCursorPos(520,400));unsigned up_before=ups,move_before=moves;mouse(MOUSEEVENTF_LEFTDOWN,0);CHECK(SetCursorPos(700,500));pump();mouse(MOUSEEVENTF_LEFTUP,0);
   CHECK(ups==up_before+1&&moves>move_before&&pp_scene_get(scene,id)->pose.center.x==700&&GetForegroundWindow()==(HWND)receiver->window);unchanged(warm,builds);
-  pose(id,(PPPose){{500,400},384,17.25,.5});quality(id,source);CHECK(SetCursorPos(500,400));unsigned wheel_before=wheels;key(true);mouse(MOUSEEVENTF_WHEEL,WHEEL_DELTA);key(false);pump();CHECK(wheels==wheel_before+1&&pp_scene_get(scene,id)->pose.longest_dip>384);
+  pose(id,(PPPose){{500,400},384,17.25,.5});quality(id,source);CHECK(SetCursorPos(500,400));unsigned wheel_before=wheels;key(true);
+  POINT wheel_point;CHECK(GetCursorPos(&wheel_point));
+  printf("WHEEL target actual=%ld,%ld native=%p expected=%p alt=%d\n",wheel_point.x,wheel_point.y,(void *)WindowFromPoint(wheel_point),(void *)window,GetAsyncKeyState(VK_MENU)<0);
+  mouse(MOUSEEVENTF_WHEEL,WHEEL_DELTA);key(false);pump();
+  const PPSceneInstance *after_wheel=pp_scene_get(scene,id);
+  printf("WHEEL result count=%u expected=%u instance_alive=%d size=%.9f angle=%.9f\n",wheels,wheel_before+1,after_wheel!=NULL,after_wheel?after_wheel->pose.longest_dip:0,after_wheel?after_wheel->pose.angle_deg:0);
+  CHECK(wheels==wheel_before+1&&after_wheel&&after_wheel->pose.longest_dip>384);
   CHECK(pp_assets_source_metrics(assets).raster_builds==builds&&pp_anchor_presenter_renderer_metrics(presenter).source_uploads==warm.source_uploads&&pp_anchor_presenter_renderer_metrics(presenter).readbacks==0);
   CHECK(SetCursorPos(500,400));mouse(MOUSEEVENTF_LEFTDOWN,0);pose(id,(PPPose){{500,400},120,0,0});mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!IsWindowVisible(window));below=receiver->clicks;click(500,400);CHECK(receiver->clicks==below+1);
   pose(id,(PPPose){{500,400},120,0,1});CHECK(SetCursorPos(500,400));mouse(MOUSEEVENTF_LEFTDOWN,0);CHECK(DestroyWindow(window));pose(id,(PPPose){{500,400},120,20,1});mouse(MOUSEEVENTF_LEFTUP,0);CHECK(!pp_scene_get(scene,id)&&pp_anchor_presenter_gpu_resources(presenter).retained_bytes==0);

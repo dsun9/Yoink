@@ -348,10 +348,12 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
         total_draws+=o.draws;
         pp_probe_printf("%s sample=%u owner_ms=%.3f helper_ms=%.3f input_timestamp=%.9f pose_size=%.9f pose_angle=%.9f draws=%u completed=%u gpu=%u\n",sample<3?"WARMUP":"ACTIVE",sample<3?sample:sample-3,o.complete_ms,wheel.returned-wheel.sent,o.wheel.timestamp,sprite->pose.longest_dip,sprite->pose.angle_deg,o.draws,o.completed,o.gpu);
         if(kind==0&&size==3&&density==1) {
-          pp_probe_printf("COMPOSITION sample=%u begin_ms=%.3f register_ms=%.3f lock_ms=%.3f unlock_ms=%.3f unregister_ms=%.3f end_ms=%.3f commit_ms=%.3f native_ms=%.3f transform_ms=%.3f\n",sample,
+          pp_probe_printf("COMPOSITION sample=%u begin_ms=%.3f register_ms=%.3f lock_ms=%.3f unlock_ms=%.3f unregister_ms=%.3f end_ms=%.3f commit_ms=%.3f native_ms=%.3f transform_ms=%.3f sdl_size_ms=%.3f sdl_size_count=%u native_place_ms=%.3f native_place_count=%u\n",sample,
             o.phases[PROBE_COMPOSITION_BEGIN].ms,o.phases[PROBE_INTEROP_REGISTER].ms,o.phases[PROBE_INTEROP_LOCK].ms,
             o.phases[PROBE_INTEROP_UNLOCK].ms,o.phases[PROBE_INTEROP_UNREGISTER].ms,o.phases[PROBE_COMPOSITION_END].ms,
-            o.phases[PROBE_COMPOSITION_COMMIT].ms,o.phases[PROBE_NATIVE_SIZE].ms+o.phases[PROBE_NATIVE_PLACE].ms,o.phases[PROBE_TRANSFORM].ms);
+            o.phases[PROBE_COMPOSITION_COMMIT].ms,o.phases[PROBE_NATIVE_SIZE].ms+o.phases[PROBE_NATIVE_PLACE].ms,o.phases[PROBE_TRANSFORM].ms,
+            o.phases[PROBE_NATIVE_SIZE].ms,o.phases[PROBE_NATIVE_SIZE].count,
+            o.phases[PROBE_NATIVE_PLACE].ms,o.phases[PROBE_NATIVE_PLACE].count);
         }
         if(sample<ACCEPTANCE_WARMUP){warm++;a.warmup_observations++;}
         else {

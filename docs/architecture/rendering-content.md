@@ -72,26 +72,42 @@ therefore includes the accepted source, accepted output, and candidate source.
 A protective rejection releases candidate reservations and leaves the accepted
 presentation usable so sprite rollback restores its snapshot, pose and animation
 start. A native presentation failure still hides the surface and releases its
-input and GPU ownership.
+input. GPU charges follow actual release, including the native ownership
+failures described below.
 
-Windows visible anchors and sprites use transparent direct GL windows with a
-color-only shader and rectangular input. Translation and unchanged static
-content reuse the source and native window without uploads or transform draws.
-Native transforms render into a complete, context-owned color texture and blit
-to the window back buffer before swapping. Window-local visible rectangles are
-tracked independently of the source identity and drawn pose. Movement that
-exposes pixels beyond the previous display intersection re-publishes that
-texture with a blit and swap, including a first draw outside the display.
-Ordinary on-screen translation does no GL work. Recovery performs no source
-upload, transform draw, default-framebuffer copy/readback, or CPU pixel copy.
-Hidden and zero-opacity presentations release the retained color target;
+Windows visible anchors and sprites use a stable DirectComposition visual host
+and a separate native input window with the bounded sprite grab area from
+[ADR 0001](../adr/0001-bounded-sprite-grab-areas.md). A color-only GL shader draws
+directly into the locked logical output returned by `BeginDraw`. `EndDraw`
+and one `Commit` submit matching pixels and placement. There is one logical
+RGBA8 output, no duplicate retained GL target or GPU copy. Integer translation
+commits offsets without uploads or transform draws. Unchanged presentation
+checks the native desktop layout and otherwise performs no commit. A changed
+layout creates a fresh hidden visual host whose first content commit uses its
+new origin; retained source, output, input window and pose survive. The
+transition may be blank until the compositor accepts that tree.
+
+Native proxy placement retains SDL's sizing notification. After querying a
+matching native size, the following move/order uses `SWP_NOSIZE` and
+`SWP_NOCOPYBITS`, so it does not repeat sizing or preserve old proxy pixels.
+The separate composition output retains visible content through that move.
+
+The register/lock/unlock/unregister capability probe selects the backend before
+source/output admission. Unsupported contexts recreate the still-empty proxy
+as the transparent SDL presenter. That compatibility route retains its complete
+GL color texture, blit/swap exposure refresh and separate measurements. Its
+coherent desktop publication remains unverified.
+
+Hidden and zero-opacity presentations release the retained native output;
 reappearing presentations rebuild it from their unchanged source texture.
-Deletion or presentation failure releases the target and its charge. A context
-that cannot be made current keeps its charge. Destruction deletes shared objects
-through the surviving group owner after releasing the failed context's local
-FBO references. If that owner is unavailable too, the renderer record and charge
-stay with the group until its final context is destroyed. Comparisons at monitor seams may conservatively refresh even
-when another monitor already displayed those local pixels.
+Deletion and ordinary failure release the output and its charge. Failed native
+detach or outstanding driver ownership keeps actual references charged until
+release succeeds. Permanent failure can transfer those references and their
+logical charge to process-lived quarantine, which participates in subsequent
+presenter admission. Shared GL cleanup uses the surviving group owner when a
+local context is unavailable. See
+[ADR 0002](../adr/0002-coherent-windows-sprite-presentation.md) for publication,
+fallback, lifetime rules and the measured platform limits.
 Owned source alpha validates visibility and finds the nearest visible grab
 point for a small activation target. A preview press retains its prepared
 snapshot through the pull. Removal/disable/zero opacity cancels its pending

@@ -64,8 +64,14 @@ Changing projects clears temporary sprites only after a successful load.
 Previews and sprites share immutable artwork and cached CPU sources. PNG/GIF
 keep native resolution, bitmap text keeps useful strike detail, and scalable
 text/SVG prepare the latest size while retaining available artwork. Windows
-anchors and sprites draw directly into transparent GL windows; Settings and
-drawer retain context-local GL preview textures without normal readback.
+anchors and sprites draw through OpenGL into a stable DirectComposition visual
+host, with a separate native input window that retains the sprite grab area.
+The actual GL/DX interop capability probe selects this route before accepting
+content; unsupported contexts use the transparent SDL compatibility presenter.
+See the [presentation decision](docs/adr/0002-coherent-windows-sprite-presentation.md)
+and [desktop validation](docs/testing/sprite-jitter.md) for the tested backend
+and its limits. Settings and drawer retain context-local GL preview textures
+without normal readback.
 Settings content commits restart its own clock. Rename, reorder and pose-only
 edits reuse sources; drawer GIF thumbnails intentionally show frame zero.
 
@@ -152,9 +158,9 @@ native driver/startup failures. `--settings` explicitly opens Settings at startu
 The older bounded `--overlay-probe MODE --duration-ms N` diagnostics remain.
 
 Desktop tests move the pointer/type keys. On an available interactive Windows
-desktop run `powershell -NoProfile -ExecutionPolicy Bypass -File
-tests/platform/run_acceptance_desktop.ps1`; it runs all desktop tests once,
-stops on failure and uses a 180-second outer timeout plus verified restoration.
+desktop use the bounded Release correctness commands in
+[rendering performance](docs/testing/rendering-performance.md). The supervisor
+stops on failure, bounds each child to 180 seconds and verifies desktop restoration.
 Do not run desktop tests concurrently. Release test assertions remain enabled.
 
 On macOS 11+, install Xcode command-line tools, Git, CMake and Ninja, then:
@@ -201,8 +207,11 @@ mixed-monitor behavior. Physical two-display traversal/disconnect/fullscreen
 acceptance remains not run. Hosted Mac builds and headless checks have passed
 for the integration; native Mac runtime, first-click routing, capture/wheel,
 Retina traversal and Spaces remain unverified. Cocoa uses the shared source
-policy with a color-only compatibility readback. The complete 16.7 ms warm,
-50 ms input and 200 ms sharp gates remain ticket #11 acceptance work. See
+policy with a color-only compatibility readback. The 16.7 ms warm,
+50 ms input and 200 ms sharp protocol has measured Windows acceptance under
+the selected backend. Each run, its failures and its API timing boundary are
+recorded in [rendering performance](docs/testing/rendering-performance.md).
+Compositor-visible displacement uses a separate independent desktop check. See
 [preview verification](docs/testing/preview-retention.md), the concrete evidence and
 follow-up instructions in [Windows testing](docs/testing/windows.md) and
 [macOS testing](docs/testing/macos.md).
