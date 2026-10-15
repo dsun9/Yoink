@@ -335,7 +335,7 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
       pp_probe_printf("REALIZED drawable_px=%dx%d native_px=%ldx%ld native_origin=%ld,%ld desktop_units_per_dip=%.3f drawable_pixels_per_dip=%.3f actual_pose=%.9f,%.9f actual_pointer=%.0f,%.0f\n",pixel_w,pixel_h,native.right-native.left,native.bottom-native.top,native.left,native.top,densities[density],densities[density],realized->pose.longest_dip,realized->pose.angle_deg,positioned.x,positioned.y);
       if(pixel_w!=native.right-native.left||pixel_h!=native.bottom-native.top||realized->pose.longest_dip!=sizes[size]||realized->pose.angle_deg!=angles[angle]||positioned.x<native.left||positioned.x>=native.right||positioned.y<native.top||positioned.y>=native.bottom){pp_probe_puts("INCOMPLETE requested pose/drawable/native/physical target mapping");goto done;}
       pp_probe_printf("CASE source=%s dip=%.0f density=%.2f actual_density=%.2f simulated=%d rotation=%.2f cold_setup_and_settle_ms=%.3f input_max_ms=%u\n",names[kind],sizes[size],densities[density],display.drawable_pixels_per_dip,densities[density]!=display.drawable_pixels_per_dip,angles[angle],pp_probe_clock()-cold,pp_probe_injected_max_wait);
-      double values[7][ACCEPTANCE_SAMPLES]={{0}};unsigned warm=0,observed=0,total_draws=0;
+      double values[15][ACCEPTANCE_SAMPLES]={{0}};unsigned warm=0,observed=0,total_draws=0;
       unsigned input_before=pp_probe_injected_hook_count;
       PPRendererMetrics rb=pp_runtime_renderer_metrics(runtime);PPPresentationMetrics pb=pp_runtime_presentation_metrics(runtime);
       uint64_t builds=pp_assets_source_metrics(pp_app_assets(app)).raster_builds;
@@ -347,19 +347,27 @@ static int native_acceptance(PPApp *app,int diagnostic_kind) {
         if(!active||!sprite||!sprite->rotating){pp_probe_puts("INCOMPLETE active transform or all-draw completion");goto done;}
         total_draws+=o.draws;
         pp_probe_printf("%s sample=%u owner_ms=%.3f helper_ms=%.3f input_timestamp=%.9f pose_size=%.9f pose_angle=%.9f draws=%u completed=%u gpu=%u\n",sample<3?"WARMUP":"ACTIVE",sample<3?sample:sample-3,o.complete_ms,wheel.returned-wheel.sent,o.wheel.timestamp,sprite->pose.longest_dip,sprite->pose.angle_deg,o.draws,o.completed,o.gpu);
+        if(kind==0&&size==3&&density==1) {
+          pp_probe_printf("COMPOSITION sample=%u begin_ms=%.3f register_ms=%.3f lock_ms=%.3f unlock_ms=%.3f unregister_ms=%.3f end_ms=%.3f commit_ms=%.3f native_ms=%.3f transform_ms=%.3f\n",sample,
+            o.phases[PROBE_COMPOSITION_BEGIN].ms,o.phases[PROBE_INTEROP_REGISTER].ms,o.phases[PROBE_INTEROP_LOCK].ms,
+            o.phases[PROBE_INTEROP_UNLOCK].ms,o.phases[PROBE_INTEROP_UNREGISTER].ms,o.phases[PROBE_COMPOSITION_END].ms,
+            o.phases[PROBE_COMPOSITION_COMMIT].ms,o.phases[PROBE_NATIVE_SIZE].ms+o.phases[PROBE_NATIVE_PLACE].ms,o.phases[PROBE_TRANSFORM].ms);
+        }
         if(sample<ACCEPTANCE_WARMUP){warm++;a.warmup_observations++;}
         else {
           values[0][observed]=o.complete_ms;values[1][observed]=o.phases[PROBE_SOURCE_REQUEST].ms;
           values[2][observed]=o.phases[PROBE_GPU_SUBMIT].ms;values[3][observed]=o.phases[PROBE_GPU_EXECUTION].ms;
           values[4][observed]=o.phases[PROBE_GPU_COMPLETE].ms;values[5][observed]=o.phases[PROBE_GL_SWAP].ms;
           values[6][observed]=o.phases[PROBE_NATIVE_SIZE].ms+o.phases[PROBE_NATIVE_PLACE].ms;
+          for(unsigned i=0;i<8;i++)values[7+i][observed]=o.phases[PROBE_COMPOSITION_BEGIN+i].ms;
           observed++;a.samples++;a.active_samples++;a.gpu_observations++;
         }
       }
       pp_probe_owner_phase="case-statistics-and-report";double report_start=pp_probe_clock();
       double p95=statistics("complete_owner",values[0]);a.regression_p95_ms=fmax(a.regression_p95_ms,p95);
-      const char *metrics[]={"source_request","cpu_draw_submission","gpu_execution","cpu_wait_gpu_completion","returned_native_swap","native_size_and_placement"};
-      for(unsigned i=1;i<7;i++)statistics(metrics[i-1],values[i]);
+      const char *metrics[]={"source_request","cpu_draw_submission","gpu_execution","cpu_wait_gpu_completion","returned_native_swap","native_size_and_placement",
+        "composition_begin","interop_register","interop_lock","composition_copy","interop_unlock","interop_unregister","composition_end","composition_commit"};
+      for(unsigned i=1;i<15;i++)statistics(metrics[i-1],values[i]);
       a.completed_cases++;if(pp_probe_injected_hook_count>input_before)a.native_input_cases++;
       if(kind==0&&size==3&&density==1){a.required_timing_cases++;a.required_p95_ms=fmax(a.required_p95_ms,p95);}
       PPRendererMetrics ra=pp_runtime_renderer_metrics(runtime);PPPresentationMetrics pa=pp_runtime_presentation_metrics(runtime);

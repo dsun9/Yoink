@@ -87,6 +87,8 @@ uint32_t pp_surface_window_id(const PPSurface *surface);
  * Failure hides the interceptor; renderer must be destroyed before surface. */
 bool pp_surface_place_gl(PPSurface *surface, PPRect desktop_bounds,
     bool interactive, PPError *error);
+/* Publish staged integer translation without drawing retained content. */
+bool pp_surface_publish_gl_placement(PPSurface *surface,PPError *error);
 /* Windows native input/visual exclusion. Sorted final rectangles are capped
  * before native publication; NULL restores ordinary rectangle routing. */
 bool pp_surface_set_grab_region(PPSurface *surface,const PPGrabRegion *region,PPError *error);

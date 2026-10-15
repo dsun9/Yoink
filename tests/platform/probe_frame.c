@@ -1,5 +1,15 @@
 #include "performance_probe.h"
 #include "../../src/render/gl_api.h"
+#include "../../src/platform/windows/composition.h"
+static void composition_stage(enum PPCompositionStage stage,double elapsed) {
+  PPProbeMetric *m=&pp_probe_metrics[PROBE_COMPOSITION_BEGIN+(int)stage];
+  m->count++;m->ms+=elapsed;if(elapsed>m->max_ms)m->max_ms=elapsed;
+}
+static bool probe_composition_initialize(PPComposition *composition) {
+  double start=pp_probe_clock();bool ok=pp_composition_initialize(composition);
+  pp_probe_printf("PRESENTATION_INIT elapsed_ms=%.3f active=%d\n",pp_probe_clock()-start,ok);return ok;
+}
+#define pp_composition_initialize probe_composition_initialize
 static GLuint elapsed_query;
 static SDL_GLContext query_context;
 static PFNGLGENQUERIESPROC query_gen;
@@ -179,10 +189,12 @@ bool pp_renderer_create_texture_owner(PPRenderer **out,PPError *error) {
 }
 bool pp_renderer_create_shared_window(PPRenderer **out,uint32_t id,PPRenderer *owner,PPError *error) {
   double start=pp_probe_clock();bool ok=pp_raw_renderer_create_shared_window(out,id,owner,error);
+  if(ok){pp_composition_observe((*out)->composition,composition_stage);pp_probe_printf("PRESENTATION %s\n",pp_composition_description((*out)->composition));}
   pp_probe_record(PROBE_RENDERER_CREATE,start);return ok;
 }
 bool pp_renderer_create_for_window(PPRenderer **out,uint32_t id,PPError *error) {
   double start=pp_probe_clock();bool ok=pp_raw_renderer_create_for_window(out,id,error);
+  if(ok){pp_composition_observe((*out)->composition,composition_stage);pp_probe_printf("PRESENTATION %s\n",pp_composition_description((*out)->composition));}
   pp_probe_record(PROBE_RENDERER_CREATE,start);return ok;
 }
 bool pp_renderer_transform(PPRenderer *renderer, const PPFrame *source, double longest,

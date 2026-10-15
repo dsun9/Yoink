@@ -1,6 +1,8 @@
 /* Opt-in native feasibility gate. Desktop observations come from the real
  * receiver, OS input injection, foreground/window order and composited pixels. */
 #include "pointy/platform.h"
+#include "../../src/platform/windows/composition.h"
+#include "../../src/app/presenter_internal.h"
 #include "receiver_shared.h"
 #include "../test.h"
 #include <SDL3/SDL.h>
@@ -18,6 +20,7 @@ static SDL_Window *settings,*drawer;
 static HWND saved_foreground;
 static POINT saved_cursor;
 static bool left_held,right_held,capture_on_down;
+void pp_test_composition_control(const char *name);
 typedef struct Observation {int downs,ups,moves,wheels,right_downs,right_ups,cancels;} Observation;
 static Observation observations[2];
 static void cleanup(void) {
@@ -106,6 +109,7 @@ static PPFrame ring(void) {
 static void create(int i,const PPFrame *source) {
     API(pp_surface_create_gl(&surfaces[i],&error));pp_surface_set_instance_id(surfaces[i],42+i);
     API(pp_renderer_create_for_window(&renderers[i],pp_surface_window_id(surfaces[i]),&error));
+    printf("PRESENTATION %s foreground=%p receiver=%p\n",pp_composition_description((PPComposition *)GetPropW(native(i),PP_COMPOSITION_PROPERTY)),(void *)GetForegroundWindow(),(void *)receiver->window);
     API(pp_renderer_upload_source(renderers[i],source,42+i,1,&error));
 }
 static void present(int i,double angle,double opacity,PPRect bounds) {
@@ -117,18 +121,32 @@ static void present(int i,double angle,double opacity,PPRect bounds) {
     pump();
 }
 static COLORREF pixel(int x,int y) {
-    HDC screen=GetDC(NULL);CHECK(screen);COLORREF value=GetPixel(screen,x,y);ReleaseDC(NULL,screen);CHECK(value!=CLR_INVALID);return value;
+    bool pp_test_desktop_capture_start(RECT rectangle);
+    unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new);
+    static bool started;
+    RECT rectangle={x,y,x+1,y+1};
+    if(!started){CHECK(pp_test_desktop_capture_start(rectangle));started=true;Sleep(100);}
+    unsigned char *data=pp_test_desktop_capture(rectangle,false);CHECK(data);
+    COLORREF value=RGB(data[2],data[1],data[0]);free(data);return value;
 }
 static void expect_pixel(const char *name,int x,int y,int r,int g,int b) {
     COLORREF value=pixel(x,y);
     printf("Compositor pixel %s at %d,%d: RGB=%d,%d,%d expected=%d,%d,%d tolerance=3\n",
         name,x,y,GetRValue(value),GetGValue(value),GetBValue(value),r,g,b);
+    if(abs((int)GetRValue(value)-r)>3||abs((int)GetGValue(value)-g)>3||abs((int)GetBValue(value)-b)>3) {
+        HWND at=WindowFromPoint((POINT){x,y});char title[100]={0},class_name[100]={0};GetWindowTextA(at,title,sizeof(title));GetClassNameA(at,class_name,sizeof(class_name));
+        printf("PIXEL mismatch native=%p class=%s title=%s foreground=%p receiver=%p proxy0=%p\n",(void *)at,class_name,title,(void *)GetForegroundWindow(),(void *)receiver->window,surfaces[0]?(void *)native(0):NULL);
+        HDC screen=GetDC(NULL);COLORREF gdi=GetPixel(screen,x,y),background=GetPixel(screen,350,350);ReleaseDC(NULL,screen);
+        RECT bounds;GetWindowRect((HWND)receiver->window,&bounds);printf("PIXEL GDI=%u,%u,%u background=%u,%u,%u receiver bounds=%ld,%ld,%ld,%ld visible=%d\n",GetRValue(gdi),GetGValue(gdi),GetBValue(gdi),GetRValue(background),GetGValue(background),GetBValue(background),bounds.left,bounds.top,bounds.right,bounds.bottom,IsWindowVisible((HWND)receiver->window));
+    }
     CHECK(abs((int)GetRValue(value)-r)<=3 && abs((int)GetGValue(value)-g)<=3 && abs((int)GetBValue(value)-b)<=3);
 }
 static void test_alpha_and_rectangle(PPFrame *source) {
+    printf("FOREGROUND before-create=%p receiver=%p\n",(void *)GetForegroundWindow(),(void *)receiver->window);
     create(0,source);
     printf("Backend SDL=%s driver=%s GL vendor=%s renderer=%s version=%s\n",SDL_GetRevision(),SDL_GetCurrentVideoDriver(),glGetString(GL_VENDOR),glGetString(GL_RENDERER),glGetString(GL_VERSION));
     present(0,0,1,(PPRect){220,220,64,64});
+    printf("FOREGROUND after-present=%p receiver=%p proxy=%p\n",(void *)GetForegroundWindow(),(void *)receiver->window,(void *)native(0));
     CHECK(GetForegroundWindow()==(HWND)receiver->window);
     expect_pixel("transparent interior",252,252,255,255,255);
     expect_pixel("padding",221,221,255,255,255);
@@ -228,9 +246,17 @@ static SDL_Window *ui_fixture(const char *title) {
 static void test_order_and_reuse(PPFrame *source) {
     create(0,source);present(0,0,1,(PPRect){220,220,64,64});
     create(1,source);present(1,0,1,(PPRect){230,230,64,64});
+    /* Distinct overlapping landmarks prove visual order follows input order. */
+    uint8_t colors[64*64*4];memset(colors,0,sizeof(colors));
+    for(int p=0;p<64*64;p++){colors[p*4+1]=255;colors[p*4+3]=255;}
+    PPFrame green={colors,NULL,64,64,64*4};
+    API(pp_renderer_upload_source(renderers[1],&green,43,2,&error));
+    present(1,0,1,(PPRect){230,230,64,64});expect_pixel("upper green pair",277,252,0,255,0);
     int a=observations[0].downs,b=observations[1].downs;click(252,252);
     CHECK(observations[1].downs==b+1 && observations[0].downs==a);
-    pp_surface_raise(surfaces[0]);pump();click(252,252);CHECK(observations[0].downs==a+1);
+    pp_surface_raise(surfaces[0]);pump();expect_pixel("raised red pair",277,252,255,0,0);
+    CHECK(WindowFromPoint((POINT){252,252})==native(0));
+    click(252,252);CHECK(observations[0].downs==a+1);
     present(1,0,1,(PPRect){230,230,64,64});CHECK(WindowFromPoint((POINT){252,252})==native(0));
     PPRendererMetrics before=pp_renderer_metrics(renderers[0]);
     HWND retained=native(0);
@@ -320,7 +346,81 @@ int main(int argc,char **argv) {
     do {SetForegroundWindow((HWND)receiver->window);pump();} while(GetForegroundWindow()!=(HWND)receiver->window && GetTickCount64()<until);
     CHECK(GetForegroundWindow()==(HWND)receiver->window);
     PPFrame source=ring();
-    if(argc==3){CHECK(!strcmp(argv[2],"--grab"));test_grab_region(&source);}
+    if(argc==3&&(!strcmp(argv[2],"--prepare-persistent-unregister")||!strncmp(argv[2],"--detach-",9))) {
+        PPAssets *assets=NULL;PPProject *project=NULL;PPAnchorPresenter *presenter=NULL;PPRenderer *owner=NULL;
+        API(pp_assets_create(&assets,&error));API(pp_project_create(assets,&project,&error));API(pp_renderer_create(&owner,&error));
+        API(pp_anchor_presenter_create(&presenter,owner,project,&error));API(pp_surface_create_gl(&surfaces[0],&error));
+        PPRetainedPresentation retained={0};PPSourcePresentation packet={.frame=&source,.content_id=1,.source_revision=1,.layout={64,64},.visual_alpha=true};
+        PPDisplay display={1,{0,0,3840,2160},1,1};PPPose pose={{252,252},64,0,1};
+        API(pp_retained_present(presenter,surfaces[0],&retained,packet,pose,&display,&error));size_t accepted=retained.output_bytes;
+        pp_test_composition_control(argv[2]+2);
+        if(!strncmp(argv[2],"--detach-",9))pp_retained_hide(presenter,surfaces[0],&retained);
+        else {
+            pose.longest_dip=96;
+            CHECK(!pp_retained_present(presenter,surfaces[0],&retained,packet,pose,&display,&error)&&error.code==PP_ERROR_RENDER);
+        }
+        size_t output=pp_renderer_output_bytes(retained.renderer);CHECK(output>=accepted&&retained.output_bytes==output);
+        CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==output+retained.gpu_bytes);
+        CHECK(!IsWindowVisible(native(0)));pp_retained_release(presenter,&retained);
+        pp_surface_destroy(surfaces[0]);surfaces[0]=NULL;pp_gif_clear(presenter);
+        CHECK(pp_renderer_quarantined_bytes()==output&&pp_anchor_presenter_gpu_resources(presenter).retained_bytes==output);
+        pp_anchor_presenter_destroy(presenter);presenter=NULL;
+        API(pp_anchor_presenter_create(&presenter,owner,project,&error));API(pp_presenter_sources(presenter,&error));
+        CHECK(pp_anchor_presenter_gpu_resources(presenter).retained_bytes==output);
+        CHECK(!pp_presenter_gpu_reserve(presenter,PP_RETAINED_GPU_LIMIT-output+1,&error)&&error.code==PP_ERROR_RESOURCE_LIMIT);
+        API(pp_presenter_gpu_reserve(presenter,PP_RETAINED_GPU_LIMIT-output,&error));pp_presenter_gpu_release(presenter,PP_RETAINED_GPU_LIMIT-output);
+        pp_anchor_presenter_destroy(presenter);pp_renderer_destroy(owner);pp_project_destroy(project);pp_assets_destroy(assets);
+        puts("PASS failed output preparation/detach retained actual charge through owner teardown and subsequent presenter admission");
+    }
+    else if(argc==3&&!strcmp(argv[2],"--layout")) {
+        create(0,&source);present(0,0,1,(PPRect){220,220,64,64});
+        PPComposition *composition=GetPropW(native(0),PP_COMPOSITION_PROPERTY);CHECK(pp_composition_active(composition));
+        HWND proxy=native(0),previous=pp_composition_top(composition,proxy);
+        PPRendererMetrics metrics=pp_renderer_metrics(renderers[0]);size_t bytes=pp_renderer_output_bytes(renderers[0]);
+        pp_test_composition_control("layout-expanded");API(pp_surface_publish_gl_placement(surfaces[0],&error));pump();
+        HWND expanded=pp_composition_top(composition,proxy);CHECK(expanded!=previous&&!IsWindow(previous)&&native(0)==proxy);
+        CHECK(pp_renderer_output_bytes(renderers[0])==bytes);expect_pixel("layout recovery rim",277,252,255,0,0);
+        PPRendererMetrics after=pp_renderer_metrics(renderers[0]);CHECK(!memcmp(&metrics,&after,sizeof(metrics)));
+        API(pp_surface_publish_gl_placement(surfaces[0],&error));CHECK(pp_composition_top(composition,proxy)==expanded);
+        pp_test_composition_control("");API(pp_surface_publish_gl_placement(surfaces[0],&error));pump();CHECK(!IsWindow(expanded));
+        pp_test_composition_control("layout-expanded");present(0,37,1,(PPRect){220,220,90,90});expect_pixel("layout transform interior",265,265,255,255,255);
+        CHECK(GetForegroundWindow()==(HWND)receiver->window&&WindowFromPoint((POINT){265,265})==proxy);
+        pp_test_composition_control("");destroy(0);puts("PASS fresh-host desktop-layout recovery preserved proxy, pixels, output charge and source/transform reuse");
+    }
+    else if(argc==3&&!strncmp(argv[2],"--init-persistent-",18)) {
+        pp_test_composition_control(argv[2]+2);
+        API(pp_surface_create_gl(&surfaces[0],&error));
+        CHECK(!pp_renderer_create_for_window(&renderers[0],pp_surface_window_id(surfaces[0]),&error)&&error.code==PP_ERROR_RENDER);
+        pp_surface_destroy(surfaces[0]);surfaces[0]=NULL;
+        CHECK(pp_renderer_quarantined_bytes()==4);puts("PASS persistent capability cleanup failure stayed hidden with a process-lived one-pixel charge");
+    }
+    else if(argc==3&&!strncmp(argv[2],"--persistent-",13)) {
+        create(0,&source);present(0,0,1,(PPRect){220,220,64,64});
+        pp_test_composition_control(argv[2]+2);
+        CHECK(!pp_renderer_draw(renderers[0],(PPVec2){64,64},64,0,1,1,&error)&&error.code==PP_ERROR_RENDER);
+        size_t bytes=pp_renderer_output_bytes(renderers[0]);CHECK(bytes);
+        pp_surface_hide(surfaces[0]);destroy(0);
+        CHECK(pp_renderer_quarantined_bytes()==bytes);
+        puts("PASS persistent interop cleanup failure retained exact process-lived logical output charge");
+    }
+    else if(argc==3&&!strncmp(argv[2],"--init-",7)) {
+        pp_test_composition_control(argv[2]+2);create(0,&source);
+        CHECK(!pp_composition_active((PPComposition *)GetPropW(native(0),PP_COMPOSITION_PROPERTY)));
+        present(0,0,1,(PPRect){220,220,64,64});expect_pixel("capability fallback rim",277,252,255,0,0);
+        destroy(0);puts("PASS injected capability probe failure safely selected compatibility presentation");
+    }
+    else if(argc==3&&strcmp(argv[2],"--grab")&&strcmp(argv[2],"--missing")) {
+        CHECK(!strncmp(argv[2],"--",2));pp_test_composition_control(argv[2]+2);
+        create(0,&source);API(pp_surface_place_gl(surfaces[0],(PPRect){220,220,64,64},true,&error));
+        CHECK(!pp_renderer_draw(renderers[0],(PPVec2){64,64},64,0,1,1,&error)&&error.code==PP_ERROR_RENDER);
+        pp_surface_hide(surfaces[0]);pp_renderer_release_output(renderers[0]);
+        CHECK(!pp_renderer_output_bytes(renderers[0])&&!IsWindowVisible(native(0)));
+        destroy(0);puts("PASS injected interop failure rejected publication and released logical output/native input");
+    }
+    else if(argc==3&&!strcmp(argv[2],"--grab"))test_grab_region(&source);
+    else if(argc==3&&!strcmp(argv[2],"--missing")) {
+        pp_test_composition_control("missing");test_alpha_and_rectangle(&source);test_capture_and_cleanup(&source);test_order_and_reuse(&source);test_canonical_layout();
+    }
     else {test_alpha_and_rectangle(&source);test_capture_and_cleanup(&source);test_order_and_reuse(&source);test_canonical_layout();}
     pp_frame_destroy(&source);
     puts("PASS direct GL feasibility gate; macOS runtime unverified; timing and visible frame cadence require separate acceptance");

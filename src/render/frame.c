@@ -5,7 +5,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-typedef struct PPRenderUniforms {GLint image,alpha,destination_size,destination_center,source_size,rotation,scale,source_offset,opacity;} PPRenderUniforms;
+#ifdef _WIN32
+#include "../platform/windows/composition.h"
+#endif
+typedef struct PPRenderUniforms {GLint image,alpha,destination_size,destination_center,source_size,rotation,scale,source_offset,opacity,destination_origin,top_down;} PPRenderUniforms;
+static PPRenderDiagnostic diagnostic_observer;
+static void *diagnostic_context;
+size_t pp_renderer_quarantined_bytes(void) {
+#ifdef _WIN32
+    return pp_composition_quarantined_bytes();
+#else
+    return 0;
+#endif
+}
+void pp_renderer_diagnostic_observer(PPRenderDiagnostic observer,void *context) {diagnostic_observer=observer;diagnostic_context=context;}
 /* Artwork stays within 8192 pixels; native placement may add one transparent
  * pixel per axis to preserve its fractional center after window rounding. */
 enum { NATIVE_OUTPUT_LIMIT = 8193 };
@@ -29,6 +42,9 @@ struct PPRenderer {
     GLuint output_candidate;
     int candidate_width,candidate_height;
     PPRenderer *retired_renderers,*retired_next;
+#ifdef _WIN32
+    PPComposition *composition;
+#endif
 };
 struct PPSharedTexture {PPRenderer *owner;GLuint name;int width,height;};
 static void APIENTRY observe_error(GLenum source,GLenum type,GLuint id,GLenum severity,
@@ -64,8 +80,10 @@ static const char *color_shader =
     "#version 150\n"
     "uniform sampler2D image; uniform vec2 destination_size; uniform vec2 destination_center; uniform vec2 source_size;"
     "uniform vec2 rotation; uniform vec2 scale; uniform vec2 source_offset; uniform float opacity;"
+    "uniform vec2 destination_origin; uniform float top_down;"
     "out vec4 color; void main() {"
-    "vec2 d=vec2(gl_FragCoord.x,destination_size.y-gl_FragCoord.y)-destination_center;"
+    "vec2 p=gl_FragCoord.xy-destination_origin;"
+    "vec2 d=vec2(p.x,mix(destination_size.y-p.y,p.y,top_down))-destination_center;"
     "vec2 s=vec2(rotation.x*d.x+rotation.y*d.y,-rotation.y*d.x+rotation.x*d.y)/scale;"
     "vec2 uv=(s-source_offset)/source_size+0.5;"
     "color=(any(lessThan(uv,vec2(0))) || any(greaterThan(uv,vec2(1))))?vec4(0):texture(image,uv)*opacity; }";
@@ -164,6 +182,24 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
      * per-sprite swap must not wait for another refresh inside that owner work.
      * Unsupported contexts retain their driver policy and remain measurable. */
     if(window_id)SDL_GL_SetSwapInterval(0);
+#ifdef _WIN32
+    if(!window_id&&!texture_owner)pp_composition_bootstrap();
+    if(window_id) {
+        HWND native=SDL_GetPointerProperty(SDL_GetWindowProperties(renderer->window),SDL_PROP_WINDOW_WIN32_HWND_POINTER,NULL);
+        renderer->composition=pp_composition_retain((PPComposition *)GetPropW(native,PP_COMPOSITION_PROPERTY));
+        pp_composition_initialize(renderer->composition);
+        if(pp_composition_pending(renderer->composition)){error_set(error,PP_ERROR_RENDER,"Cannot release composition capability probe");pp_renderer_destroy(renderer);return false;}
+        if(pp_composition_needs_fallback(renderer->composition)) {
+            /* Window backing cannot change after WGL sets its pixel format.
+             * Recreate the still-empty proxy before accepting any source. */
+            SDL_GL_DestroyContext(renderer->context);renderer->context=NULL;
+            uint32_t compatibility_id=0;
+            if(!pp_composition_select_fallback(renderer->composition,&compatibility_id,error)){pp_renderer_destroy(renderer);return false;}
+            pp_composition_release(renderer->composition);free(renderer);
+            return create(out,compatibility_id,share,texture_owner,error);
+        }
+    }
+#endif
     if (!pp_gl_load(&renderer->gl, error)) { pp_renderer_destroy(renderer); return false; }
     PPGL *gl = &renderer->gl;
     renderer->program = pp_gl_program(gl, vertex_shader, window_id?color_shader:fragment_shader, error);
@@ -171,6 +207,7 @@ static bool create(PPRenderer **out, uint32_t window_id,PPRenderer *share,bool t
 #define CACHE(name) renderer->uniforms.name=gl->GetUniformLocation(renderer->program,#name)
     CACHE(image);CACHE(alpha);CACHE(destination_size);CACHE(destination_center);CACHE(source_size);
     CACHE(rotation);CACHE(scale);CACHE(source_offset);CACHE(opacity);
+    CACHE(destination_origin);CACHE(top_down);
 #undef CACHE
     gl->GenVertexArrays(1, &renderer->vao); gl->GenFramebuffers(1, &renderer->fbo);
     glGenTextures(4, renderer->textures);
@@ -384,19 +421,33 @@ bool pp_renderer_preview_source(PPRenderer *r,const PPFrame *source,uint64_t id,
 }
 size_t pp_renderer_output_candidate_bytes(const PPRenderer *r,int width,int height) {
     if(width<1||height<1||width>NATIVE_OUTPUT_LIMIT||height>NATIVE_OUTPUT_LIMIT)return 0;
+#ifdef _WIN32
+    if(r&&pp_composition_active(r->composition))return pp_composition_candidate_bytes(r->composition,width,height);
+#endif
     if(r&&r->output_candidate&&r->candidate_width==width&&r->candidate_height==height)return 0;
     return r&&r->output_texture&&r->output_width==width&&r->output_height==height?0:(size_t)width*height*4;
 }
 size_t pp_renderer_output_bytes(const PPRenderer *r) {
     if(!r)return 0;
-    return (r->output_texture?(size_t)r->output_width*r->output_height*4:0)+
+    size_t bytes=(r->output_texture?(size_t)r->output_width*r->output_height*4:0)+
         (r->output_candidate?(size_t)r->candidate_width*r->candidate_height*4:0);
+#ifdef _WIN32
+    if(pp_composition_active(r->composition))return pp_composition_output_bytes(r->composition);
+#endif
+    return bytes;
 }
 void pp_renderer_release_output(PPRenderer *r) {
-    if(!r||(!r->output_texture&&!r->output_candidate))return;
+    if(!r)return;
+#ifdef _WIN32
+    if(pp_composition_active(r->composition)){pp_composition_release_output(r->composition);r->output_width=r->output_height=0;return;}
+#endif
+    if(!r->output_texture&&!r->output_candidate)return;
     /* A temporarily unavailable context keeps both its object and charge.
      * Destruction deletes through the share owner or transfers the charge. */
     if(!current(r,NULL))return;
+#ifdef _WIN32
+    pp_composition_release_output(r->composition);
+#endif
     r->gl.BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
     r->gl.FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,0,0);
     glDeleteTextures(1,&r->output_texture);
@@ -405,6 +456,9 @@ void pp_renderer_release_output(PPRenderer *r) {
     r->output_texture=0;r->output_width=r->output_height=0;
 }
 static bool allocate_output(PPRenderer *r,int w,int h,GLuint *candidate,PPError *error) {
+#ifdef _WIN32
+    if(pp_composition_active(r->composition))return pp_composition_prepare(r->composition,w,h,error);
+#endif
     if(!pp_renderer_output_candidate_bytes(r,w,h))return true;
     glGenTextures(1,candidate);texture(*candidate,GL_RGBA8,GL_RGBA,w,h,NULL);
     GLenum failure=glGetError();
@@ -446,6 +500,21 @@ bool pp_renderer_prepare_source_output(PPRenderer *r,const PPFrame *source,PPSha
         if(candidate_source)glDeleteTextures(1,&candidate_source);
         return false;
     }
+#ifdef _WIN32
+    if(w&&h&&!pp_composition_prepare(r->composition,w,h,error)) {
+        if(candidate_output)glDeleteTextures(1,&candidate_output);
+        if(candidate_source)glDeleteTextures(1,&candidate_source);
+        return false;
+    }
+    /* BeginDraw owns the real allocation, so acquire it before replacing the
+     * accepted source. A deferred DComp allocation failure is transactional. */
+    if(w&&h&&pp_composition_active(r->composition)) {
+        GLuint framebuffer;int x,y;
+        if(!pp_composition_begin(r->composition,w,h,&framebuffer,&x,&y,error)) {
+            if(candidate_source)glDeleteTextures(1,&candidate_source);return false;
+        }
+    }
+#endif
     /* Neither accepted source ownership nor native bounds changes before both
      * allocations succeed. Keep the old output until successful publication. */
     if(changed) {
@@ -469,8 +538,18 @@ static bool publish_output(PPRenderer *r,int w,int h,PPError *error) {
     return SDL_GL_SwapWindow(r->window)||error_set(error,PP_ERROR_RENDER,SDL_GetError());
 }
 bool pp_renderer_refresh(PPRenderer *r,PPError *error) {
-    if(!r||!r->output_texture)return error_set(error,PP_ERROR_RENDER,"Missing retained presentation output");
+    if(!r)return error_set(error,PP_ERROR_RENDER,"Missing retained presentation output");
     if(!current(r,error))return false;
+#ifdef _WIN32
+    /* DComp retains off-screen logical pixels. Exposure needs no GL copy. */
+    if(pp_composition_active(r->composition)) {
+        if(r->error_callback?r->draw_error:glGetError()!=GL_NO_ERROR)
+            return error_set(error,PP_ERROR_RENDER,"Retained OpenGL exposure failed");
+        if(!pp_composition_translate(r->composition,error))return false;
+        r->metrics.presentation_refreshes++;return true;
+    }
+#endif
+    if(!r->output_texture)return error_set(error,PP_ERROR_RENDER,"Missing retained presentation output");
     int w,h;if(!SDL_GetWindowSizeInPixels(r->window,&w,&h)||w!=r->output_width||h!=r->output_height)
         return error_set(error,PP_ERROR_RENDER,"Retained output does not match drawable bounds");
     r->gl.BindFramebuffer(GL_FRAMEBUFFER,r->fbo);
@@ -494,13 +573,23 @@ static bool draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double lo
             center->x>w-extent_w*.5+1e-7||center->y>h-extent_h*.5+1e-7) : (w!=extent_w||h!=extent_h)))
         return error_set(error,PP_ERROR_ARGUMENT,"Direct window drawable does not match canonical transform bounds");
     PPGL *gl=&renderer->gl;GLuint candidate=renderer->output_candidate,output=renderer->output_texture;
+    bool composition=false;int viewport_x=0,viewport_y=0;
+#ifdef _WIN32
+    composition=pp_composition_active(renderer->composition);
+    if(composition) {
+        GLuint framebuffer;
+        if(!pp_composition_begin(renderer->composition,w,h,&framebuffer,&viewport_x,&viewport_y,error))return false;
+    }
+#endif
     if(candidate&&(renderer->candidate_width!=w||renderer->candidate_height!=h))
         return error_set(error,PP_ERROR_RENDER,"Prepared output does not match drawable bounds");
-    if(!candidate&&!allocate_output(renderer,w,h,&candidate,error))return false;
+    if(!composition&&!candidate&&!allocate_output(renderer,w,h,&candidate,error))return false;
     renderer->output_candidate=0;renderer->candidate_width=renderer->candidate_height=0;
     if(candidate)output=candidate;
-    gl->BindFramebuffer(GL_FRAMEBUFFER,renderer->fbo);
-    gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,output,0);
+    if(!composition) {
+        gl->BindFramebuffer(GL_FRAMEBUFFER,renderer->fbo);
+        gl->FramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,output,0);
+    }
     glDrawBuffer(GL_COLOR_ATTACHMENT0);
     bool ok=gl->CheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
     if(!ok)error_set(error,PP_ERROR_RENDER,"Incomplete retained native framebuffer");
@@ -508,12 +597,19 @@ static bool draw_source(PPRenderer *renderer,PPVec2 layout,PPRect rect,double lo
     gl->UseProgram(renderer->program);
     source_mapping(gl,&renderer->uniforms,w,h,renderer->source_width,renderer->source_height,
         layout,rect,longest,angle_deg,opacity,density,center?*center:(PPVec2){w*.5,h*.5});
-    glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glViewport(0,0,w,h);
+    gl->Uniform2f(renderer->uniforms.destination_origin,(float)viewport_x,(float)viewport_y);
+    gl->Uniform1f(renderer->uniforms.top_down,composition?1.f:0.f);
+    glDisable(GL_BLEND);glDisable(GL_DITHER);glDisable(GL_SCISSOR_TEST);glViewport(viewport_x,viewport_y,w,h);
     if(ok) {
         gl->BindVertexArray(renderer->vao);glDrawArrays(GL_TRIANGLES,0,3);
         if(renderer->error_callback?renderer->draw_error:glGetError()!=GL_NO_ERROR)
             ok=error_set(error,PP_ERROR_RENDER,"Direct OpenGL rendering failed");
     }
+    if(ok&&diagnostic_observer)diagnostic_observer(renderer,viewport_x,viewport_y,w,h,composition,diagnostic_context);
+#ifdef _WIN32
+    if(composition)ok=pp_composition_end(renderer->composition,ok,error);
+    else
+#endif
     if(ok)ok=publish_output(renderer,w,h,error);
     if(!ok) {
         gl->BindFramebuffer(GL_FRAMEBUFFER,renderer->fbo);
@@ -623,6 +719,13 @@ bool pp_renderer_destroy_retained(PPRenderer *renderer) {
     GLState state={0};bool saved=false;
     SDL_Window *window=SDL_GetWindowFromID(renderer->window_id);
     bool own_current=window&&renderer->context&&SDL_GL_MakeCurrent(window,renderer->context);
+#ifdef _WIN32
+    /* End an acquired update only in its owner context. A surface can remain
+     * alive after its renderer, so release native output independently. */
+    pp_composition_release_output(renderer->composition);
+    bool composition_pending=pp_composition_pending(renderer->composition);
+    if(!composition_pending){pp_composition_release(renderer->composition);renderer->composition=NULL;}
+#endif
     if (own_current) {
         if(renderer->borrows_context){save_state(&renderer->gl,&state);saved=true;}
         if(renderer->error_callback)renderer->error_callback(NULL,NULL);
@@ -643,6 +746,13 @@ bool pp_renderer_destroy_retained(PPRenderer *renderer) {
     }
     if (renderer->context&&!renderer->borrows_context) SDL_GL_DestroyContext(renderer->context);
     renderer->context=NULL;
+#ifdef _WIN32
+    if(composition_pending&&renderer->group&&renderer->group!=renderer) {
+        PPRenderer *owner=renderer->group;
+        renderer->retired_next=owner->retired_renderers;owner->retired_renderers=renderer;
+        return false;
+    }
+#endif
     if(!own_current&&renderer->group&&renderer->group!=renderer) {
         /* Local FBO/VAO references have ended with the failed context. Texture
          * and program names survive in the share group, so delete them there. */
@@ -657,6 +767,9 @@ bool pp_renderer_destroy_retained(PPRenderer *renderer) {
     }
     while(renderer->retired_renderers) {
         PPRenderer *retired=renderer->retired_renderers;renderer->retired_renderers=retired->retired_next;
+#ifdef _WIN32
+        pp_composition_release(retired->composition);
+#endif
         /* The final group context above has been destroyed. All orphaned
          * texture/program storage is now released with its namespace. */
         free(retired);
@@ -664,6 +777,9 @@ bool pp_renderer_destroy_retained(PPRenderer *renderer) {
     if (window && renderer->owns_window) SDL_DestroyWindow(window);
     bool owns_window=renderer->owns_window;
     bool borrowed=renderer->borrows_context;
+#ifdef _WIN32
+    pp_composition_release(renderer->composition);
+#endif
     free(renderer); if(owns_window) SDL_QuitSubSystem(SDL_INIT_VIDEO);
     if(borrowed)restore_context(previous_window,previous_context,NULL);
     return true;
