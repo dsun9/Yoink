@@ -10,6 +10,8 @@ static ComPtr<ID3D11DeviceContext> context;
 static ComPtr<IDXGIOutputDuplication> duplication;
 static RECT screen;
 static ComPtr<ID3D11Texture2D> staging;
+static LONGLONG last_present;
+extern "C" LONGLONG pp_test_desktop_present_time(void) { return last_present; }
 
 /* Diagnostic only. Desktop Duplication sees transparent GL composition;
  * GDI screen copies can return the underlying window instead. */
@@ -37,22 +39,23 @@ extern "C" bool pp_test_desktop_capture_start(RECT rectangle) {
   }
   return false;
 }
-extern "C" unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new) {
+static unsigned char *capture(RECT rectangle,bool require_new,UINT timeout) {
   if(!duplication||rectangle.left<screen.left||rectangle.top<screen.top||rectangle.right>screen.right||rectangle.bottom>screen.bottom){std::fprintf(stderr,"Capture out of bounds rect=%ld,%ld,%ld,%ld screen=%ld,%ld,%ld,%ld\n",rectangle.left,rectangle.top,rectangle.right,rectangle.bottom,screen.left,screen.top,screen.right,screen.bottom);return nullptr;}
   ComPtr<IDXGIResource> resource;DXGI_OUTDUPL_FRAME_INFO info{};
   HRESULT result;ULONGLONG deadline=GetTickCount64()+1000;
   do {
-    resource.Reset();result=duplication->AcquireNextFrame(250,&info,&resource);
+    resource.Reset();result=duplication->AcquireNextFrame(timeout,&info,&resource);
     if(FAILED(result)||!require_new||info.LastPresentTime.QuadPart)break;
     /* A pointer-only update carries the unchanged desktop texture. Require
      * a desktop-image update after moving the sprite, within a bounded wait. */
     duplication->ReleaseFrame();resource.Reset();result=DXGI_ERROR_WAIT_TIMEOUT;
-  }while(GetTickCount64()<deadline);
+  }while(timeout && GetTickCount64()<deadline);
   bool acquired=SUCCEEDED(result);
-  if(result==DXGI_ERROR_WAIT_TIMEOUT&&(require_new||!staging)){std::fprintf(stderr,"Capture timed out waiting for a fresh desktop frame\n");return nullptr;}
+  if(result==DXGI_ERROR_WAIT_TIMEOUT&&(require_new||!staging)){if(timeout)std::fprintf(stderr,"Capture timed out waiting for a fresh desktop frame\n");return nullptr;}
   if(!acquired&&result!=DXGI_ERROR_WAIT_TIMEOUT){std::fprintf(stderr,"Desktop Duplication acquire failed: %08lx\n",result);return nullptr;}
   bool ok=acquired||staging!=nullptr;
   if(acquired) {
+    last_present=info.LastPresentTime.QuadPart;
     ComPtr<ID3D11Texture2D> texture;ok=SUCCEEDED(resource.As(&texture));D3D11_TEXTURE2D_DESC td{};
     if(ok&&!staging) {
       texture->GetDesc(&td);td.Usage=D3D11_USAGE_STAGING;td.BindFlags=0;td.CPUAccessFlags=D3D11_CPU_ACCESS_READ;td.MiscFlags=0;
@@ -75,3 +78,7 @@ extern "C" unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_ne
   }
   if(acquired)duplication->ReleaseFrame();return pixels;
 }
+extern "C" unsigned char *pp_test_desktop_capture(RECT rectangle,bool require_new) { return capture(rectangle,require_new,250); }
+/* A sampling thread uses a nonblocking fresh-image poll. Pointer-only and idle
+ * frames are excluded. This never delays the application's placement or swap. */
+extern "C" unsigned char *pp_test_desktop_capture_poll(RECT rectangle) { return capture(rectangle,true,0); }

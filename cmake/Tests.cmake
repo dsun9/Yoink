@@ -60,11 +60,19 @@ if(BUILD_TESTING AND (WIN32 OR APPLE))
   set_tests_properties(ui_preview PROPERTIES LABELS desktop RUN_SERIAL TRUE TIMEOUT 30)
 endif()
 if(BUILD_TESTING AND WIN32)
-  add_executable(pointy_sprite_stability_test tests/platform/test_sprite_stability.c)
-  target_link_libraries(pointy_sprite_stability_test PRIVATE pointy_anchors SDL3::SDL3-static OpenGL::GL user32)
+  add_executable(pointy_sprite_stability_test tests/platform/test_sprite_stability.c tests/platform/desktop_capture.cpp tests/platform/stability_surface.c)
+  target_compile_definitions(pointy_sprite_stability_test PRIVATE PP_STABILITY_CONFIGURATION="$<CONFIG>")
+  target_link_libraries(pointy_sprite_stability_test PRIVATE pointy_anchors SDL3::SDL3-static OpenGL::GL user32 dwmapi d3d11 dxgi)
   add_test(NAME sprite_stability COMMAND pointy_sprite_stability_test)
   add_test(NAME sprite_cursor COMMAND pointy_sprite_stability_test --cursor)
+  # The --compositor diagnosis is opt-in through run_acceptance_desktop.ps1
+  # -SpriteJitter. It currently exposes a native placement/publication race.
   set_tests_properties(sprite_stability sprite_cursor PROPERTIES LABELS "core;desktop" RUN_SERIAL TRUE TIMEOUT 30)
+  add_executable(pointy_sprite_wheel_test tests/platform/test_sprite_wheel.c tests/platform/desktop_capture.cpp tests/platform/stability_surface.c)
+  target_compile_definitions(pointy_sprite_wheel_test PRIVATE PP_WHEEL_CONFIGURATION="$<CONFIG>")
+  target_link_libraries(pointy_sprite_wheel_test PRIVATE pointy_runtime SDL3::SDL3-static OpenGL::GL user32 dwmapi d3d11 dxgi)
+  # Ordinary wheel captures and the deliberately paused detection control stay
+  # opt-in until the desktop displacement regression is fixed.
   add_executable(pointy_sprite_exposure_test tests/platform/test_sprite_exposure.c tests/platform/desktop_capture.cpp tests/platform/exposure_input.c tests/platform/exposure_frame.c)
   target_compile_definitions(pointy_sprite_exposure_test PRIVATE PP_MEDIA_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/media")
   target_link_libraries(pointy_sprite_exposure_test PRIVATE pointy_anchors SDL3::SDL3-static user32 d3d11 dxgi)

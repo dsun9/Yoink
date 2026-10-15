@@ -5,6 +5,10 @@ param(
     [ValidateRange(100, 180000)][int]$ProcessTimeoutMilliseconds = 180000,
     [string]$BuildDirectory = '',
     [switch]$Performance,
+    [switch]$SpriteJitter,
+    [switch]$SpriteWheel,
+    [switch]$SpriteWheelDefectControl,
+    [ValidateSet('', 'shift', 'empty')][string]$SpriteWheelControl = '',
     [switch]$PngRetained,
     [switch]$GifRetained,
     [switch]$ScalableRetained,
@@ -20,19 +24,26 @@ if (-not (Test-Path -LiteralPath (Join-Path $root 'build'))) { New-Item -ItemTyp
 function Invoke-PointyBoundedProcess($FilePath, $Arguments, $Log, $ErrorLog, $Timeout = 180000) {
     $run = $null
     try {
-        $run = Start-Process -FilePath $FilePath -ArgumentList $Arguments -WorkingDirectory $root -WindowStyle Hidden -PassThru -RedirectStandardOutput $Log -RedirectStandardError $ErrorLog
+        $launch = @{ FilePath=$FilePath; WorkingDirectory=$root; WindowStyle='Hidden'; PassThru=$true; RedirectStandardOutput=$Log; RedirectStandardError=$ErrorLog }
+        if ($Arguments.Count) { $launch.ArgumentList = $Arguments }
+        $run = Start-Process @launch
         # Windows PowerShell 5 must own the process handle before the child
         # exits, or ExitCode can be null after WaitForExit.
         $processHandle = $run.Handle
         if (-not $run.WaitForExit($Timeout)) {
             & taskkill.exe /PID $run.Id /T /F | Out-Null
+            if (-not $run.WaitForExit(5000)) { throw 'Owned test tree did not exit after timeout termination.' }
             Write-Host 'FAIL process hard timeout; owned test tree terminated.'
             return 2
         }
         if ($null -eq $run.ExitCode) { throw 'Child exited without a readable exit code.' }
+        Write-Host "SUITE PROCESS pid=$($run.Id) exited=yes exit-code=$($run.ExitCode)"
         return $run.ExitCode
     } finally {
-        if ($run -and -not $run.HasExited) { & taskkill.exe /PID $run.Id /T /F | Out-Null }
+        if ($run -and -not $run.HasExited) {
+            & taskkill.exe /PID $run.Id /T /F | Out-Null
+            if (-not $run.WaitForExit(5000)) { throw 'Owned test tree did not exit during cleanup.' }
+        }
     }
 }
 # Controlled launcher regression. This exits before loading or calling any
@@ -96,8 +107,13 @@ public static class PointyDesktopRecovery {
     bool sent=SendInput((uint)inputs.Length,inputs,Marshal.SizeOf(typeof(Input)))==inputs.Length;
     SetCursorPos(point.X,point.Y);
     if(IsWindow(foreground)&&GetForegroundWindow()!=foreground) {
-      SetForegroundWindow(foreground);
-      UIntPtr response;SendMessageTimeoutW(foreground,0,UIntPtr.Zero,IntPtr.Zero,2,1000,out response);
+      DateTime deadline=DateTime.UtcNow.AddMilliseconds(1000);
+      do {
+        SetForegroundWindow(foreground);
+        UIntPtr response;SendMessageTimeoutW(foreground,0,UIntPtr.Zero,IntPtr.Zero,2,100,out response);
+        if(GetForegroundWindow()==foreground) break;
+        System.Threading.Thread.Sleep(10);
+      } while(IsWindow(foreground)&&DateTime.UtcNow<deadline);
     }
     Point current;GetCursorPos(out current);
     bool cursor=current.X==point.X&&current.Y==point.Y;
@@ -118,7 +134,14 @@ $desktopLock = New-Object System.Threading.Mutex($false, 'Local\PointyPointerDes
 if (-not $desktopLock.WaitOne(0)) { $desktopLock.Dispose(); throw 'Another supervised desktop acceptance command is running.' }
 $exitCode = 1
 try {
-    if ($Performance) {
+    if ($SpriteWheel -or $SpriteWheelDefectControl -or $SpriteWheelControl) {
+        $probePath = Join-Path $BuildDirectory "$Configuration/pointy_sprite_wheel_test.exe"
+        $arguments = if ($SpriteWheelDefectControl) { @('--defect-control') } elseif ($SpriteWheelControl) { @("--$SpriteWheelControl-control") } else { @() }
+        $exitCode = Invoke-PointyBoundedProcess $probePath $arguments $log $stderr $ProcessTimeoutMilliseconds
+    } elseif ($SpriteJitter) {
+        $probePath = Join-Path $BuildDirectory "$Configuration/pointy_sprite_stability_test.exe"
+        $exitCode = Invoke-PointyBoundedProcess $probePath @('--compositor') $log $stderr $ProcessTimeoutMilliseconds
+    } elseif ($Performance) {
         $probePath = Join-Path $BuildDirectory "$Configuration/pointy_performance_test.exe"
         $probeMode = if ($PngRetained) { '--png-retained' } elseif ($GifRetained) { '--gif-retained' } elseif ($ScalableRetained) { '--scalable-retained' } elseif ($ScalableSharp) { '--scalable-sharp' } elseif ($ScalableWorkerInput) { '--scalable-worker-input' } else { '--acceptance' }
         $exitCode = Invoke-PointyBoundedProcess $probePath @($probeMode) $log $stderr $ProcessTimeoutMilliseconds
