@@ -1,0 +1,213 @@
+# Rotation and zoom jitter diagnosis
+
+On 2026-10-14 the user reported small sideways jumps when rotating or zooming
+text or emoji, especially large elongated artwork.
+
+The completed GL frame follows the requested pose accurately. The extended
+`sprite_stability` test places two colored landmarks in 8:1 artwork, presents
+it at 1536 DIP, and measures each landmark against the requested rotation and
+scale at 100%, 150%, and 200% drawable density. This checks points away from
+the rotation center, where angular or scale errors would be amplified.
+The final Debug run measured maximum landmark errors of 0.003963 pixels for
+zoom and 0.004770 pixels for rotation, below the 0.02-pixel regression limit.
+
+The opt-in desktop probe exposes a separate intermediate frame. It captures
+the actual Windows desktop after `pp_surface_place_gl` has completed its
+native `SetWindowPos` call and before the presenter publishes its next GL
+frame. It deliberately waits at that boundary to raise the reproduction rate.
+It uses the real surface, renderer, and retained presenter. Source rasterization,
+worker completion, wheel delivery, and easing are unnecessary to reproduce it.
+
+On the available 3840x2160 Windows desktop, at 150% simulated density, a
+1536-DIP elongated sprite centered at 1600.25,900.75 gave these results:
+
+| Operation | Visible center before the next GL frame | Maximum axis error |
+| --- | --- | ---: |
+| Initial presentation | 1600.265953,900.754834 | 0.015953 px |
+| Rotation from 17.25 to 18.25 degrees | 1603.265953,881.754834 | 18.995166 px |
+| Zoom from 1536 to 1552 DIP | 1588.261838,895.754793 | 11.988162 px |
+
+The old image moves with the new native window origin. The next GL publication
+restores its correct desktop position. Larger extent changes produce larger
+origin changes, explaining why elongated sprites make this failure easier to
+see. The probe samples before the next grab-region update, so that update is
+not required to produce the jump.
+
+## Reproduce
+
+Build and run from the repository root with the mouse and keyboard released:
+
+```powershell
+cmake --build build/windows-dev --config Debug --target pointy_sprite_stability_test --parallel 4 -- /nodeReuse:false
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -BuildDirectory build/windows-dev -SpriteJitter -LogPrefix sprite-jitter
+```
+
+The supervisor applies its desktop mutex, bounded child process, and verified
+cursor/input/foreground restoration. The probe displays a temporary black
+background and colored markers. It chooses a capture rectangle inside the
+monitor under the cursor, including monitors with a negative desktop origin.
+It preserves 1536 DIP when the monitor has enough space and reduces the
+workload on smaller monitors. The log records the resulting size and rectangle.
+It exits with failure when the visible center moves by at least 0.1 pixels.
+It is deliberately excluded from ordinary CTest acceptance while the
+placement/publication issue remains unresolved.
+
+## Findings and limits
+
+The relevant production sequence is in `src/app/retained.c`: native placement,
+grab-region publication, GL transform draw, then buffer swap. Native window
+geometry and GL content reach the compositor through separate operations.
+The existing small-square tests read the completed FBO, which cannot observe
+the intermediate desktop frame.
+
+Combining the visible move and resize, preserving overlap with
+`WM_NCCALCSIZE`/`WVR_VALIDRECTS`, and trying `SWP_NOREDRAW` and `SWP_NOCOPYBITS`
+did not reliably remove the captured displacement. All experimental production
+changes were reverted.
+
+No production fix is included. A fix must prevent the compositor from showing
+an old frame at a new origin, while preserving transparent input routing,
+GPU budgets, and transform responsiveness. A stable render viewport or a
+presentation mechanism that commits geometry and content together are possible
+design directions; neither has been implemented or validated here. Simply
+rounding the sprite center differently does not address the observed race.
+
+The deliberate pause measures the intermediate displacement, not its duration
+or frequency during ordinary interaction. The same native presenter is used by
+text, emoji, PNG, GIF, and SVG, but this isolated probe uses synthetic artwork.
+Actual wheel-driven text cadence, other GPUs, physical mixed-density displays,
+and macOS behavior remain unverified by this diagnosis.
+
+The final Debug build of `pointy_sprite_stability_test` and `PointyPointer`
+succeeded. Supervised `sprite_stability` and `sprite_cursor` both passed.
+The final minimized desktop probe reproduced the 18.995166-pixel rotation
+and 11.988162-pixel zoom displacements. Its log is
+`build/sprite-jitter-final-red-desktop.log`; the passing suite log is
+`build/sprite-jitter-final-stability-desktop.log`. Both runs verified desktop
+restoration. No temporary production instrumentation remains.
+
+## Ordinary wheel desktop regression
+
+Issue [#31](https://github.com/dsun9/Yoink/issues/31) extends the diagnosis with
+actual wheel delivery through `SendInput`, the native input hooks, runtime,
+easing and retained presenter. This mode does not pause native placement.
+It uses the actual display density. The synthetic probe above deliberately
+sets both density ratios to 1.5, independently of the physical monitor.
+
+The ordinary scenario displays `MMMM MMMM MMMM MMMM` and eight pointing-hand
+emoji. The text has an 11.23:1 canonical aspect ratio. The emoji use the default
+Windows font selection and an elongated single line. Each source receives six
+alternating one-notch rotation inputs and six alternating Alt-wheel zoom
+inputs. The initial angle is 17.25 degrees, rotation steps are one degree,
+zoom steps are one percent, the nominal post-input wait is 200 milliseconds,
+and easing lasts 120 milliseconds. Mouse-position rotation uses a visible
+artwork pixel away from the center. Logs contain each input timestamp,
+requested endpoint, actual eased pose, rotation pivot and native rectangle.
+
+A separate thread polls fresh Desktop Duplication images. Pointer-only updates
+do not count as new presentations. `LastPresentTime` attributes an image to a
+workload's QPC interval, so setup and source-replacement frames cannot enter
+the active workload under the collector's current tag.
+
+For every transformed presentation, the application thread reads the completed
+GL color output and records its brightness centroid, principal-axis angle and
+centered second moment. The capture uses the same brightness weights. The
+angle and second moment identify the displayed shape without using its
+desktop location. The measured displacement is the captured centroid minus
+the matching completed image's desktop centroid. Off-center artwork, intended
+pivot movement and easing therefore use their own expected centers. A previous
+image at a new origin retains its shape and produces a nonzero residual.
+Candidates must precede the capture and be within 250 milliseconds. Equal
+shape scores choose the latest candidate, avoiding an earlier repeated pose.
+
+Each workload needs at least ten distinct captured poses during active easing,
+ten matched desktop images and ten completed GL poses. Every active blank or
+unmatched desktop image prevents a passing result. A shape difference above
+0.15 pixels is unmatched, rather than being reported as an accurate translation.
+The actual displacement gate remains less than 0.1 pixels. Native placement
+callback counts are not a passing condition. This continues to observe content
+if a fix retains a stable native viewport.
+
+Use the supervised runner with released input. Each command waits for its
+child before restoring the desktop or returning. Run commands sequentially.
+
+```powershell
+cmake --preset windows-release
+cmake --build build/windows-release --config Release --target pointy_sprite_stability_test pointy_sprite_wheel_test --parallel 4 -- /nodeReuse:false
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -SpriteJitter -LogPrefix sprite-jitter-synthetic
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -SpriteWheel -LogPrefix sprite-jitter-natural
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File tests/platform/run_acceptance_desktop.ps1 -Configuration Release -BuildDirectory build/windows-release -TestRegex '^sprite_(stability|cursor)$' -LogPrefix sprite-jitter-gl
+```
+
+The synthetic and ordinary desktop regressions are opt-in and expected to
+fail against unchanged production. Completed-GL accuracy and cursor checks
+remain ordinary passing correctness tests. A failing desktop regression must
+not be reclassified as a failing completed-GL check.
+
+Three additional opt-in controls use the same supervised process:
+
+| Runner option | Expected result against unchanged production |
+| --- | --- |
+| `-SpriteWheelDefectControl` | The real native placement callback pauses for 35 ms. The independent collector detects the old image at the new origin. |
+| `-SpriteWheelControl shift` | Real captured image bytes move 3 pixels right and 19 pixels up. The measurement rejects that translation without depending on placement callbacks. |
+| `-SpriteWheelControl empty` | The collector deliberately drops every image. The meaningful-sample requirement fails even when the displacement maximum is zero. |
+
+## Issue 31 validation on 2026-10-14
+
+Release on Windows used the retained transparent OpenGL backend, NVIDIA
+GeForce RTX 5090, NVIDIA driver 610.62 and GL 3.2. The selected physical monitor
+was 3840 by 2160 at desktop origin 0,0 and 144 DPI. The monitor-relative capture
+rectangle was 520,530 to 3320,1630. Ordinary input used actual desktop and
+drawable density 1.5, with no simulated density. Both probes used 1536 DIP and
+center 1920.25,1080.75.
+
+The preserved deterministic probe reproduced 18.995166 pixels after rotation
+and 11.988162 pixels after enlargement. Its four samples include two completed
+presentations as well as the two paused placement samples. Completed samples
+remain mandatory even if a future fix makes no native placement calls.
+
+One ordinary run produced the following measurements. The observations are
+specific to this instrumented workload and GPU.
+
+| Workload | Completed GL poses | Matched desktop images | Distinct easing poses captured | Unmatched images | Displaced images | Largest residual |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Text rotation | 32 | 59 | 25 | 0 | 0 | 0.000000 px |
+| Text zoom | 31 | 55 | 24 | 0 | 9 | 6.000000 px |
+| Emoji rotation | 31 | 48 | 24 | 2 | 3 | 6.034627 px |
+| Emoji zoom | 29 | 53 | 22 | 0 | 10 | 6.000609 px |
+
+All 24 native wheel events arrived. The collector obtained 246 fresh desktop
+images, including setup images outside the active intervals. Every workload
+had meaningful samples. Two emoji-rotation images had shape errors 0.573589
+and 0.898837 pixels and lower brightness mass than any matched completed
+image. Their exact translation is unresolved. The run records them as
+incomplete desktop observations and fails, alongside the independently
+identified displaced images. It does not discard these images to pass.
+
+The application performed 119 reference readbacks, with a measured total of
+611.389 milliseconds and mean of 5.138 milliseconds. Reading output pixels
+and logging poses can change the owner thread's cadence. This is an ordinary
+input-path regression with measured overhead. Its counts do not estimate the
+frequency or duration of jitter in an uninstrumented application. The
+deliberately paused control provides no natural-frequency estimate either.
+
+The placement-pause control at 1536 DIP captured twelve distinct easing poses
+per workload and found maxima 10.000000, 9.082197, 10.000000 and 9.048124 pixels.
+The shifted-byte control produced a 19-pixel residual in otherwise accurate
+images, and every matched image failed its displacement gate. The empty-image
+control observed zero desktop images and failed its meaningful-sample gate.
+
+Supervised `sprite_stability` and `sprite_cursor` passed 2 of 2 checks in
+3.76 seconds. Completed large-artwork landmark maxima remained 0.003963 pixels
+for zoom and 0.004770 pixels for rotation, under the independent 0.02-pixel
+gate. The supervisor logged released input, restored cursor and original
+foreground for the passing suite and all completed expected-failure runs.
+A separate 500-millisecond desktop-child timeout terminated the owned tree,
+waited for its exit and verified the same restoration. Launcher controls
+propagated exit 7, exit 0 and timeout exit 2.
+
+Raw logs use the `ticket31-final-natural`, `ticket31-final-synthetic`,
+`ticket31-final-gl`, `ticket31-final-placement-control`, `ticket31-shift-control`,
+`ticket31-empty-control` and `ticket31-owned-timeout` prefixes under `build/`.
+The implementation handoff preserves copies and SHA-256 hashes outside the
+worktree before cleanup. No production fix is included in issue 31.
